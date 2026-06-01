@@ -40,16 +40,23 @@ mvn -q clean package
 Protobuf sources under `aegis-core/src/main/proto` are compiled by the
 `protobuf-maven-plugin` during the build.
 
-## Run a node
+## Run a node locally
 
+By default, AegisOS uses `~/.aegis` as the home directory. To run multiple nodes on the same machine, you must give each node a unique home directory and port.
+
+**Node 1 (Seed)**:
 ```bash
-java -XX:+UseZGC -jar aegis-cli/target/aegis.jar start --port 9000
+java -XX:+UseZGC -jar aegis-cli/target/aegis.jar start --home node1 --port 9001
 ```
 
-Start more nodes pointing at a seed:
-
+**Node 2**:
 ```bash
-java -jar aegis-cli/target/aegis.jar start --port 9001 --seed 127.0.0.1:9000
+java -jar aegis-cli/target/aegis.jar start --home node2 --port 9002 --seed 127.0.0.1:9001
+```
+
+**Node 3**:
+```bash
+java -jar aegis-cli/target/aegis.jar start --home node3 --port 9003 --seed 127.0.0.1:9001
 ```
 
 ## CLI
@@ -65,6 +72,8 @@ aegis run <JobClass> [args...] --seed h:p
 aegis status <jobId> --seed h:p
 ```
 
+_Note: CLI commands run as ephemeral clients that connect to the cluster, execute the command, and exit without joining the Raft voting quorum._
+
 ## Tests
 
 ```bash
@@ -73,6 +82,20 @@ mvn -q test
 
 Phase gate tests live in `aegis-test-cluster` (`Phase1Test` .. `Phase6Test`) and spin up
 real in-process clusters.
+
+### Local End-to-End Test Script
+
+A PowerShell script is included to automatically test cluster resilience against transient client operations and node failures:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File test_client_quorum.ps1
+```
+
+This script:
+1. Starts a 3-node local cluster.
+2. Runs 6 rapid CLI operations (`put` and `get`), creating transient clients.
+3. Kills Node 3 to test failover and leader election.
+4. Verifies the cluster still accepts `put` and `get` operations.
 
 ## Design
 

@@ -61,7 +61,7 @@ aegis-test-cluster = in-process N-node integration + chaos tests
 
 ### Module responsibilities
 
-- **aegis-core** — `NodeId` (`SHA-256(pubkey)`), `NodeIdentity`, `IdentityService`, `KeyStore` (`~/.aegis/identity.key`), `TrustStore` (TOFU + whitelist); crypto utils `Ed25519`, `X25519` (ECDH+HKDF), `AesGcm`, `Hashing`, `HexUtil`; `Endpoint`; message types; **`src/main/proto/aegis.proto`** (the entire wire schema).
+- **aegis-core** — `NodeId` (`SHA-256(pubkey)`), `NodeIdentity`, `IdentityService`, `KeyStore` (`~/.aegis/identity.key`), `TrustStore` (TOFU + whitelist); crypto utils `Ed25519`, `X25519` (ECDH+HKDF), `AesGcm`, `Hashing`, `HexUtil`; `Endpoint`; message types; **`src/main/proto/aegis.proto`** (the entire wire schema including `NodeRole`).
 - **aegis-network** — `NetworkLayer` (top-level transport, request/response RPC), `tcp/TcpServer` + `TcpConnectionPool`, `PeerConnection`, `crypto/HandshakeHandler` + `SessionCipher` + `EstablishedSession`, `wire/Framing` + `EnvelopeCodec` + `ReplayGuard`.
 - **aegis-discovery** — `gossip/MembershipList` (ALIVE/SUSPECT/DEAD), `gossip/GossipProtocol`, `dht/RoutingTable` + `dht/KademliaRouter`, `DiscoveryService` (seed bootstrap).
 - **aegis-consensus** — `RaftNode`, `RaftLog` (append-only file), `RaftMetadataStore` (term/votedFor), `RaftRole`, `election/ElectionTimer`, `replication/LogReplicator`, `RaftStateMachine` + `ClusterStateMachine`, `RaftTransport`, `ConsensusModule` (wires Raft to network + client-command forwarding), `NotLeaderException`.
@@ -156,10 +156,17 @@ Generated Java lands in `com.aegisos.proto.*` at build time. **If your IDE shows
 5. **Phase 6 timeout too tight for suite-level contention**  
    `Phase6Test` passed in isolation but could exceed prior await budget in full-suite runs.
 
+6. **Fatal Raft quorum bloat caused by ephemeral CLI clients**
+   CLI commands booted as transient nodes that joined gossip and inflated the Raft quorum size, causing leader elections to fail permanently after the CLI node exited.
+
+7. **Scheduler `ExecutionException` masked `NotLeaderException` retries**
+   A retry loop for `NotLeaderException` in `ProcessManager.submit` failed because the underlying `Future.get()` wrapped the exception in an `ExecutionException`, bypassing the retry block entirely.
+
 ### Stabilization fixes applied
 
 - `aegis-node/src/main/java/com/aegisos/node/AegisNode.java`
   - Raft peer supplier now derives from `membership().allPeers()` (excluding self), not only `alivePeerIds()`.
+  - Added separation of `votingPeers` (only `CLUSTER_MEMBER`s) and `allPeers`, filtering out `CLIENT`s.
 - `aegis-test-cluster/src/test/java/com/aegisos/cluster/Phase3Test.java`
   - Wait for full membership convergence before Raft assertions.
 - `aegis-test-cluster/src/test/java/com/aegisos/cluster/Phase3ChaosTest.java`
@@ -168,10 +175,15 @@ Generated Java lands in `com.aegisos.proto.*` at build time. **If your IDE shows
   - Increased assignment commit wait (`ASSIGN_TIMEOUT_MS`).
 - `aegis-consensus/src/main/java/com/aegisos/consensus/ConsensusModule.java`
   - Increased commit and forwarded client-command request timeouts.
+- `aegis-consensus/src/main/java/com/aegisos/consensus/RaftNode.java`
+  - Broadcasts heartbeats to `allPeers` but performs elections/commits against `votingPeers`.
 - `aegis-api/src/main/java/com/aegisos/api/ProcessManager.java`
   - Added bounded retry loop for transient `NotLeaderException` during scheduling.
+  - Corrected retry loop to correctly unwrap `ExecutionException` and identify wrapped `NotLeaderException`s.
 - `aegis-test-cluster/src/test/java/com/aegisos/cluster/Phase6Test.java`
   - Increased await timeout from 60s to 90s.
+- `test_client_quorum.ps1`
+  - Added a PowerShell script to end-to-end test the `NodeRole` separation and cluster resiliency.
 
 ---
 
@@ -183,8 +195,8 @@ mvn -q clean package        # compiles all modules, generates protobuf, shades a
 mvn -q test                 # runs unit + Phase1..6 cluster tests
 
 # run a node
-java -XX:+UseZGC -jar aegis-cli/target/aegis.jar start --port 9000
-java -jar aegis-cli/target/aegis.jar start --port 9001 --seed 127.0.0.1:9000
+java -XX:+UseZGC -jar aegis-cli/target/aegis.jar start --home node1 --port 9001
+java -jar aegis-cli/target/aegis.jar start --home node2 --port 9002 --seed 127.0.0.1:9001
 ```
 
 CLI surface:
