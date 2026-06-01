@@ -49,3 +49,8 @@ Thumbs.db
 *.ear
 *.swp
 *~
+
+/node1
+/node2 
+/node3 
+my_test_file.txt

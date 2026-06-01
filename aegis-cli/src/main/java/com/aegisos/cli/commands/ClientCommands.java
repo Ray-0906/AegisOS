@@ -33,8 +33,11 @@ final class ClientCommands {
         AegisNode node = new AegisNode(config);
         node.start();
         try {
-            // Give gossip a moment to converge.
-            for (int i = 0; i < 40 && node.discovery().membership().aliveCount() <= 1; i++) {
+            // Give gossip and Raft a moment to converge (max 5 seconds).
+            for (int i = 0; i < 100; i++) {
+                if (node.discovery().membership().aliveCount() > 1 && node.consensus().leaderId() != null) {
+                    break;
+                }
                 Thread.sleep(50);
             }
             return fn.apply(node);
