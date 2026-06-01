@@ -74,19 +74,21 @@ public final class ProcessManager {
         while (true) {
             try {
                 return scheduler.schedule(spec);
-            } catch (NotLeaderException e) {
-                // #region agent log
-                dbg("H1", "ProcessManager.java:scheduleWithRetry", "caught NotLeaderException directly", e, e.getCause());
-                // #endregion
-                if (System.currentTimeMillis() >= deadline) {
+            } catch (Exception e) {
+                if (e instanceof NotLeaderException || (e.getCause() != null && e.getCause() instanceof NotLeaderException)) {
+                    // #region agent log
+                    dbg("H1", "ProcessManager.java:scheduleWithRetry", "caught NotLeaderException (possibly wrapped)", e, e.getCause());
+                    // #endregion
+                    if (System.currentTimeMillis() >= deadline) {
+                        throw e;
+                    }
+                    Thread.sleep(SCHEDULE_RETRY_SLEEP_MS);
+                } else {
+                    // #region agent log
+                    dbg("H1", "ProcessManager.java:scheduleWithRetry", "caught OTHER exception (not retried)", e, e.getCause());
+                    // #endregion
                     throw e;
                 }
-                Thread.sleep(SCHEDULE_RETRY_SLEEP_MS);
-            } catch (Exception e) {
-                // #region agent log
-                dbg("H1", "ProcessManager.java:scheduleWithRetry", "caught OTHER exception (not retried)", e, e.getCause());
-                // #endregion
-                throw e;
             }
         }
     }

@@ -36,12 +36,14 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
     private final ClusterStateMachine stateMachine;
 
     public ConsensusModule(NetworkLayer network, NodeId self, Path raftDir,
-                           Supplier<List<NodeId>> votingPeers) {
+                           Supplier<List<NodeId>> votingPeers,
+                           Supplier<List<NodeId>> allPeers,
+                           boolean isVotingMember) {
         this.network = network;
         this.stateMachine = new ClusterStateMachine();
         RaftLog raftLog = new RaftLog(raftDir.resolve("log.bin"));
         RaftMetadataStore metadata = new RaftMetadataStore(raftDir.resolve("meta.properties"));
-        this.raftNode = new RaftNode(self, raftLog, metadata, this, stateMachine, votingPeers);
+        this.raftNode = new RaftNode(self, raftLog, metadata, this, stateMachine, votingPeers, allPeers, isVotingMember);
     }
 
     public void start() {

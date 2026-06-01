@@ -54,3 +54,5 @@ Thumbs.db
 /node2 
 /node3 
 my_test_file.txt
+
+recovered_*.txt

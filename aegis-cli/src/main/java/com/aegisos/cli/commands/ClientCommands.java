@@ -26,7 +26,8 @@ final class ClientCommands {
     /** Boots a transient client node joined to the cluster, runs {@code fn}, then shuts down. */
     static <T> T withClient(List<String> seeds, Function<AegisNode, T> fn) throws Exception {
         Path home = Files.createTempDirectory("aegis-cli-");
-        NodeConfig config = new NodeConfig().homeDir(home).port(0).advertiseHost("127.0.0.1");
+        NodeConfig config = new NodeConfig().homeDir(home).port(0).advertiseHost("127.0.0.1")
+                .role(com.aegisos.proto.NodeRole.CLIENT);
         for (String s : seeds) {
             config.addSeed(Endpoint.parse(s));
         }

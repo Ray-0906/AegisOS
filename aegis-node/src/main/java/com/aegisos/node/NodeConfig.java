@@ -24,6 +24,7 @@ public final class NodeConfig {
     private int replicationFactor = 3;
     private long reaperIntervalMs = 60_000;
     private long checkpointIntervalMs = 30_000;
+    private com.aegisos.proto.NodeRole role = com.aegisos.proto.NodeRole.CLUSTER_MEMBER;
     // v0.1: a shared cluster secret wraps per-chunk keys. Override in production.
     private String clusterSecret = "aegis-dev-cluster-secret";
 
@@ -122,6 +123,15 @@ public final class NodeConfig {
 
     public NodeConfig clusterSecret(String secret) {
         this.clusterSecret = secret;
+        return this;
+    }
+
+    public com.aegisos.proto.NodeRole role() {
+        return role;
+    }
+
+    public NodeConfig role(com.aegisos.proto.NodeRole r) {
+        this.role = r;
         return this;
     }
 

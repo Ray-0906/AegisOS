@@ -68,14 +68,32 @@ public final class AegisNode implements AutoCloseable {
         network.start();
 
         String selfAddress = config.advertiseHost() + ":" + network.boundPort();
-        discovery = new DiscoveryService(network, identity, selfAddress);
+        discovery = new DiscoveryService(network, identity, selfAddress, config.role());
         discovery.start(config.seeds());
 
-        consensus = new ConsensusModule(network, identity.nodeId(), config.raftDir(),
-                () -> discovery.membership().allPeers().stream()
+        java.util.function.Supplier<java.util.List<com.aegisos.core.identity.NodeId>> allPeers = () ->
+                discovery.membership().allPeers().stream()
                         .map(peer -> com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray()))
                         .filter(peerId -> !peerId.equals(identity.nodeId()))
-                        .toList());
+                        .toList();
+
+        java.util.function.Supplier<java.util.List<com.aegisos.core.identity.NodeId>> votingPeers = () -> {
+            java.util.List<com.aegisos.core.identity.NodeId> voters = discovery.membership().allPeers().stream()
+                    .filter(peer -> peer.getRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER)
+                    .map(peer -> com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray()))
+                    .filter(peerId -> !peerId.equals(identity.nodeId()))
+                    .toList();
+            java.util.List<com.aegisos.core.identity.NodeId> all = allPeers.get();
+            if (voters.size() != all.size()) {
+                log.info("Quorum calculation ignores non-voting peers. Voting members: {}, All peers: {}",
+                        voters.size() + 1, all.size() + 1);
+            }
+            return voters;
+        };
+
+        boolean isVotingMember = config.role() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER;
+        consensus = new ConsensusModule(network, identity.nodeId(), config.raftDir(),
+                votingPeers, allPeers, isVotingMember);
         consensus.start();
 
         fileSystem = new AegisFS(network, consensus, discovery, identity.nodeId(),

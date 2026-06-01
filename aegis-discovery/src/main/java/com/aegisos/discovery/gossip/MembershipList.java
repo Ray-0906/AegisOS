@@ -29,6 +29,7 @@ public final class MembershipList {
     private final NodeId selfId;
     private final byte[] selfPublicKey;
     private final String selfAddress;
+    private final com.aegisos.proto.NodeRole selfRole;
     private final AtomicLong selfVersion = new AtomicLong(1);
 
     private final ConcurrentHashMap<NodeId, PeerEntry> peers = new ConcurrentHashMap<>();
@@ -38,10 +39,11 @@ public final class MembershipList {
     private final long evictTimeoutMs;
 
     public MembershipList(NodeId selfId, byte[] selfPublicKey, String selfAddress,
-                          long gossipIntervalMs) {
+                          com.aegisos.proto.NodeRole selfRole, long gossipIntervalMs) {
         this.selfId = selfId;
         this.selfPublicKey = selfPublicKey.clone();
         this.selfAddress = selfAddress;
+        this.selfRole = selfRole;
         this.suspectTimeoutMs = 3 * gossipIntervalMs;
         this.deadTimeoutMs = 10 * gossipIntervalMs;
         this.evictTimeoutMs = 30 * gossipIntervalMs;
@@ -56,6 +58,7 @@ public final class MembershipList {
                 .setLastSeen(System.currentTimeMillis())
                 .setStatus(PeerStatus.ALIVE)
                 .setVersion(selfVersion.get())
+                .setRole(selfRole)
                 .build();
     }
 
@@ -68,6 +71,7 @@ public final class MembershipList {
                 .setLastSeen(System.currentTimeMillis())
                 .setStatus(PeerStatus.ALIVE)
                 .setVersion(selfVersion.incrementAndGet())
+                .setRole(selfRole)
                 .build());
     }
 
@@ -85,6 +89,7 @@ public final class MembershipList {
                     .setLastSeen(System.currentTimeMillis())
                     .setStatus(PeerStatus.ALIVE)
                     .setVersion(version)
+                    .setRole(existing != null ? existing.getRole() : com.aegisos.proto.NodeRole.CLUSTER_MEMBER)
                     .build();
         });
     }

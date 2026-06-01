@@ -42,6 +42,8 @@ public final class RaftNode {
     private final RaftTransport transport;
     private final RaftStateMachine stateMachine;
     private final Supplier<List<NodeId>> votingPeers;
+    private final Supplier<List<NodeId>> allPeers;
+    private final boolean isVotingMember;
 
     private final ReentrantLock lock = new ReentrantLock();
     private final ScheduledExecutorService scheduler =
@@ -57,13 +59,17 @@ public final class RaftNode {
 
     public RaftNode(NodeId self, RaftLog raftLog, RaftMetadataStore metadata,
                     RaftTransport transport, RaftStateMachine stateMachine,
-                    Supplier<List<NodeId>> votingPeers) {
+                    Supplier<List<NodeId>> votingPeers,
+                    Supplier<List<NodeId>> allPeers,
+                    boolean isVotingMember) {
         this.self = self;
         this.raftLog = raftLog;
         this.metadata = metadata;
         this.transport = transport;
         this.stateMachine = stateMachine;
         this.votingPeers = votingPeers;
+        this.allPeers = allPeers;
+        this.isVotingMember = isVotingMember;
         this.replicator = new LogReplicator();
         this.electionTimer = new ElectionTimer(scheduler, ELECTION_MIN_MS, ELECTION_MAX_MS,
                 this::onElectionTimeout);
@@ -130,6 +136,9 @@ public final class RaftNode {
         lock.lock();
         try {
             if (role == RaftRole.LEADER) {
+                return;
+            }
+            if (!isVotingMember) {
                 return;
             }
             startElection();
@@ -221,7 +230,7 @@ public final class RaftNode {
             }
             term = metadata.currentTerm();
             leaderCommit = commitIndex;
-            peers = votingPeers.get();
+            peers = allPeers.get();
             replicator.ensurePeers(peers, raftLog.lastIndex() + 1);
         } finally {
             lock.unlock();

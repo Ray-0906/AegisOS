@@ -6,6 +6,12 @@ option java_package = "com.aegisos.proto";
 option java_outer_classname = "AegisProto";
 option java_multiple_files = true;
 
+enum NodeRole {
+  CLUSTER_MEMBER = 0;
+  CLIENT         = 1;
+}
+
+
 // ---------------------------------------------------------------------------
 // Wire envelope (section 2 of the design doc).
 // The envelope itself travels in cleartext on the wire AFTER the handshake the
@@ -64,6 +70,7 @@ message PeerEntry {
   int64      last_seen  = 4;
   PeerStatus status      = 5;
   int64      version     = 6;
+  NodeRole   role        = 7;
 }
 
 message MembershipList {
