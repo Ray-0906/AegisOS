@@ -1,0 +1,256 @@
+syntax = "proto3";
+
+package aegisos;
+
+option java_package = "com.aegisos.proto";
+option java_outer_classname = "AegisProto";
+option java_multiple_files = true;
+
+// ---------------------------------------------------------------------------
+// Wire envelope (section 2 of the design doc).
+// The envelope itself travels in cleartext on the wire AFTER the handshake the
+// body is AES-256-GCM encrypted; the signature covers header || body.
+// ---------------------------------------------------------------------------
+
+message MessageHeader {
+  bytes  sender_id    = 1; // 32 bytes, SHA-256(pubkey)
+  bytes  recipient_id = 2; // 32 bytes (may be empty for broadcast)
+  uint32 message_type = 3; // see MessageType enum (transported as int)
+  int64  timestamp    = 4; // unix millis, replay window check
+  bytes  nonce        = 5; // 12 bytes, AES-GCM nonce
+  uint64 sequence     = 6; // per-connection monotonic counter
+  uint64 correlation  = 7; // request/response correlation id (0 = none)
+  bool   handshake    = 8; // true while body is still plaintext (pre-session-key)
+}
+
+message Envelope {
+  MessageHeader header    = 1;
+  bytes         body      = 2; // AES-GCM ciphertext (after handshake) or plaintext payload (during handshake)
+  bytes         signature = 3; // Ed25519 over header_bytes || body
+}
+
+// ---------------------------------------------------------------------------
+// Handshake (Phase 1)
+// ---------------------------------------------------------------------------
+
+message Hello {
+  bytes  node_id           = 1; // SHA-256(static ed25519 pubkey)
+  bytes  ed25519_public_key = 2; // static identity key (32 bytes)
+  bytes  ephemeral_public_key = 3; // X25519 ephemeral key for ECDH (32 bytes)
+  bytes  nonce             = 4; // 32 bytes random challenge
+  string address           = 5; // advertised ip:port
+}
+
+message Verify {
+  bytes node_id   = 1;
+  bytes signature = 2; // Ed25519 over (peer_nonce || my_node_id)
+}
+
+// ---------------------------------------------------------------------------
+// Discovery / gossip (Phase 2)
+// ---------------------------------------------------------------------------
+
+enum PeerStatus {
+  PEER_UNKNOWN = 0;
+  ALIVE        = 1;
+  SUSPECT      = 2;
+  DEAD         = 3;
+}
+
+message PeerEntry {
+  bytes      node_id    = 1;
+  bytes      public_key = 2;
+  string     address    = 3;
+  int64      last_seen  = 4;
+  PeerStatus status      = 5;
+  int64      version     = 6;
+}
+
+message MembershipList {
+  repeated PeerEntry peers = 1;
+}
+
+message NodeResources {
+  bytes  node_id          = 1;
+  int32  cpu_cores        = 2;
+  double cpu_usage        = 3;
+  int64  memory_total_mb  = 4;
+  int64  memory_used_mb   = 5;
+  int64  storage_used_mb  = 6;
+  int64  storage_total_mb = 7;
+  int32  running_jobs     = 8;
+  int64  reported_at      = 9;
+}
+
+// Kademlia DHT (Phase 2 stub, Phase 4 use)
+message FindNode {
+  bytes target = 1;
+}
+
+message FindNodeResult {
+  repeated PeerEntry closest = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Consensus / Raft (Phase 3)
+// ---------------------------------------------------------------------------
+
+message RaftLogEntry {
+  int64 term    = 1;
+  int64 index   = 2;
+  bytes command = 3; // serialized StateCommand
+}
+
+message RequestVote {
+  int64 term           = 1;
+  bytes candidate_id   = 2;
+  int64 last_log_index = 3;
+  int64 last_log_term  = 4;
+}
+
+message RequestVoteResult {
+  int64 term         = 1;
+  bool  vote_granted = 2;
+}
+
+message AppendEntries {
+  int64 term            = 1;
+  bytes leader_id       = 2;
+  int64 prev_log_index  = 3;
+  int64 prev_log_term   = 4;
+  repeated RaftLogEntry entries = 5;
+  int64 leader_commit   = 6;
+}
+
+message AppendEntriesResult {
+  int64 term           = 1;
+  bool  success        = 2;
+  int64 match_index    = 3; // highest index known replicated, hint for leader
+}
+
+// Application state machine commands (section 3.4)
+enum CommandType {
+  CMD_UNKNOWN   = 0;
+  REGISTER_FILE = 1;
+  PLACE_CHUNK   = 2;
+  ASSIGN_JOB    = 3;
+  NODE_JOIN     = 4;
+  NODE_LEAVE    = 5;
+  UPDATE_JOB    = 6;
+  KV_PUT        = 7; // test-only KV store
+}
+
+message StateCommand {
+  CommandType type = 1;
+  bytes payload    = 2; // type-specific serialized message below
+}
+
+// ---------------------------------------------------------------------------
+// AegisFS (Phase 4)
+// ---------------------------------------------------------------------------
+
+message ChunkRef {
+  bytes  chunk_id      = 1; // SHA-256(encrypted chunk)
+  repeated bytes node_ids = 2; // nodes holding a replica
+  bytes  encrypted_key  = 3; // per-chunk AES key wrapped by cluster key
+  bytes  nonce          = 4; // GCM nonce used for this chunk
+  int64  plain_size     = 5;
+}
+
+message FileMetadata {
+  bytes  file_id     = 1; // SHA-256(name || owner || createdAt)
+  string name        = 2;
+  repeated ChunkRef chunks = 3;
+  int64  size        = 4;
+  int64  created_at  = 5;
+  int32  replication = 6;
+  bytes  owner_id    = 7;
+}
+
+message StoreChunk {
+  bytes chunk_id = 1;
+  bytes data     = 2; // already-encrypted chunk bytes
+}
+
+message StoreChunkAck {
+  bytes chunk_id = 1;
+  bool  stored   = 2;
+}
+
+message FetchChunk {
+  bytes chunk_id = 1;
+}
+
+message FetchChunkResult {
+  bytes chunk_id = 1;
+  bool  found    = 2;
+  bytes data     = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler + Runtime (Phase 5/6)
+// ---------------------------------------------------------------------------
+
+enum JobState {
+  JOB_UNKNOWN = 0;
+  QUEUED      = 1;
+  RUNNING     = 2;
+  COMPLETED   = 3;
+  FAILED      = 4;
+  MIGRATING   = 5;
+}
+
+message JobSpec {
+  string job_id          = 1; // UUID
+  string class_name      = 2;
+  bytes  args            = 3;
+  bytes  owner_node_id   = 4;
+  bytes  code_chunk_id   = 5; // AegisFS chunk holding the job bytecode jar (optional)
+  string code_file_id    = 6; // AegisFS file id for job code
+}
+
+message JobRecord {
+  JobSpec spec            = 1;
+  bytes   assigned_node_id = 2;
+  JobState state          = 3;
+  string  checkpoint_file_id = 4;
+  int64   started_at      = 5;
+  int64   completed_at    = 6;
+  bytes   result          = 7;
+  string  error           = 8;
+}
+
+message ProbeRequest {
+  string job_id = 1;
+}
+
+message ProbeResult {
+  bytes node_id = 1;
+  bool  accepted = 2;
+  double score  = 3;
+}
+
+message RunJob {
+  JobRecord record = 1;
+}
+
+message JobUpdate {
+  string   job_id   = 1;
+  JobState state    = 2;
+  string   checkpoint_file_id = 3;
+  bytes    result   = 4;
+  string   error    = 5;
+}
+
+message ClientCommandResult {
+  bool  success   = 1;
+  bytes leader_id = 2; // hint to redirect to the current leader, if known
+  int64 index     = 3; // committed log index on success
+  string error    = 4;
+}
+
+// test-only
+message KvPut {
+  string key   = 1;
+  bytes  value = 2;
+}

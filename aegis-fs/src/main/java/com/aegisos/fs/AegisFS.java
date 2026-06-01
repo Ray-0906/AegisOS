@@ -1,0 +1,180 @@
+package com.aegisos.fs;
+
+import com.aegisos.consensus.ConsensusModule;
+import com.aegisos.core.crypto.Hashing;
+import com.aegisos.core.identity.NodeId;
+import com.aegisos.discovery.DiscoveryService;
+import com.aegisos.network.NetworkLayer;
+import com.aegisos.proto.ChunkRef;
+import com.aegisos.proto.CommandType;
+import com.aegisos.proto.FileMetadata;
+import com.aegisos.proto.StateCommand;
+import com.google.protobuf.ByteString;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Distributed, content-addressed, encrypted file system (design section 3.5).
+ * Chunks are stored on N nodes; file metadata lives in the Raft log.
+ */
+public final class AegisFS {
+
+    private static final Logger log = LoggerFactory.getLogger(AegisFS.class);
+    private static final long COMMIT_TIMEOUT_MS = 10_000;
+
+    private final ConsensusModule consensus;
+    private final NodeId self;
+    private final int replicationFactor;
+
+    private final ChunkSplitter splitter = new ChunkSplitter();
+    private final ChunkCipher cipher;
+    private final ChunkStore store;
+    private final ChunkReplicator replicator;
+    private final ChunkPlacement placement;
+    private final FileIndex fileIndex = new FileIndex();
+
+    public AegisFS(NetworkLayer network, ConsensusModule consensus, DiscoveryService discovery,
+                   NodeId self, byte[] clusterKey, int replicationFactor, Path chunkDir) {
+        this.consensus = consensus;
+        this.self = self;
+        this.replicationFactor = replicationFactor;
+        this.cipher = new ChunkCipher(clusterKey);
+        this.store = new ChunkStore(chunkDir);
+        this.replicator = new ChunkReplicator(network, store, self);
+        this.placement = new ChunkPlacement(discovery, self);
+    }
+
+    public void start() {
+        replicator.start();
+        consensus.stateMachine().register(CommandType.REGISTER_FILE, (index, cmd) -> {
+            try {
+                fileIndex.applyRegisterFile(FileMetadata.parseFrom(cmd.getPayload()));
+            } catch (Exception e) {
+                log.warn("bad REGISTER_FILE at {}", index);
+            }
+        });
+        log.info("AegisFS started (replication factor {})", replicationFactor);
+    }
+
+    public ChunkStore chunkStore() {
+        return store;
+    }
+
+    public FileIndex fileIndex() {
+        return fileIndex;
+    }
+
+    /** Stores an already-encrypted chunk on a target node (used by self-healing). */
+    public boolean replicateChunk(NodeId target, byte[] chunkId, byte[] data) {
+        return replicator.storeOn(target, chunkId, data);
+    }
+
+    /** Writes a file into the cluster and returns its file id. */
+    public byte[] write(String name, byte[] data) throws IOException {
+        List<byte[]> chunks = splitter.split(data);
+        List<ChunkRef> refs = new ArrayList<>(chunks.size());
+
+        for (byte[] chunk : chunks) {
+            ChunkCipher.EncryptedChunk enc = cipher.encrypt(chunk);
+            byte[] chunkId = Hashing.sha256(enc.ciphertext());
+            List<NodeId> targets = placement.selectTargets(chunkId, replicationFactor);
+
+            List<ByteString> storedOn = new ArrayList<>();
+            for (NodeId target : targets) {
+                if (replicator.storeOn(target, chunkId, enc.ciphertext())) {
+                    storedOn.add(ByteString.copyFrom(target.toBytes()));
+                }
+            }
+            if (storedOn.isEmpty()) {
+                throw new IOException("failed to store chunk on any node");
+            }
+            refs.add(ChunkRef.newBuilder()
+                    .setChunkId(ByteString.copyFrom(chunkId))
+                    .addAllNodeIds(storedOn)
+                    .setEncryptedKey(ByteString.copyFrom(enc.wrappedKey()))
+                    .setNonce(ByteString.copyFrom(enc.chunkNonce()))
+                    .setPlainSize(chunk.length)
+                    .build());
+        }
+
+        long createdAt = System.currentTimeMillis();
+        byte[] fileId = Hashing.sha256(name.getBytes(StandardCharsets.UTF_8), self.toBytes(),
+                ByteBuffer.allocate(Long.BYTES).putLong(createdAt).array());
+
+        FileMetadata metadata = FileMetadata.newBuilder()
+                .setFileId(ByteString.copyFrom(fileId))
+                .setName(name)
+                .addAllChunks(refs)
+                .setSize(data.length)
+                .setCreatedAt(createdAt)
+                .setReplication(replicationFactor)
+                .setOwnerId(ByteString.copyFrom(self.toBytes()))
+                .build();
+
+        commit(StateCommand.newBuilder()
+                .setType(CommandType.REGISTER_FILE)
+                .setPayload(metadata.toByteString())
+                .build());
+        log.info("Wrote {} ({} bytes, {} chunks)", name, data.length, refs.size());
+        return fileId;
+    }
+
+    /** Reads a file back, verifying chunk integrity and decrypting each chunk. */
+    public byte[] read(String name) throws IOException {
+        FileMetadata metadata = fileIndex.byName(name)
+                .orElseThrow(() -> new IOException("no such file: " + name));
+
+        List<byte[]> plaintextChunks = new ArrayList<>(metadata.getChunksCount());
+        for (ChunkRef ref : metadata.getChunksList()) {
+            byte[] chunkId = ref.getChunkId().toByteArray();
+            byte[] encrypted = null;
+            for (ByteString nodeBytes : ref.getNodeIdsList()) {
+                NodeId node = NodeId.of(nodeBytes.toByteArray());
+                byte[] candidate = replicator.fetchFrom(node, chunkId);
+                if (candidate != null && java.util.Arrays.equals(Hashing.sha256(candidate), chunkId)) {
+                    encrypted = candidate;
+                    break;
+                }
+            }
+            if (encrypted == null) {
+                throw new IOException("no healthy replica for a chunk of " + name);
+            }
+            plaintextChunks.add(cipher.decrypt(encrypted, ref.getNonce().toByteArray(),
+                    ref.getEncryptedKey().toByteArray()));
+        }
+        return splitter.reassemble(plaintextChunks);
+    }
+
+    public List<FileMetadata> list(String prefix) {
+        return fileIndex.list(prefix);
+    }
+
+    public void delete(String name) throws IOException {
+        Optional<FileMetadata> existing = fileIndex.byName(name);
+        if (existing.isEmpty()) {
+            return;
+        }
+        FileMetadata tombstone = existing.get().toBuilder().setSize(-1).clearChunks().build();
+        commit(StateCommand.newBuilder()
+                .setType(CommandType.REGISTER_FILE)
+                .setPayload(tombstone.toByteString())
+                .build());
+    }
+
+    private void commit(StateCommand command) throws IOException {
+        try {
+            consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            throw new IOException("failed to commit file metadata: " + e.getMessage(), e);
+        }
+    }
+}
