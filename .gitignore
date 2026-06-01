@@ -1,0 +1,51 @@
+# AegisOS Git Ignore Configuration
+
+# Maven Build Output
+target/
+**/target/
+
+# Log & Debug Files
+*.log
+debug-*.log
+logs/
+
+# Dump / Temporary Files
+dump-*.md
+dump-*.txt
+
+# IDE / Editor Settings
+# VS Code / Cursor
+.cursor/
+.vscode/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Eclipse
+.classpath
+.project
+.settings/
+.factorypath
+
+# NetBeans
+nbproject/private/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+# OS Specific Files
+.DS_Store
+Thumbs.db
+
+# Other Binary / Temp Files
+*.class
+*.jar
+*.war
+*.ear
+*.swp
+*~
