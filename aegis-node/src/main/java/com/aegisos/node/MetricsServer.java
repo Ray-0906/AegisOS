@@ -12,25 +12,21 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
 
 /**
- * Minimal HTTP metrics server exposed on {@link NodeConfig#apiPort()}.
+ * Minimal HTTP server exposing two endpoints on {@link NodeConfig#apiPort()}:
  *
- * <p>Serves a single JSON endpoint at {@code GET /metrics} with cluster-health
- * indicators useful for dashboards, integration tests, and demos:
+ * <ul>
+ *   <li>{@code GET /metrics} — rich JSON for humans and dashboards.</li>
+ *   <li>{@code GET /health}  — minimal JSON for scripts and load-balancers.
+ *       Returns HTTP 200 when the cluster is healthy, HTTP 503 otherwise.
+ *       A cluster is considered healthy when this node knows who the leader is.</li>
+ * </ul>
  *
+ * <p>Health response shape:
  * <pre>
- * {
- *   "nodeId"      : "a3f5b2...",
- *   "role"        : "LEADER" | "FOLLOWER" | "CANDIDATE",
- *   "leader"      : "a3f5b2..." | null,
- *   "term"        : 12,
- *   "commitIndex" : 47,
- *   "aliveNodes"  : 3,
- *   "jobs"        : { "QUEUED": 0, "RUNNING": 2, "COMPLETED": 15, "FAILED": 1 },
- *   "localChunks" : 38
- * }
+ * { "status": "UP", "leaderKnown": true, "alivePeers": 3 }   ← HTTP 200
+ * { "status": "DOWN", "leaderKnown": false, "alivePeers": 1 } ← HTTP 503
  * </pre>
  *
  * <p>Uses the JDK built-in {@link HttpServer} — no extra dependencies.
@@ -50,6 +46,7 @@ public final class MetricsServer implements AutoCloseable {
 
     public void start() throws IOException {
         server = HttpServer.create(new InetSocketAddress(port), 0);
+
         server.createContext("/metrics", exchange -> {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
@@ -62,10 +59,32 @@ public final class MetricsServer implements AutoCloseable {
                 os.write(body);
             }
         });
-        // A single virtual thread is sufficient — metrics are read-only and fast.
+
+        server.createContext("/health", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            boolean leaderKnown = node.consensus().leaderId() != null;
+            int alivePeers      = node.discovery().membership().aliveCount();
+            // UP when a leader is known (quorum exists and cluster is making progress).
+            // Scripts can rely on the HTTP status code alone — no JSON parsing needed.
+            int httpStatus = leaderKnown ? 200 : 503;
+            String body = String.format(
+                    "{ \"status\": \"%s\", \"leaderKnown\": %b, \"alivePeers\": %d }%n",
+                    leaderKnown ? "UP" : "DOWN", leaderKnown, alivePeers);
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            exchange.sendResponseHeaders(httpStatus, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+
+        // A single virtual thread is sufficient — both endpoints are read-only and fast.
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
-        log.info("Metrics server listening on http://0.0.0.0:{}/metrics", port);
+        log.info("Metrics server listening on http://0.0.0.0:{}/ (endpoints: /metrics, /health)", port);
     }
 
     private String buildMetrics() {
