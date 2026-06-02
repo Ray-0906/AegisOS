@@ -43,6 +43,7 @@ public final class ClusterStateMachine implements RaftStateMachine {
     public void apply(long index, byte[] command) {
         try {
             StateCommand cmd = StateCommand.parseFrom(command);
+            log.info("ClusterStateMachine applying {} at {}", cmd.getType(), index);
             BiConsumer<Long, StateCommand> applier = appliers.get(cmd.getType());
             if (applier != null) {
                 applier.accept(index, cmd);

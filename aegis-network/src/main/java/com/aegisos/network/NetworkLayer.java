@@ -17,10 +17,14 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -47,6 +51,39 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     private final Map<MessageType, MessageHandler> handlers = new ConcurrentHashMap<>();
     private final Map<Long, CompletableFuture<AegisMessage>> pending = new ConcurrentHashMap<>();
     private final AtomicLong correlationCounter = new AtomicLong(1);
+
+    /**
+     * Message types that MUST be processed inline on the PeerConnection.receiveLoop() thread.
+     *
+     * <p>These are the latency-sensitive Raft peer messages. Their handlers hold the Raft
+     * mutex briefly (microseconds) and immediately return a reply — they never block on
+     * consensus, I/O, or any external service. Dispatching them to an executor would add
+     * scheduling overhead and, more importantly, break ordering: two concurrent AppendEntries
+     * arriving on the same connection could race through the Raft lock out of order.
+     *
+     * <p>Rule: a message type belongs here if and only if its handler is:
+     *   1. Non-blocking (no Future.get(), no I/O wait, no external RPC), AND
+     *   2. Order-sensitive (the protocol assumes messages from the same peer are serialised).
+     */
+    private static final Set<MessageType> FAST_PATH_TYPES = EnumSet.of(
+            MessageType.APPEND_ENTRIES,
+            MessageType.APPEND_ENTRIES_RESULT,
+            MessageType.REQUEST_VOTE,
+            MessageType.REQUEST_VOTE_RESULT,
+            MessageType.PING,
+            MessageType.PONG
+    );
+
+    /**
+     * Off-socket dispatcher for slow-path messages.
+     *
+     * <p>Any handler that may block (e.g. CLIENT_COMMAND → raftNode.submit().get(),
+     * STORE_CHUNK writing to disk, RUN_JOB spawning a job) is submitted here so the
+     * receiveLoop thread is never stalled. Virtual threads are ideal: they are cheap,
+     * block gracefully on I/O, and impose no artificial parallelism limit.
+     */
+    private final ExecutorService handlerExecutor =
+            Executors.newVirtualThreadPerTaskExecutor();
 
     private volatile Function<NodeId, Optional<Endpoint>> addressResolver = id -> Optional.empty();
     private TcpServer server;
@@ -188,7 +225,12 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     @Override
     public void onMessage(PeerConnection connection, AegisMessage message, long correlation) {
-        // A reply to one of our outstanding requests?
+        // ----------------------------------------------------------------
+        // Tier 0: correlation replies (e.g. AppendEntriesResult sent back to
+        // the LogReplicator that made a request() call).
+        // Complete the waiting future immediately on the receive thread.
+        // This is always safe: future.complete() is non-blocking.
+        // ----------------------------------------------------------------
         if (correlation != 0) {
             CompletableFuture<AegisMessage> waiting = pending.remove(correlation);
             if (waiting != null) {
@@ -196,23 +238,58 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
                 return;
             }
         }
+
         MessageHandler handler = handlers.get(message.type());
         if (handler == null) {
             log.debug("No handler for {} from {}", message.type(), message.sender().shortId());
             return;
         }
-        try {
-            AegisMessage reply = handler.handle(message);
-            if (reply != null) {
-                connection.send(reply.type(), reply.payload(), correlation);
+
+        if (FAST_PATH_TYPES.contains(message.type())) {
+            // ----------------------------------------------------------------
+            // Tier 1: Fast-path — execute inline on the receive thread.
+            // Handlers here are lock-only (Raft mutex), non-blocking, and
+            // order-sensitive. Keeping them on the socket thread preserves
+            // the per-connection serialisation that Raft depends on.
+            // ----------------------------------------------------------------
+            try {
+                AegisMessage reply = handler.handle(message);
+                if (reply != null) {
+                    connection.send(reply.type(), reply.payload(), correlation);
+                }
+            } catch (Exception e) {
+                log.warn("Handler for {} threw: {}", message.type(), e.toString());
             }
-        } catch (Exception e) {
-            log.warn("Handler for {} threw: {}", message.type(), e.toString());
+        } else {
+            // ----------------------------------------------------------------
+            // Tier 2: Slow-path — dispatch to virtual-thread executor.
+            // Any handler that may block (Raft propose, disk I/O, downstream
+            // RPC) must not run on the receive thread or it will deadlock
+            // Raft replication (the root cause of the 25-second stall bug).
+            // ----------------------------------------------------------------
+            final long correlationId = correlation;
+            handlerExecutor.submit(() -> {
+                long start = System.nanoTime();
+                try {
+                    AegisMessage reply = handler.handle(message);
+                    long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+                    if (elapsedMs > 100) {
+                        log.warn("SLOW handler: {} from {} took {}ms",
+                                message.type(), message.sender().shortId(), elapsedMs);
+                    }
+                    if (reply != null) {
+                        connection.send(reply.type(), reply.payload(), correlationId);
+                    }
+                } catch (Exception e) {
+                    log.warn("Handler for {} threw: {}", message.type(), e.toString());
+                }
+            });
         }
     }
 
     @Override
     public void close() {
+        handlerExecutor.shutdownNow();
         if (server != null) {
             server.close();
         }

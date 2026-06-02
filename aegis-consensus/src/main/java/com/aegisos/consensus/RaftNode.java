@@ -371,6 +371,7 @@ public final class RaftNode {
     public AppendEntriesResult handleAppendEntries(AppendEntries req) {
         lock.lock();
         try {
+            log.info("RaftNode received AppendEntries: prevLogIndex={}, entries={}, leaderCommit={}", req.getPrevLogIndex(), req.getEntriesCount(), req.getLeaderCommit());
             long term = metadata.currentTerm();
             if (req.getTerm() < term) {
                 return appendResult(term, false, raftLog.lastIndex());

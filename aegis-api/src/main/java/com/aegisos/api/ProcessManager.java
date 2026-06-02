@@ -125,8 +125,15 @@ public final class ProcessManager {
     /** Blocks until the job reaches a terminal state, returning its serialized result. */
     public byte[] await(JobHandle handle, long timeoutMs) throws Exception {
         long deadline = System.currentTimeMillis() + timeoutMs;
+        long lastLog = 0;
         while (System.currentTimeMillis() < deadline) {
             Optional<JobRecord> record = agent.registry().get(handle.jobId());
+            long now = System.currentTimeMillis();
+            if (now - lastLog > 2000) {
+                log.info("ProcessManager.await: Job {} status is {}", handle.jobId(), 
+                         record.map(r -> r.getState().toString()).orElse("NOT_FOUND"));
+                lastLog = now;
+            }
             if (record.isPresent()) {
                 JobRecord r = record.get();
                 if (r.getState() == JobState.COMPLETED) {

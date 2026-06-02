@@ -44,7 +44,9 @@ public final class JobRegistry {
     private void applyUpdate(JobUpdate update) {
         jobs.compute(update.getJobId(), (id, existing) -> {
             JobRecord.Builder b = existing == null ? JobRecord.newBuilder() : existing.toBuilder();
+            JobState oldState = existing == null ? null : existing.getState();
             b.setState(update.getState());
+            log.info("JobRegistry update for {}: {} -> {}", id, oldState, update.getState());
             if (!update.getCheckpointFileId().isEmpty()) {
                 b.setCheckpointFileId(update.getCheckpointFileId());
             }
