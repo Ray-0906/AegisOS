@@ -19,7 +19,7 @@ public final class NodeConfig {
     private String bindHost = "0.0.0.0";
     private String advertiseHost = "127.0.0.1";
     private int port = 9000;
-    private int apiPort = 9001;
+    private int apiPort = 0;  // 0 = metrics server disabled
     private final List<Endpoint> seeds = new ArrayList<>();
     private int replicationFactor = 3;
     private long reaperIntervalMs = 60_000;

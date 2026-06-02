@@ -52,6 +52,7 @@ public final class AegisNode implements AutoCloseable {
     private AegisOS aegisOS;
 
     private volatile boolean started;
+    private MetricsServer metricsServer;
 
     public AegisNode(NodeConfig config) {
         this.config = config;
@@ -129,6 +130,11 @@ public final class AegisNode implements AutoCloseable {
         processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId());
         aegisOS = new AegisOS(fileSystem, processManager, new ClusterInfo(discovery));
 
+        if (config.apiPort() > 0) {
+            metricsServer = new MetricsServer(this, config.apiPort());
+            metricsServer.start();
+        }
+
         started = true;
         log.info("Node {} READY (port {})", identity.nodeId().shortId(), network.boundPort());
     }
@@ -195,6 +201,9 @@ public final class AegisNode implements AutoCloseable {
             return;
         }
         log.info("Shutting down node {}", identity.nodeId().shortId());
+        if (metricsServer != null) {
+            metricsServer.close();
+        }
         if (migrationCoordinator != null) {
             migrationCoordinator.close();
         }
