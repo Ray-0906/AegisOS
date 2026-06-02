@@ -34,6 +34,9 @@ final class ClientCommands {
         AegisNode node = new AegisNode(config);
         node.start();
         try {
+            // Transient clients should not accept jobs.
+            node.scheduler().setAcceptProbe(() -> false);
+
             // Give gossip and Raft a moment to converge (max 5 seconds).
             for (int i = 0; i < 100; i++) {
                 if (node.discovery().membership().aliveCount() > 1 && node.consensus().leaderId() != null) {

@@ -75,7 +75,7 @@ public final class ProcessManager {
             try {
                 return scheduler.schedule(spec);
             } catch (Exception e) {
-                if (e instanceof NotLeaderException || (e.getCause() != null && e.getCause() instanceof NotLeaderException)) {
+                if (isNotLeaderException(e)) {
                     // #region agent log
                     dbg("H1", "ProcessManager.java:scheduleWithRetry", "caught NotLeaderException (possibly wrapped)", e, e.getCause());
                     // #endregion
@@ -91,6 +91,16 @@ public final class ProcessManager {
                 }
             }
         }
+    }
+
+    private boolean isNotLeaderException(Throwable t) {
+        while (t != null) {
+            if (t instanceof NotLeaderException) {
+                return true;
+            }
+            t = t.getCause();
+        }
+        return false;
     }
 
     // #region agent log

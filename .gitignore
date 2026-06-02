@@ -56,3 +56,5 @@ Thumbs.db
 my_test_file.txt
 
 recovered_*.txt
+*.log
+*.txt

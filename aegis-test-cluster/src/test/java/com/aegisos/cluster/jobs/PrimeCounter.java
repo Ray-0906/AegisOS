@@ -12,6 +12,10 @@ public final class PrimeCounter implements AegisJob<Long> {
         this.limit = limit;
     }
 
+    public PrimeCounter() {
+        this(1000);
+    }
+
     @Override
     public Long execute(JobContext ctx) {
         long count = 0;
