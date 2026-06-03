@@ -23,6 +23,7 @@
         <module>aegis-node</module>
         <module>aegis-cli</module>
         <module>aegis-test-cluster</module>
+        <module>aegis-demo-job</module>
     </modules>
 
     <properties>

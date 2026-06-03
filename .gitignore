@@ -48,8 +48,10 @@ Thumbs.db
 *.war
 *.ear
 *.swp
-*~
+*.bin
 
+*~
+/data
 /node1
 /node2 
 /node3 

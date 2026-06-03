@@ -37,12 +37,24 @@ final class ClientCommands {
             // Transient clients should not accept jobs.
             node.scheduler().setAcceptProbe(() -> false);
 
-            // Give gossip and Raft a moment to converge (max 5 seconds).
-            for (int i = 0; i < 100; i++) {
-                if (node.discovery().membership().aliveCount() > 1 && node.consensus().leaderId() != null) {
+            // Give gossip and Raft a moment to converge (max 10 seconds).
+            // A transient CLI node starts with zero gossip state: it must discover
+            // surviving cluster members, then receive an AppendEntries heartbeat to
+            // learn who the current leader is. Under heavy node churn the old 5s
+            // window was not enough, causing spurious "no known leader" errors.
+            boolean ready = false;
+            for (int i = 0; i < 200; i++) {
+                if (node.discovery().membership().aliveCount() > 1
+                        && node.consensus().leaderId() != null) {
+                    ready = true;
                     break;
                 }
                 Thread.sleep(50);
+            }
+            if (!ready) {
+                System.err.println("[WARN] No cluster leader detected within 10s. " +
+                        "The cluster may still be re-electing after a node failure. " +
+                        "Proceeding anyway — the operation may fail if no leader exists.");
             }
             return fn.apply(node);
         } finally {

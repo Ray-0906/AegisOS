@@ -87,12 +87,15 @@ public final class AegisNode implements AutoCloseable {
         java.util.function.Supplier<java.util.List<com.aegisos.core.identity.NodeId>> votingPeers = () -> {
             java.util.List<com.aegisos.core.identity.NodeId> voters = discovery.membership().allPeers().stream()
                     .filter(peer -> peer.getRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER)
+                    // Exclude DEAD peers: they cannot vote and should not inflate quorum size.
+                    // SUSPECT peers are still potentially alive (just slow) so they remain in the set.
+                    .filter(peer -> peer.getStatus() != com.aegisos.proto.PeerStatus.DEAD)
                     .map(peer -> com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray()))
                     .filter(peerId -> !peerId.equals(identity.nodeId()))
                     .toList();
             java.util.List<com.aegisos.core.identity.NodeId> all = allPeers.get();
             if (voters.size() != all.size()) {
-                log.info("Quorum calculation ignores non-voting peers. Voting members: {}, All peers: {}",
+                log.info("Quorum calculation ignores non-voting/dead peers. Voting members: {}, All peers: {}",
                         voters.size() + 1, all.size() + 1);
             }
             return voters;
@@ -105,6 +108,11 @@ public final class AegisNode implements AutoCloseable {
 
         artifactRegistry = new ArtifactRegistry();
         artifactRegistry.registerWith(consensus.stateMachine());
+        // Eagerly replay persisted Raft log through all registered state-machine appliers
+        // (FileIndex, JobRegistry, ArtifactRegistry) before the node starts accepting work.
+        // Without this there is a startup race window where these in-memory maps are empty
+        // until the first leader heartbeat triggers the normal applyCommitted() path.
+        consensus.replayFromLog();
 
         fileSystem = new AegisFS(network, consensus, discovery, identity.nodeId(),
                 config.clusterKey(), config.replicationFactor(), config.chunkDir());

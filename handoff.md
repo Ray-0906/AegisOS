@@ -99,6 +99,7 @@ Generated via `aegis.proto`.
 ### Notable tests:
 - `Phase7Test`: End-to-end artifact upload, distribution, and execution.
 - `Phase8Test`: 100 concurrent artifact jobs stress test (validates cache race conditions and Raft load).
+- `Phase9Test`: Chaos integration testing (validates startup race conditions, quorum inflation, and repeated node/leader churn).
 - `test_cache.ps1`: Cache hit/miss validation.
 - `test_migration.ps1`: Validates node death recovery for dynamically loaded jobs.
 - `test_isolation.ps1`: Validates `ArtifactClassLoader` isolation with conflicting class names.

@@ -3,6 +3,7 @@ package com.aegisos.fs;
 import com.aegisos.consensus.ConsensusModule;
 import com.aegisos.core.crypto.Hashing;
 import com.aegisos.core.identity.NodeId;
+import com.aegisos.core.util.HexUtil;
 import com.aegisos.discovery.DiscoveryService;
 import com.aegisos.network.NetworkLayer;
 import com.aegisos.proto.ChunkRef;
@@ -146,6 +147,7 @@ public final class AegisFS {
                 }
             }
             if (encrypted == null) {
+                log.error("Failed to read chunk {}. FileMetadata: {}", HexUtil.encode(chunkId), metadata);
                 throw new IOException("no healthy replica for a chunk of " + name);
             }
             plaintextChunks.add(cipher.decrypt(encrypted, ref.getNonce().toByteArray(),

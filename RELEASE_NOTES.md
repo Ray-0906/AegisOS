@@ -15,6 +15,10 @@ This release introduces dynamic artifact distribution and execution, transformin
 
 ### Fixes
 * Fixed TOCTOU (Time-Of-Check to Time-Of-Use) race condition in `ArtifactCache` file locking and renaming during concurrent job execution.
+* Fixed race condition during `ArtifactRegistry` startup by enforcing warm-up via Raft log replay prior to accepting jobs.
+* Fixed Raft quorum inflation bug where DEAD peers were incorrectly counted in voting membership, preventing leader election in heavily degraded clusters.
+* Hardened cluster stability against repeated node churn and leader deaths with comprehensive `Phase9Test` chaos integration tests.
+* Fixed artifact upload race condition by enforcing gossip convergence prior to cluster write, guaranteeing reliable replication.
 
 ---
 
