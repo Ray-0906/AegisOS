@@ -69,6 +69,36 @@ public final class ProcessManager {
         return new JobHandle(jobId);
     }
 
+    /** Submits an artifact-based job: worker will download artifact, load class, and execute. */
+    public JobHandle submitArtifact(String artifactId, String className, java.util.List<String> args) throws Exception {
+        String jobId = UUID.randomUUID().toString();
+        byte[] argsBytes = Serialization.serialize((Serializable) args.toArray(new String[0]));
+
+        JobSpec spec = JobSpec.newBuilder()
+                .setJobId(jobId)
+                .setClassName(className)
+                .setArgs(ByteString.copyFrom(argsBytes))
+                .setCodeFileId(artifactId)
+                .setOwnerNodeId(ByteString.copyFrom(self.toBytes()))
+                .build();
+
+        NodeId target = scheduleWithRetry(spec);
+        JobRecord record = JobRecord.newBuilder()
+                .setSpec(spec)
+                .setAssignedNodeId(ByteString.copyFrom(target.toBytes()))
+                .setState(JobState.QUEUED)
+                .build();
+
+        if (target.equals(self)) {
+            agent.dispatchLocal(record);
+        } else {
+            network.sendAsync(target, MessageType.RUN_JOB,
+                    RunJob.newBuilder().setRecord(record).build().toByteArray());
+        }
+        log.info("Submitted artifact job {} (artifact: {}) to {}", jobId, artifactId, target.shortId());
+        return new JobHandle(jobId);
+    }
+
     private NodeId scheduleWithRetry(JobSpec spec) throws Exception {
         long deadline = System.currentTimeMillis() + SCHEDULE_RETRY_WINDOW_MS;
         while (true) {

@@ -1,5 +1,6 @@
 package com.aegisos.cli;
 
+import com.aegisos.cli.commands.ArtifactCommand;
 import com.aegisos.cli.commands.GetCommand;
 import com.aegisos.cli.commands.InfoCommand;
 import com.aegisos.cli.commands.LsCommand;
@@ -23,7 +24,8 @@ import picocli.CommandLine;
                 GetCommand.class,
                 LsCommand.class,
                 RunCommand.class,
-                StatusCommand.class
+                StatusCommand.class,
+                ArtifactCommand.class
         })
 // NOTE: all subcommands are wired now; their implementations are completed across phases.
 public final class AegisCLI implements Runnable {

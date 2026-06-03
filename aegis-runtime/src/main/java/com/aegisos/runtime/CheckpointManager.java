@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
+import java.net.URLClassLoader;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -90,6 +91,55 @@ public final class CheckpointManager {
             return Serialization.serialize(result);
         } finally {
             task.cancel(false);
+        }
+    }
+
+    /** Artifact-based execution with checkpointing. */
+    public byte[] runArtifactWithCheckpointing(String jobId, String artifactId, String fsPath,
+                                               String className, String[] args, byte[] restoreState,
+                                               ArtifactClassLoader artifactClassLoader) throws Exception {
+        try (URLClassLoader cl = artifactClassLoader.createLoader(artifactId, fsPath)) {
+            Class<?> clazz = Class.forName(className, true, cl);
+            AegisJob<?> initJob;
+            try {
+                initJob = (AegisJob<?>) clazz.getConstructor(String[].class).newInstance((Object) args);
+            } catch (NoSuchMethodException e) {
+                initJob = (AegisJob<?>) clazz.getDeclaredConstructor().newInstance();
+            }
+            final AegisJob<?> job = initJob;
+
+            if (restoreState != null && restoreState.length > 0) {
+                Thread.currentThread().setContextClassLoader(cl);
+                job.restoreState(Serialization.deserialize(restoreState));
+                log.info("Restored artifact job {} from checkpoint", jobId);
+            }
+
+            AtomicInteger seq = new AtomicInteger();
+            ScheduledFuture<?> task = scheduler.scheduleAtFixedRate(() -> {
+                try {
+                    Thread.currentThread().setContextClassLoader(cl); // ensure context for captureState
+                    Serializable state = job.captureState();
+                    if (state != null) {
+                        byte[] bytes = Serialization.serialize(state);
+                        String path = "/checkpoints/" + jobId + "/" + seq.incrementAndGet();
+                        fileSystem.write(path, bytes);
+                        recorder.record(jobId, path);
+                        log.debug("Checkpointed artifact job {} -> {}", jobId, path);
+                    }
+                } catch (Exception e) {
+                    log.debug("checkpoint of artifact job {} failed: {}", jobId, e.toString());
+                }
+            }, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+
+            try {
+                JobContext ctx = new JobContext(jobId, self, fileSystem);
+                @SuppressWarnings("unchecked")
+                AegisJob<Serializable> typed = (AegisJob<Serializable>) job;
+                Serializable result = typed.execute(ctx);
+                return Serialization.serialize(result);
+            } finally {
+                task.cancel(false);
+            }
         }
     }
 

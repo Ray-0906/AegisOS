@@ -220,6 +220,116 @@ final class ClientCommands {
         return job;
     }
 
+    static int runArtifactUpload(List<String> seeds, String jarPath) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis artifact upload: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    byte[] data = java.nio.file.Files.readAllBytes(Path.of(jarPath));
+                    String sha256 = com.aegisos.core.util.HexUtil.encode(
+                            com.aegisos.core.crypto.Hashing.sha256(data));
+
+                    if (node.artifactRegistry().bySha256(sha256).isPresent()) {
+                        System.out.println("Artifact already uploaded: " + sha256);
+                        return 0;
+                    }
+
+                    String fsPath = "/artifacts/" + sha256;
+                    node.fileSystem().write(fsPath, data);
+
+                    java.io.File jarFile = new java.io.File(jarPath);
+                    com.aegisos.proto.ArtifactRecord record = com.aegisos.proto.ArtifactRecord.newBuilder()
+                            .setArtifactId(sha256)
+                            .setFileName(jarFile.getName())
+                            .setSize(data.length)
+                            .setCreatedAt(System.currentTimeMillis())
+                            .setFsPath(fsPath)
+                            .setOwnerId(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
+                            .setStatus(com.aegisos.proto.ArtifactStatus.ARTIFACT_ACTIVE)
+                            .build();
+
+                    node.consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
+                            .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
+                            .setPayload(record.toByteString())
+                            .build()).get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+                    System.out.println("Uploaded " + jarFile.getName() + " (artifact: " + sha256 + ", size: " + data.length + " bytes)");
+                    return 0;
+                } catch (Exception e) {
+                    System.err.println("upload failed: " + e.getMessage());
+                    return 1;
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("aegis artifact upload failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    static int runArtifactList(List<String> seeds) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis artifact list: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    Thread.sleep(500); // allow raft catch-up
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                System.out.printf("%-64s %-30s %12s %s%n", "ARTIFACT ID", "FILE NAME", "SIZE", "STATUS");
+                for (com.aegisos.proto.ArtifactRecord r : node.artifactRegistry().listAll()) {
+                    System.out.printf("%-64s %-30s %12d %s%n", r.getArtifactId(), r.getFileName(), r.getSize(), r.getStatus());
+                }
+                return 0;
+            });
+        } catch (Exception e) {
+            System.err.println("aegis artifact list failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    static int runArtifactJob(List<String> seeds, String artifactId, String className, List<String> args) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis run: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    for (int i = 0; i < 60; i++) {
+                        if (node.artifactRegistry().bySha256(artifactId).isPresent()) {
+                            break;
+                        }
+                        Thread.sleep(50);
+                    }
+                    node.artifactRegistry().bySha256(artifactId)
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "Unknown artifact: " + artifactId
+                                            + ". Upload first with: aegis artifact upload <jar>"));
+
+                    com.aegisos.api.JobHandle handle = node.api().getProcessManager()
+                            .submitArtifact(artifactId, className, args);
+                    System.out.println("Submitted job " + handle.jobId());
+
+                    Object result = node.api().getProcessManager().awaitResult(handle, 120_000);
+                    System.out.println("Result: " + result);
+                    return 0;
+                } catch (Exception e) {
+                    System.err.println("run failed: " + e.getMessage());
+                    return 1;
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("aegis run failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
     private static int notReady(String cmd) {
         System.err.println("aegis " + cmd + ": not available in this build");
         return 2;

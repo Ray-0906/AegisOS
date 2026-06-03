@@ -15,6 +15,9 @@ import com.aegisos.proto.CommandType;
 import com.aegisos.proto.JobState;
 import com.aegisos.proto.JobUpdate;
 import com.aegisos.proto.StateCommand;
+import com.aegisos.runtime.ArtifactCache;
+import com.aegisos.runtime.ArtifactClassLoader;
+import com.aegisos.runtime.ArtifactRegistry;
 import com.aegisos.runtime.CheckpointManager;
 import com.aegisos.runtime.MigrationCoordinator;
 import com.aegisos.runtime.ProcessRuntimeAgent;
@@ -42,6 +45,9 @@ public final class AegisNode implements AutoCloseable {
     private DiscoveryService discovery;
     private ConsensusModule consensus;
     private AegisFS fileSystem;
+    private ArtifactRegistry artifactRegistry;
+    private ArtifactCache artifactCache;
+    private ArtifactClassLoader artifactClassLoader;
     private SelfHealingReaper reaper;
     private ResourceReporter resourceReporter;
     private Scheduler scheduler;
@@ -97,16 +103,23 @@ public final class AegisNode implements AutoCloseable {
                 votingPeers, allPeers, isVotingMember);
         consensus.start();
 
+        artifactRegistry = new ArtifactRegistry();
+        artifactRegistry.registerWith(consensus.stateMachine());
+
         fileSystem = new AegisFS(network, consensus, discovery, identity.nodeId(),
                 config.clusterKey(), config.replicationFactor(), config.chunkDir());
         fileSystem.start();
+
+        artifactCache = new ArtifactCache(config.artifactCacheDir(), fileSystem);
+        artifactClassLoader = new ArtifactClassLoader(artifactCache);
 
         reaper = new SelfHealingReaper(fileSystem, consensus, discovery, identity.nodeId(),
                 config.replicationFactor(), config.reaperIntervalMs());
         reaper.start();
 
         NodeResourcesView resourcesView = new NodeResourcesView();
-        runtimeAgent = new ProcessRuntimeAgent(consensus, identity.nodeId(), fileSystem);
+        runtimeAgent = new ProcessRuntimeAgent(consensus, identity.nodeId(), fileSystem,
+                artifactRegistry, artifactClassLoader);
         runtimeAgent.start();
         network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
 
@@ -157,6 +170,18 @@ public final class AegisNode implements AutoCloseable {
 
     public AegisFS fileSystem() {
         return fileSystem;
+    }
+
+    public ArtifactRegistry artifactRegistry() {
+        return artifactRegistry;
+    }
+
+    public ArtifactCache artifactCache() {
+        return artifactCache;
+    }
+
+    public ArtifactClassLoader artifactClassLoader() {
+        return artifactClassLoader;
     }
 
     public AegisOS api() {
