@@ -44,7 +44,7 @@ final class ClientCommands {
             // window was not enough, causing spurious "no known leader" errors.
             boolean ready = false;
             for (int i = 0; i < 200; i++) {
-                if (node.discovery().membership().aliveCount() >= node.config().replicationFactor()
+                if (node.discovery().membership().storageNodeCount() >= node.config().replicationFactor()
                         && node.consensus().leaderId() != null) {
                     ready = true;
                     break;

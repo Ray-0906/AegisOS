@@ -156,6 +156,22 @@ public final class MembershipList {
         return out;
     }
 
+    public List<NodeId> storagePeerIds() {
+        List<NodeId> out = new ArrayList<>();
+        for (var e : peers.entrySet()) {
+            if (!e.getKey().equals(selfId) 
+                    && e.getValue().getStatus() == PeerStatus.ALIVE 
+                    && e.getValue().getRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER) {
+                out.add(e.getKey());
+            }
+        }
+        return out;
+    }
+
+    public com.aegisos.proto.NodeRole selfRole() {
+        return selfRole;
+    }
+
     public List<PeerEntry> allPeers() {
         return new ArrayList<>(peers.values());
     }
@@ -180,5 +196,17 @@ public final class MembershipList {
 
     public int aliveCount() {
         return alivePeerIds().size() + 1; // include self
+    }
+
+    public int storageNodeCount() {
+        int count = selfRole == com.aegisos.proto.NodeRole.CLUSTER_MEMBER ? 1 : 0;
+        for (var e : peers.entrySet()) {
+            if (!e.getKey().equals(selfId) 
+                    && e.getValue().getStatus() == PeerStatus.ALIVE 
+                    && e.getValue().getRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER) {
+                count++;
+            }
+        }
+        return count;
     }
 }

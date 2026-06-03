@@ -33,8 +33,11 @@ public class Phase8Test {
         ClusterHarness.await(10000, () -> cluster.nodes().stream()
                 .allMatch(n -> n.consensus().leaderId() != null));
 
+        // Wait for gossip to converge so AegisFS can satisfy replication factor 3
+        ClusterHarness.await(5000, () -> cluster.nodes().get(0).discovery().membership().alivePeerIds().size() >= 2);
+
         // Use the existing aegis-demo-job-1.0.jar built earlier
-        File demoJar = new File("../../aegis-demo-job/target/aegis-demo-job-1.0.jar");
+        File demoJar = new File("../aegis-demo-job/target/aegis-demo-job-1.0.jar");
         byte[] jarBytes = Files.readAllBytes(demoJar.toPath());
         artifactId = HexUtil.encode(Hashing.sha256(jarBytes));
 

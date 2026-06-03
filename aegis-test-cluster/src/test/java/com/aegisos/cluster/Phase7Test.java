@@ -37,6 +37,9 @@ public class Phase7Test {
         ClusterHarness.await(10000, () -> cluster.nodes().stream()
                 .allMatch(n -> n.consensus().leaderId() != null));
 
+        // Wait for gossip to converge so AegisFS can satisfy replication factor 3
+        ClusterHarness.await(5000, () -> cluster.node(0).discovery().membership().alivePeerIds().size() >= 2);
+
         // Create a dummy jar for testing
         testJar = File.createTempFile("dummy-job", ".jar");
         testJar.deleteOnExit();

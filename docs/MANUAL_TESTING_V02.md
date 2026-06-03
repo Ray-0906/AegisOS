@@ -24,17 +24,17 @@ In the first three terminals, start the AegisOS nodes. They will automatically d
 
 **Terminal 1 (Node 1):**
 ```bash
-java -jar target/aegis.jar start --home /tmp/aegis/node1 --port 7001
+java -jar target/aegis.jar start --home ./data/node1 --port 7001
 ```
 
 **Terminal 2 (Node 2):**
 ```bash
-java -jar target/aegis.jar start --home /tmp/aegis/node2 --port 7002 --seed localhost:7001
+java -jar target/aegis.jar start --home ./data/node2 --port 7002 --seed localhost:7001
 ```
 
 **Terminal 3 (Node 3):**
 ```bash
-java -jar target/aegis.jar start --home /tmp/aegis/node3 --port 7003 --seed localhost:7001
+java -jar target/aegis.jar start --home ./data/node3 --port 7003 --seed localhost:7001
 ```
 
 Wait a few seconds for the nodes to complete leader election. You should see logs indicating a new `LEADER`.

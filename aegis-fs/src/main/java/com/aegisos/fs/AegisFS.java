@@ -33,6 +33,7 @@ public final class AegisFS {
     private static final long COMMIT_TIMEOUT_MS = 10_000;
 
     private final ConsensusModule consensus;
+    private final DiscoveryService discovery;
     private final NodeId self;
     private final int replicationFactor;
 
@@ -46,6 +47,7 @@ public final class AegisFS {
     public AegisFS(NetworkLayer network, ConsensusModule consensus, DiscoveryService discovery,
                    NodeId self, byte[] clusterKey, int replicationFactor, Path chunkDir) {
         this.consensus = consensus;
+        this.discovery = discovery;
         this.self = self;
         this.replicationFactor = replicationFactor;
         this.cipher = new ChunkCipher(clusterKey);
@@ -96,9 +98,10 @@ public final class AegisFS {
                 }
             }
             if (storedOn.size() < replicationFactor) {
-                throw new IOException("failed to store chunk: required " + replicationFactor 
-                        + " replicas but only stored " + storedOn.size() + 
-                        ". (Cluster may be too small or gossip hasn't converged)");
+                int available = discovery.membership().storageNodeCount();
+                throw new IOException(String.format(
+                        "Replication requirement not met.\nReplication factor = %d\nAvailable nodes = %d\nNeed at least %d alive nodes.",
+                        replicationFactor, available, replicationFactor));
             }
             refs.add(ChunkRef.newBuilder()
                     .setChunkId(ByteString.copyFrom(chunkId))

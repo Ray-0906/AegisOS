@@ -31,16 +31,22 @@ public final class ChunkPlacement {
         Set<NodeId> selected = new LinkedHashSet<>();
 
         // 1) DHT-closest known nodes to the chunk id.
-        for (NodeId n : discovery.router().findClosest(key, replicationFactor)) {
-            selected.add(n);
-            if (selected.size() >= replicationFactor) {
-                break;
+        for (NodeId n : discovery.router().findClosest(key, replicationFactor * 3)) {
+            boolean isStorage = discovery.membership().storagePeerIds().contains(n) || 
+                    (n.equals(self) && discovery.membership().selfRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER);
+            if (isStorage) {
+                selected.add(n);
+                if (selected.size() >= replicationFactor) {
+                    break;
+                }
             }
         }
         // 2) Top up with alive peers and self.
         if (selected.size() < replicationFactor) {
-            List<NodeId> candidates = new ArrayList<>(discovery.membership().alivePeerIds());
-            candidates.add(self);
+            List<NodeId> candidates = new ArrayList<>(discovery.membership().storagePeerIds());
+            if (discovery.membership().selfRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER) {
+                candidates.add(self);
+            }
             for (NodeId n : candidates) {
                 selected.add(n);
                 if (selected.size() >= replicationFactor) {
@@ -48,8 +54,8 @@ public final class ChunkPlacement {
                 }
             }
         }
-        // Ensure self can host at least one replica in a tiny cluster.
-        if (selected.isEmpty()) {
+        // Ensure self can host at least one replica in a tiny cluster (if it is a storage node).
+        if (selected.isEmpty() && discovery.membership().selfRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER) {
             selected.add(self);
         }
         return new ArrayList<>(selected);
