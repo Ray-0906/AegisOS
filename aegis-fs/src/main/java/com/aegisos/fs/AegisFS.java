@@ -95,8 +95,10 @@ public final class AegisFS {
                     storedOn.add(ByteString.copyFrom(target.toBytes()));
                 }
             }
-            if (storedOn.isEmpty()) {
-                throw new IOException("failed to store chunk on any node");
+            if (storedOn.size() < replicationFactor) {
+                throw new IOException("failed to store chunk: required " + replicationFactor 
+                        + " replicas but only stored " + storedOn.size() + 
+                        ". (Cluster may be too small or gossip hasn't converged)");
             }
             refs.add(ChunkRef.newBuilder()
                     .setChunkId(ByteString.copyFrom(chunkId))
