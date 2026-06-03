@@ -1,8 +1,10 @@
 # AegisOS Release Notes
 
-## v0.2-rc1 — Distributed Artifact Runtime
+## v0.2.0 — Distributed Artifact Runtime
 
 This release introduces dynamic artifact distribution and execution, transforming the cluster from a static network into a lightweight compute platform.
+
+> **Testing Note:** See [docs/MANUAL_TESTING_V02.md](file:///C:/Users/astra/Desktop/projects/AgeisOS/docs/MANUAL_TESTING_V02.md) for a step-by-step guide on how to test this release locally using separate terminals.
 
 ### New Features
 * **Artifact Registry**: Raft-replicated registry tracking JAR metadata (SHA-256, size) ensuring all nodes maintain a consistent view of available jobs.
