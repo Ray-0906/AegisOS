@@ -12,6 +12,11 @@ public final class PrimeCounter implements AegisJob<Long> {
         this.limit = limit;
     }
 
+    /** CLI constructor — called with args from {@code aegis run PrimeCounter <limit>}. */
+    public PrimeCounter(String[] args) {
+        this(args.length > 0 ? Integer.parseInt(args[0]) : 1000);
+    }
+
     public PrimeCounter() {
         this(1000);
     }

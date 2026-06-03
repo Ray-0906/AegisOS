@@ -45,7 +45,10 @@ public final class MetricsServer implements AutoCloseable {
     }
 
     public void start() throws IOException {
-        server = HttpServer.create(new InetSocketAddress(port), 0);
+        // Use explicit IPv4 wildcard + non-zero backlog; the JDK HttpServer on Windows
+        // may silently fail to accept connections when bound with InetSocketAddress(port, 0).
+        server = HttpServer.create(
+                new InetSocketAddress("0.0.0.0", port), 10);
 
         server.createContext("/metrics", exchange -> {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {

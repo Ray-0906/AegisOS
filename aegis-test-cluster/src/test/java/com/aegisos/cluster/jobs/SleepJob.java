@@ -12,6 +12,11 @@ public final class SleepJob implements AegisJob<Boolean> {
         this.sleepMs = sleepMs;
     }
 
+    /** CLI constructor — called with args from {@code aegis run SleepJob <sleepMs>}. */
+    public SleepJob(String[] args) {
+        this(args.length > 0 ? Long.parseLong(args[0]) : 30000L);
+    }
+
     public SleepJob() {
         this(30000);
     }
