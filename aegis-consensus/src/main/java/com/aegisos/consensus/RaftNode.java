@@ -81,6 +81,43 @@ public final class RaftNode {
         log.info("Raft node {} started as FOLLOWER (term {})", self.shortId(), metadata.currentTerm());
     }
 
+    /**
+     * Eagerly replays all persisted log entries through the state machine.
+     * <p>
+     * Call this once after all {@link RaftStateMachine} appliers have been registered and
+     * before the node is considered ready to accept work. Without this there is a ~50ms
+     * startup race window where the registry is empty until the first leader heartbeat
+     * triggers the normal {@link #applyCommitted()} path.
+     * <p>
+     * Safe to call alongside the live path: {@code lastApplied} is tracked so entries
+     * already applied here are skipped when subsequent {@code applyCommitted()} calls run.
+     */
+    public void replayCommitted() {
+        lock.lock();
+        try {
+            long lastOnDisk = raftLog.lastIndex();
+            if (lastOnDisk == 0) {
+                return; // fresh node, nothing to replay
+            }
+            log.info("Raft node {} replaying {} log entries from disk on startup",
+                    self.shortId(), lastOnDisk - lastApplied);
+            while (lastApplied < lastOnDisk) {
+                lastApplied++;
+                RaftLogEntry entry = raftLog.get(lastApplied);
+                if (entry != null) {
+                    try {
+                        stateMachine.apply(entry.getIndex(), entry.getCommand().toByteArray());
+                    } catch (Exception e) {
+                        log.error("State machine replay failed at index {}: {}", lastApplied, e.toString());
+                    }
+                }
+            }
+            log.info("Raft node {} startup replay complete (lastApplied={})", self.shortId(), lastApplied);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     public void stop() {
         electionTimer.stop();
         scheduler.shutdownNow();
@@ -171,6 +208,11 @@ public final class RaftNode {
                 .setLastLogIndex(lastLogIndex)
                 .setLastLogTerm(lastLogTerm)
                 .build();
+
+        if (votes.get() >= majority) {
+            becomeLeader();
+            return;
+        }
 
         for (NodeId peer : peers) {
             transport.sendRequestVote(peer, req).whenComplete((result, err) -> {

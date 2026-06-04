@@ -145,6 +145,7 @@ enum CommandType {
   NODE_LEAVE    = 5;
   UPDATE_JOB    = 6;
   KV_PUT        = 7; // test-only KV store
+  REGISTER_ARTIFACT = 8;
 }
 
 message StateCommand {
@@ -260,4 +261,19 @@ message ClientCommandResult {
 message KvPut {
   string key   = 1;
   bytes  value = 2;
+}
+
+enum ArtifactStatus {
+  ARTIFACT_ACTIVE  = 0;
+  ARTIFACT_CORRUPT = 1;
+}
+
+message ArtifactRecord {
+  string artifact_id    = 1;  // SHA-256 hex of JAR content
+  string file_name      = 2;  // original filename (e.g., "wordcounter-1.0.jar")
+  int64  size           = 3;  // JAR size in bytes
+  int64  created_at     = 4;  // epoch millis
+  string fs_path        = 5;  // AegisFS path: "/artifacts/<sha256>"
+  bytes  owner_id       = 6;  // uploading node ID
+  ArtifactStatus status = 7;  // lifecycle state
 }

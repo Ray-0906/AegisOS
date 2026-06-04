@@ -45,6 +45,10 @@ public final class NodeConfig {
         return dataDir().resolve("chunks");
     }
 
+    public Path artifactCacheDir() {
+        return dataDir().resolve("artifacts");
+    }
+
     public Path raftDir() {
         return dataDir().resolve("raft");
     }

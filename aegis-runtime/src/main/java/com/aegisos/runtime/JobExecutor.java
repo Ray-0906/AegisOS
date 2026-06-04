@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
+import java.net.URLClassLoader;
 
 /**
  * Runs a single {@link AegisJob} on a virtual thread, applying any restore state first.
@@ -17,10 +18,12 @@ public final class JobExecutor {
 
     private final NodeId self;
     private final AegisFS fileSystem;
+    private final ArtifactClassLoader artifactClassLoader;
 
-    public JobExecutor(NodeId self, AegisFS fileSystem) {
+    public JobExecutor(NodeId self, AegisFS fileSystem, ArtifactClassLoader artifactClassLoader) {
         this.self = self;
         this.fileSystem = fileSystem;
+        this.artifactClassLoader = artifactClassLoader;
     }
 
     /** Deserializes, optionally restores, and runs the job, returning the serialized result. */
@@ -37,6 +40,34 @@ public final class JobExecutor {
         JobContext ctx = new JobContext(jobId, self, fileSystem);
         Serializable result = job.execute(ctx);
         return Serialization.serialize(result);
+    }
+
+    /** Artifact-based execution with isolated classloader. */
+    public byte[] runFromArtifact(String jobId, String artifactId, String fsPath,
+                                  String className, String[] args,
+                                  byte[] restoreState) throws Exception {
+        try (URLClassLoader cl = artifactClassLoader.createLoader(artifactId, fsPath)) {
+            Class<?> clazz = Class.forName(className, true, cl);
+
+            AegisJob<?> job;
+            try {
+                job = (AegisJob<?>) clazz.getConstructor(String[].class)
+                        .newInstance((Object) args);
+            } catch (NoSuchMethodException e) {
+                job = (AegisJob<?>) clazz.getDeclaredConstructor().newInstance();
+            }
+
+            if (restoreState != null && restoreState.length > 0) {
+                Thread.currentThread().setContextClassLoader(cl);
+                Serializable state = Serialization.deserialize(restoreState);
+                job.restoreState(state);
+                log.info("Restored artifact job {} from checkpoint", jobId);
+            }
+
+            JobContext ctx = new JobContext(jobId, self, fileSystem);
+            Serializable result = job.execute(ctx);
+            return Serialization.serialize(result);
+        }
     }
 
     /** Captures the current checkpoint state of a (already-deserialized) job, or null. */

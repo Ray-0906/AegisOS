@@ -18,8 +18,14 @@ public final class RunCommand implements Callable<Integer> {
     @CommandLine.Option(names = "--seed", description = "Seed peer ip:port (repeatable).")
     List<String> seeds = List.of();
 
+    @CommandLine.Option(names = "--artifact", description = "Artifact ID (SHA-256) to load the class from.")
+    String artifactId;
+
     @Override
     public Integer call() {
+        if (artifactId != null && !artifactId.isEmpty()) {
+            return ClientCommands.runArtifactJob(seeds, artifactId, className, args);
+        }
         return ClientCommands.runJob(seeds, className, args);
     }
 }

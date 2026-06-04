@@ -216,6 +216,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         try {
             conn.get().send(type, payload, correlation);
         } catch (IOException e) {
+            pool.remove(nodeId);
             pending.remove(correlation);
             return CompletableFuture.failedFuture(e);
         }
@@ -284,6 +285,13 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
                     log.warn("Handler for {} threw: {}", message.type(), e.toString());
                 }
             });
+        }
+    }
+
+    @Override
+    public void onConnectionClosed(PeerConnection connection) {
+        if (pool.isWinner(connection)) {
+            pool.remove(connection.remoteNodeId());
         }
     }
 

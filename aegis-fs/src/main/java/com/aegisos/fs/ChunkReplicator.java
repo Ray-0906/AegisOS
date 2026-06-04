@@ -71,7 +71,7 @@ public final class ChunkReplicator {
             FetchChunkResult result = FetchChunkResult.parseFrom(reply.payload());
             return result.getFound() ? result.getData().toByteArray() : null;
         } catch (Exception e) {
-            log.debug("fetchFrom {} failed: {}", source.shortId(), e.toString());
+            log.warn("fetchFrom {} failed: {}", source.shortId(), e.toString(), e);
             return null;
         }
     }

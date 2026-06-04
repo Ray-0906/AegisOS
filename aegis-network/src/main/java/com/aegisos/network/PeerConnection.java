@@ -31,6 +31,7 @@ public final class PeerConnection implements AutoCloseable {
 
     public interface InboundHandler {
         void onMessage(PeerConnection connection, AegisMessage message, long correlation);
+        void onConnectionClosed(PeerConnection connection);
     }
 
     private final Socket socket;
@@ -141,6 +142,10 @@ public final class PeerConnection implements AutoCloseable {
         try {
             socket.close();
         } catch (IOException ignored) {
+        }
+        try {
+            handler.onConnectionClosed(this);
+        } catch (Exception ignored) {
         }
     }
 }

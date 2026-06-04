@@ -22,6 +22,7 @@
         <module>aegis-api</module>
         <module>aegis-node</module>
         <module>aegis-cli</module>
+        <module>aegis-demo-job</module>
         <module>aegis-test-cluster</module>
     </modules>
 

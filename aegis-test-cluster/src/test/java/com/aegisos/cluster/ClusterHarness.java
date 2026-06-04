@@ -29,7 +29,16 @@ public final class ClusterHarness implements AutoCloseable {
         return List.copyOf(nodes);
     }
 
-    /** Adds and starts one more node, seeded from node 0 (if any). */
+    /**
+     * Adds and starts one more node.
+     *
+     * <p>Seeds the new node from every currently-alive node in the cluster, not just
+     * the original bootstrap node. This is critical for chaos tests: if the original
+     * bootstrap seed was killed earlier, a naive {@code seedEndpoint} reference would
+     * produce a node with zero gossip visibility that loops elections indefinitely.
+     * By advertising all surviving nodes as seeds, the replacement always joins the
+     * live cluster regardless of which nodes have been killed.
+     */
     public AegisNode addNode() throws IOException {
         Path home = Files.createTempDirectory("aegis-node-");
         tempDirs.add(home);
@@ -39,17 +48,28 @@ public final class ClusterHarness implements AutoCloseable {
                 .advertiseHost("127.0.0.1")
                 .reaperIntervalMs(2_000)
                 .checkpointIntervalMs(1_000);
-        if (seedEndpoint != null) {
+
+        // Prefer alive nodes as seeds; fall back to the original bootstrap seed only
+        // if no nodes are alive yet (i.e. this is the very first node being started).
+        if (!nodes.isEmpty()) {
+            for (AegisNode alive : nodes) {
+                config.addSeed(new Endpoint("127.0.0.1", alive.network().boundPort()));
+            }
+        } else if (seedEndpoint != null) {
             config.addSeed(seedEndpoint);
         }
+
         AegisNode node = new AegisNode(config);
         node.start();
         if (seedEndpoint == null) {
+            // Record the first node's address as the canonical bootstrap seed
+            // (used as fallback only when nodes list is empty).
             seedEndpoint = new Endpoint("127.0.0.1", node.network().boundPort());
         }
         nodes.add(node);
         return node;
     }
+
 
     public List<AegisNode> nodes() {
         return nodes;

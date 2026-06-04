@@ -66,6 +66,17 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         return raftNode.isLeader();
     }
 
+    /**
+     * Eagerly replays all persisted Raft log entries through the state machine.
+     * Must be called after all state-machine appliers are registered and before
+     * the node is declared ready to serve traffic.
+     *
+     * @see RaftNode#replayCommitted()
+     */
+    public void replayFromLog() {
+        raftNode.replayCommitted();
+    }
+
     public NodeId leaderId() {
         return raftNode.leaderId();
     }

@@ -31,14 +31,19 @@ public final class ProcessRuntimeAgent {
     private final ConsensusModule consensus;
     private final NodeId self;
     private final JobExecutor executor;
+    private final ArtifactRegistry artifactRegistry;
+    private final ArtifactClassLoader artifactClassLoader;
     private final JobRegistry registry = new JobRegistry();
     private final AtomicInteger running = new AtomicInteger(0);
     private CheckpointManager checkpointManager; // set by Phase 6 wiring
 
-    public ProcessRuntimeAgent(ConsensusModule consensus, NodeId self, AegisFS fileSystem) {
+    public ProcessRuntimeAgent(ConsensusModule consensus, NodeId self, AegisFS fileSystem,
+                               ArtifactRegistry artifactRegistry, ArtifactClassLoader artifactClassLoader) {
         this.consensus = consensus;
         this.self = self;
-        this.executor = new JobExecutor(self, fileSystem);
+        this.artifactRegistry = artifactRegistry;
+        this.artifactClassLoader = artifactClassLoader;
+        this.executor = new JobExecutor(self, fileSystem, artifactClassLoader);
     }
 
     public void start() {
@@ -91,11 +96,27 @@ public final class ProcessRuntimeAgent {
             }
 
             byte[] result;
-            if (checkpointManager != null) {
-                result = checkpointManager.runWithCheckpointing(jobId,
-                        record.getSpec().getArgs().toByteArray(), restoreState, executor);
+            String artifactId = record.getSpec().getCodeFileId();
+            if (!artifactId.isEmpty()) {
+                com.aegisos.proto.ArtifactRecord artifact = artifactRegistry.bySha256(artifactId)
+                        .orElseThrow(() -> new IllegalStateException("unknown artifact: " + artifactId));
+                String className = record.getSpec().getClassName();
+                String[] args = Serialization.deserialize(record.getSpec().getArgs().toByteArray());
+                
+                if (checkpointManager != null) {
+                    result = checkpointManager.runArtifactWithCheckpointing(jobId, artifactId,
+                            artifact.getFsPath(), className, args, restoreState, artifactClassLoader);
+                } else {
+                    result = executor.runFromArtifact(jobId, artifactId, artifact.getFsPath(),
+                            className, args, restoreState);
+                }
             } else {
-                result = executor.run(jobId, record.getSpec().getArgs().toByteArray(), restoreState);
+                if (checkpointManager != null) {
+                    result = checkpointManager.runWithCheckpointing(jobId,
+                            record.getSpec().getArgs().toByteArray(), restoreState, executor);
+                } else {
+                    result = executor.run(jobId, record.getSpec().getArgs().toByteArray(), restoreState);
+                }
             }
 
             update(jobId, JobState.COMPLETED, result, null);

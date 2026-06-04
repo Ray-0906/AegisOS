@@ -3,6 +3,7 @@ package com.aegisos.fs;
 import com.aegisos.consensus.ConsensusModule;
 import com.aegisos.core.crypto.Hashing;
 import com.aegisos.core.identity.NodeId;
+import com.aegisos.core.util.HexUtil;
 import com.aegisos.discovery.DiscoveryService;
 import com.aegisos.network.NetworkLayer;
 import com.aegisos.proto.ChunkRef;
@@ -32,6 +33,7 @@ public final class AegisFS {
     private static final long COMMIT_TIMEOUT_MS = 10_000;
 
     private final ConsensusModule consensus;
+    private final DiscoveryService discovery;
     private final NodeId self;
     private final int replicationFactor;
 
@@ -45,6 +47,7 @@ public final class AegisFS {
     public AegisFS(NetworkLayer network, ConsensusModule consensus, DiscoveryService discovery,
                    NodeId self, byte[] clusterKey, int replicationFactor, Path chunkDir) {
         this.consensus = consensus;
+        this.discovery = discovery;
         this.self = self;
         this.replicationFactor = replicationFactor;
         this.cipher = new ChunkCipher(clusterKey);
@@ -94,8 +97,11 @@ public final class AegisFS {
                     storedOn.add(ByteString.copyFrom(target.toBytes()));
                 }
             }
-            if (storedOn.isEmpty()) {
-                throw new IOException("failed to store chunk on any node");
+            if (storedOn.size() < replicationFactor) {
+                int available = discovery.membership().storageNodeCount();
+                throw new IOException(String.format(
+                        "Replication requirement not met.\nReplication factor = %d\nAvailable nodes = %d\nNeed at least %d alive nodes.",
+                        replicationFactor, available, replicationFactor));
             }
             refs.add(ChunkRef.newBuilder()
                     .setChunkId(ByteString.copyFrom(chunkId))
@@ -146,6 +152,7 @@ public final class AegisFS {
                 }
             }
             if (encrypted == null) {
+                log.error("Failed to read chunk {}. FileMetadata: {}", HexUtil.encode(chunkId), metadata);
                 throw new IOException("no healthy replica for a chunk of " + name);
             }
             plaintextChunks.add(cipher.decrypt(encrypted, ref.getNonce().toByteArray(),
