@@ -209,6 +209,11 @@ public final class RaftNode {
                 .setLastLogTerm(lastLogTerm)
                 .build();
 
+        if (votes.get() >= majority) {
+            becomeLeader();
+            return;
+        }
+
         for (NodeId peer : peers) {
             transport.sendRequestVote(peer, req).whenComplete((result, err) -> {
                 if (err != null || result == null) {

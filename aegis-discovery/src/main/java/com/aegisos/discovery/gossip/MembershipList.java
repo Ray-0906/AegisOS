@@ -96,10 +96,14 @@ public final class MembershipList {
 
     /** Merges an incoming list, taking the fresher entry per node. */
     public void merge(com.aegisos.proto.MembershipList incoming) {
+        long now = System.currentTimeMillis();
         for (PeerEntry in : incoming.getPeersList()) {
             NodeId id = NodeId.of(in.getNodeId().toByteArray());
             if (id.equals(selfId)) {
                 continue; // we are authoritative about ourselves
+            }
+            if (now - in.getLastSeen() > evictTimeoutMs) {
+                continue; // prevent resurrection of long-dead peers
             }
             peers.merge(id, in, (existing, candidate) -> {
                 if (candidate.getVersion() > existing.getVersion()

@@ -29,11 +29,18 @@ public final class ElectionTimer {
 
     public synchronized void reset() {
         enabled = true;
+        if (scheduler.isShutdown() || scheduler.isTerminated()) {
+            return;
+        }
         if (pending != null) {
             pending.cancel(false);
         }
         long delay = ThreadLocalRandom.current().nextLong(minMs, maxMs + 1);
-        pending = scheduler.schedule(this::fire, delay, TimeUnit.MILLISECONDS);
+        try {
+            pending = scheduler.schedule(this::fire, delay, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Executor was shut down right after our check; benign race condition during shutdown.
+        }
     }
 
     private void fire() {
