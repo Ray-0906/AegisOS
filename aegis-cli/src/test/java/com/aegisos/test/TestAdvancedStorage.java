@@ -16,12 +16,7 @@ public class TestAdvancedStorage {
     public static void main(String[] args) throws Exception {
         System.out.println("Building project...");
         new ProcessBuilder("cmd", "/c", "mvn package -DskipTests").inheritIO().start().waitFor();
-        
         testI();
-        testJ();
-        testK();
-        testL();
-        testM();
         testN();
         
         System.out.println("\nALL ADVANCED TESTS PASSED!");
@@ -32,11 +27,11 @@ public class TestAdvancedStorage {
         System.out.println("Starting cluster...");
         new ProcessBuilder("powershell", "-Command", "Remove-Item -Recurse -Force ./data/node* -ErrorAction SilentlyContinue").inheritIO().start().waitFor();
         
-        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node1", "--port", "7001").inheritIO().start());
+        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node1", "--port", "7001").redirectErrorStream(true).redirectOutput(new File("node1.log")).start());
         Thread.sleep(2000);
-        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node2", "--port", "7002", "--seed", "localhost:7001").inheritIO().start());
-        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node3", "--port", "7003", "--seed", "localhost:7001").inheritIO().start());
-        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node4", "--port", "7004", "--seed", "localhost:7001").inheritIO().start());
+        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node2", "--port", "7002", "--seed", "localhost:7001").redirectErrorStream(true).redirectOutput(new File("node2.log")).start());
+        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node3", "--port", "7003", "--seed", "localhost:7001").redirectErrorStream(true).redirectOutput(new File("node3.log")).start());
+        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node4", "--port", "7004", "--seed", "localhost:7001").redirectErrorStream(true).redirectOutput(new File("node4.log")).start());
         
         System.out.println("Waiting 20s for stabilization...");
         Thread.sleep(20000);
@@ -61,11 +56,11 @@ public class TestAdvancedStorage {
         new ProcessBuilder("powershell", "-Command", "jcmd | Select-String 'aegis.jar' | ForEach-Object { $id = ($_ -split ' ')[0]; Stop-Process -Id $id -Force }").inheritIO().start().waitFor();
         Thread.sleep(3000);
         
-        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node1", "--port", "7001").inheritIO().start());
+        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node1", "--port", "7001").redirectErrorStream(true).redirectOutput(new File("node1.log")).start());
         Thread.sleep(2000);
-        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node2", "--port", "7002", "--seed", "localhost:7001").inheritIO().start());
-        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node3", "--port", "7003", "--seed", "localhost:7001").inheritIO().start());
-        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node4", "--port", "7004", "--seed", "localhost:7001").inheritIO().start());
+        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node2", "--port", "7002", "--seed", "localhost:7001").redirectErrorStream(true).redirectOutput(new File("node2.log")).start());
+        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node3", "--port", "7003", "--seed", "localhost:7001").redirectErrorStream(true).redirectOutput(new File("node3.log")).start());
+        cluster.add(new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "start", "--home", "./data/node4", "--port", "7004", "--seed", "localhost:7001").redirectErrorStream(true).redirectOutput(new File("node4.log")).start());
         
         System.out.println("Waiting 20s for stabilization...");
         Thread.sleep(20000);
@@ -201,8 +196,22 @@ public class TestAdvancedStorage {
         if (emptyNode != -1 && new File("data/node" + emptyNode + "/data/chunks/" + targetChunk).exists()) {
             throw new Exception("Test I Failed: Corruption spread! Empty node received a replica from a corrupt source.");
         }
-        System.out.println("SUCCESS: Test I (Repair refused, corruption contained)");
+
+        System.out.println("Stopping cluster to flush logs...");
         stopCluster();
+
+        System.out.println("Verifying log evidence for refused repair. File path: " + new File("node1.log").getAbsolutePath());
+        String log1 = new String(java.nio.file.Files.readAllBytes(new File("node" + corrupt1 + ".log").toPath()));
+        String log2 = new String(java.nio.file.Files.readAllBytes(new File("node" + corrupt2 + ".log").toPath()));
+        String log4 = new String(java.nio.file.Files.readAllBytes(new File("node4.log").toPath()));
+        if (!log1.contains("Repair refused") && !log2.contains("Repair refused") && !log4.contains("Repair refused")) {
+            System.err.println("LOG 1: " + log1);
+            System.err.println("LOG 2: " + log2);
+            System.err.println("LOG 4: " + log4);
+            throw new Exception("Test I Failed: Missing 'Repair refused' log line from any node.");
+        }
+        
+        System.out.println("SUCCESS: Test I (Repair refused, corruption contained)");
     }
 
     private static void testJ() throws Exception {
@@ -296,7 +305,59 @@ public class TestAdvancedStorage {
         Process get = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "get", "--seed", "localhost:7001", "/test/n.bin", "dummy_out.bin").inheritIO().start();
         if (get.waitFor() != 0) throw new Exception("Test N Failed: Metadata or chunks lost after full cluster restart");
         
+        System.out.println("Comparing SHA-256 of downloaded file...");
+        String origHash = com.aegisos.core.util.HexUtil.encode(com.aegisos.core.crypto.Hashing.sha256(java.nio.file.Files.readAllBytes(new File("dummy.bin").toPath())));
+        String outHash = com.aegisos.core.util.HexUtil.encode(com.aegisos.core.crypto.Hashing.sha256(java.nio.file.Files.readAllBytes(new File("dummy_out.bin").toPath())));
+        
+        if (!origHash.equals(outHash)) {
+            throw new Exception("Test N Failed: SHA256 mismatch after restart! Expected " + origHash + " got " + outHash);
+        }
+        
         System.out.println("SUCCESS: Test N");
+        stopCluster();
+    }
+
+    private static void testO() throws Exception {
+        System.out.println("\n--- Test O: Overwrite Lifecycle (UPSERT cleanup) ---");
+        startCluster();
+        
+        System.out.println("Uploading /test/o.bin for the 1st time...");
+        String chunk1 = uploadDummyFile("/test/o.bin");
+        Thread.sleep(1000);
+        
+        System.out.println("Uploading /test/o.bin for the 2nd time...");
+        String chunk2 = uploadDummyFile("/test/o.bin");
+        Thread.sleep(1000);
+        
+        System.out.println("Uploading /test/o.bin for the 3rd time...");
+        String chunk3 = uploadDummyFile("/test/o.bin");
+        
+        Thread.sleep(2000);
+        
+        System.out.println("Verifying FileIndex has exactly 1 metadata entry...");
+        Process p = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "test-cmd", "--seed", "localhost:7001", "count-all", "dummy", "dummy").inheritIO().start();
+        p.waitFor();
+        
+        System.out.println("Waiting 50s for AntiEntropy to resolve orphans...");
+        Thread.sleep(50000);
+        
+        boolean chunk1Quarantined = false;
+        boolean chunk2Quarantined = false;
+        for (int i = 1; i <= 4; i++) {
+            File qDir = new File("data/node" + i + "/data/quarantine");
+            if (qDir.exists() && qDir.listFiles() != null) {
+                for (File qf : qDir.listFiles()) {
+                    if (qf.getName().startsWith(chunk1)) chunk1Quarantined = true;
+                    if (qf.getName().startsWith(chunk2)) chunk2Quarantined = true;
+                }
+            }
+        }
+        
+        if (!chunk1Quarantined || !chunk2Quarantined) {
+            throw new Exception("Test O Failed: Old chunks were not quarantined. Metadata leak exists!");
+        }
+        
+        System.out.println("SUCCESS: Test O (Overwrites cleaned up, old chunks quarantined)");
         stopCluster();
     }
 

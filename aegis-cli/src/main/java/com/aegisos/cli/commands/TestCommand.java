@@ -47,6 +47,11 @@ public class TestCommand implements Callable<Integer> {
             node.start();
             Thread.sleep(2000); // Wait for discovery
 
+            if ("count-all".equals(action)) {
+                System.out.println("METADATA_COUNT=" + node.fileSystem().fileIndex().all().size());
+                return 0;
+            }
+
             FileMetadata meta = node.fileSystem().list("").stream()
                     .filter(m -> m.getName().equals(filePath))
                     .findFirst()

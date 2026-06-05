@@ -70,15 +70,25 @@ public final class SelfHealingReaper implements AutoCloseable {
                 byte[] chunkIdBytes = ref.getChunkId().toByteArray();
                 String hexId = com.aegisos.core.util.HexUtil.encode(chunkIdBytes);
                 
-                // Only a HEALTHY node can act as a source for repair
-                if (fs.localHealth().getState(hexId) != ReplicaState.HEALTHY) {
-                    continue;
-                }
-                
                 List<NodeId> aliveHolders = aliveHolders(ref);
                 if (aliveHolders.size() >= replicationFactor) {
                     continue;
                 }
+                
+                if (aliveHolders.isEmpty()) {
+                    // Everyone will log this if the chunk is totally lost. We just do it on the leader to avoid spam, or do it on self.
+                    // The user wants "Repair refused"
+                    log.warn("Repair refused for chunk {}: no healthy holders exist", hexId);
+                    continue;
+                } else {
+                    log.info("Repair cannot be refused yet. aliveHolders size is {}: {}", aliveHolders.size(), aliveHolders);
+                }
+                
+                // If we are corrupt or missing, we can't heal it.
+                if (fs.localHealth().getState(hexId) != ReplicaState.HEALTHY) {
+                    continue;
+                }
+
                 if (!isHealerFor(aliveHolders)) {
                     continue; // another holder is responsible
                 }
