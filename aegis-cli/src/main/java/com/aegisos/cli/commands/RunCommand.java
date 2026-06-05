@@ -21,11 +21,17 @@ public final class RunCommand implements Callable<Integer> {
     @CommandLine.Option(names = "--artifact", description = "Artifact ID (SHA-256) to load the class from.")
     String artifactId;
 
+    @CommandLine.Option(names = "--cpu", description = "CPU cores requested by the job.", defaultValue = "1")
+    int cpuCores;
+
+    @CommandLine.Option(names = "--memory", description = "Memory (MB) requested by the job.", defaultValue = "512")
+    long memoryMb;
+
     @Override
     public Integer call() {
         if (artifactId != null && !artifactId.isEmpty()) {
-            return ClientCommands.runArtifactJob(seeds, artifactId, className, args);
+            return ClientCommands.runArtifactJob(seeds, artifactId, className, args, cpuCores, memoryMb);
         }
-        return ClientCommands.runJob(seeds, className, args);
+        return ClientCommands.runJob(seeds, className, args, cpuCores, memoryMb);
     }
 }

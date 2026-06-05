@@ -89,7 +89,7 @@ public class Phase9Test {
     /** Submits a 2-word job and asserts the result equals 2L. */
     private static void assertJobRuns(AegisNode node, String artifactId, String label) throws Exception {
         JobHandle handle = node.api().getProcessManager()
-                .submitArtifact(artifactId, MAIN_CLASS, List.of("hello " + label));
+                .submitArtifact(artifactId, MAIN_CLASS, List.of("hello " + label), 1, 512);
         Object result = node.api().getProcessManager().awaitResult(handle, 20_000);
         assertEquals(2L, result, "Job '" + label + "' should complete with result 2");
     }

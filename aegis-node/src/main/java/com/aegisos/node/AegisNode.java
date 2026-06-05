@@ -19,9 +19,10 @@ import com.aegisos.runtime.ArtifactCache;
 import com.aegisos.runtime.ArtifactClassLoader;
 import com.aegisos.runtime.ArtifactRegistry;
 import com.aegisos.runtime.CheckpointManager;
-import com.aegisos.runtime.MigrationCoordinator;
+import com.aegisos.runtime.JobSupervisor;
 import com.aegisos.runtime.ProcessRuntimeAgent;
 import com.aegisos.scheduler.NodeResourcesView;
+import com.aegisos.scheduler.ResourceAllocator;
 import com.aegisos.scheduler.ResourceReporter;
 import com.aegisos.scheduler.Scheduler;
 import org.slf4j.Logger;
@@ -51,9 +52,10 @@ public final class AegisNode implements AutoCloseable {
     private SelfHealingReaper reaper;
     private ResourceReporter resourceReporter;
     private Scheduler scheduler;
+    private ResourceAllocator resourceAllocator;
     private ProcessRuntimeAgent runtimeAgent;
     private CheckpointManager checkpointManager;
-    private MigrationCoordinator migrationCoordinator;
+    private JobSupervisor jobSupervisor;
     private ProcessManager processManager;
     private AegisOS aegisOS;
 
@@ -118,21 +120,24 @@ public final class AegisNode implements AutoCloseable {
                 config.replicationFactor(), config.reaperIntervalMs());
 
         NodeResourcesView resourcesView = new NodeResourcesView();
-        runtimeAgent = new ProcessRuntimeAgent(consensus, identity.nodeId(), fileSystem,
+        runtimeAgent = new ProcessRuntimeAgent(consensus, network, identity.nodeId(), fileSystem,
                 artifactRegistry, artifactClassLoader);
 
-        scheduler = new Scheduler(network, discovery, consensus, resourcesView, identity.nodeId());
+        long maxMem = Runtime.getRuntime().maxMemory() / (1024 * 1024);
+        int cores = Runtime.getRuntime().availableProcessors();
+        resourceAllocator = new ResourceAllocator(cores, maxMem);
+
+        scheduler = new Scheduler(network, discovery, consensus, resourcesView, resourceAllocator, identity.nodeId());
         scheduler.setAcceptProbe(runtimeAgent::canAccept);
 
         resourceReporter = new ResourceReporter(network, discovery, identity.nodeId(),
                 config.chunkDir(), resourcesView, runtimeAgent::runningJobs,
                 ResourceReporter.DEFAULT_INTERVAL_MS);
 
-        checkpointManager = new CheckpointManager(fileSystem, identity.nodeId(),
-                config.checkpointIntervalMs(), this::recordCheckpoint);
+        checkpointManager = new CheckpointManager(identity.nodeId(), fileSystem, this::recordCheckpoint, config.checkpointIntervalMs());
         runtimeAgent.setCheckpointManager(checkpointManager);
 
-        migrationCoordinator = new MigrationCoordinator(discovery, consensus, scheduler,
+        jobSupervisor = new JobSupervisor(discovery, consensus, scheduler,
                 network, identity.nodeId(), runtimeAgent);
 
         processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId());
@@ -142,6 +147,7 @@ public final class AegisNode implements AutoCloseable {
         artifactRegistry.registerWith(consensus.stateMachine());
         fileSystem.registerAppliers(); // We will add this to AegisFS
         runtimeAgent.registerAppliers(); // We will add this to ProcessRuntimeAgent
+        scheduler.registerAppliers();
 
         // 3. Eagerly replay persisted Raft log through all registered state-machine appliers
         // (FileIndex, JobRegistry, ArtifactRegistry) before the node starts accepting work.
@@ -154,7 +160,7 @@ public final class AegisNode implements AutoCloseable {
         network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
         scheduler.start();
         resourceReporter.start();
-        migrationCoordinator.start();
+        jobSupervisor.start();
         consensus.start(); // Start Raft last to avoid heartbeat races triggering applyCommitted early
 
         if (config.apiPort() > 0) {
@@ -210,13 +216,18 @@ public final class AegisNode implements AutoCloseable {
         return scheduler;
     }
 
+    public ResourceAllocator resourceAllocator() {
+        return resourceAllocator;
+    }
+
     public ProcessRuntimeAgent runtimeAgent() {
         return runtimeAgent;
     }
 
-    private void recordCheckpoint(String jobId, String checkpointPath) {
+    private void recordCheckpoint(String jobId, long executionId, String checkpointPath) {
         JobUpdate update = JobUpdate.newBuilder()
                 .setJobId(jobId)
+                .setExecutionId(executionId)
                 .setState(JobState.RUNNING)
                 .setCheckpointFileId(checkpointPath)
                 .build();
@@ -243,14 +254,17 @@ public final class AegisNode implements AutoCloseable {
         if (metricsServer != null) {
             metricsServer.close();
         }
-        if (migrationCoordinator != null) {
-            migrationCoordinator.close();
+        if (jobSupervisor != null) {
+            jobSupervisor.close();
         }
         if (checkpointManager != null) {
-            checkpointManager.close();
+            checkpointManager.stop();
         }
         if (resourceReporter != null) {
             resourceReporter.close();
+        }
+        if (resourceAllocator != null) {
+            resourceAllocator.close();
         }
         if (reaper != null) {
             reaper.close();

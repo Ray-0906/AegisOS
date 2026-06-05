@@ -78,7 +78,7 @@ public class Phase10ChaosMarathonTest {
 
     private static void assertJobRuns(AegisNode node, String artifactId, String label) throws Exception {
         JobHandle handle = node.api().getProcessManager()
-                .submitArtifact(artifactId, MAIN_CLASS, List.of("chaos " + label));
+                .submitArtifact(artifactId, MAIN_CLASS, List.of("chaos " + label), 1, 512);
         Object result = node.api().getProcessManager().awaitResult(handle, 30_000);
         assertEquals(2L, result, "Job '" + label + "' should complete with result 2");
     }

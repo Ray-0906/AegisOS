@@ -167,7 +167,7 @@ final class ClientCommands {
         }
     }
 
-    static int runJob(List<String> seeds, String className, List<String> args) {
+    static int runJob(List<String> seeds, String className, List<String> args, int cpuCores, long memoryMb) {
         if (seeds.isEmpty()) {
             System.err.println("aegis run: at least one --seed is required");
             return 2;
@@ -176,7 +176,7 @@ final class ClientCommands {
             return withClient(seeds, node -> {
                 try {
                     com.aegisos.runtime.AegisJob<?> job = instantiate(className, args);
-                    com.aegisos.api.JobHandle handle = node.api().getProcessManager().submit(job);
+                    com.aegisos.api.JobHandle handle = node.api().getProcessManager().submit(job, cpuCores, memoryMb);
                     System.out.println("Submitted job " + handle.jobId());
                     Object result = node.api().getProcessManager().awaitResult(handle, 120_000);
                     System.out.println("Result: " + result);
@@ -305,7 +305,7 @@ final class ClientCommands {
         }
     }
 
-    static int runArtifactJob(List<String> seeds, String artifactId, String className, List<String> args) {
+    static int runArtifactJob(List<String> seeds, String artifactId, String className, List<String> args, int cpuCores, long memoryMb) {
         if (seeds.isEmpty()) {
             System.err.println("aegis run: at least one --seed is required");
             return 2;
@@ -325,7 +325,7 @@ final class ClientCommands {
                                             + ". Upload first with: aegis artifact upload <jar>"));
 
                     com.aegisos.api.JobHandle handle = node.api().getProcessManager()
-                            .submitArtifact(artifactId, className, args);
+                            .submitArtifact(artifactId, className, args, cpuCores, memoryMb);
                     System.out.println("Submitted job " + handle.jobId());
 
                     Object result = node.api().getProcessManager().awaitResult(handle, 120_000);

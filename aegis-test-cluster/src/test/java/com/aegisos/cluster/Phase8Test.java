@@ -85,7 +85,7 @@ public class Phase8Test {
                 com.aegisos.node.AegisNode node = cluster.nodes().get(index % 3);
 
                 JobHandle handle = node.api().getProcessManager().submitArtifact(
-                        artifactId, "com.example.WordCounter", List.of("test " + index));
+                        artifactId, "com.example.WordCounter", List.of("test " + index), 1, 512);
                 
                 return node.api().getProcessManager().awaitResult(handle, 30_000);
             });

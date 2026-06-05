@@ -11,9 +11,11 @@ import com.aegisos.proto.JobState;
 import com.aegisos.proto.JobUpdate;
 import com.aegisos.proto.RunJob;
 import com.aegisos.proto.StateCommand;
+import com.aegisos.runtime.Serialization;
 import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.aegisos.network.NetworkLayer;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,6 +31,7 @@ public final class ProcessRuntimeAgent {
     private static final int MAX_CONCURRENT_JOBS = 100;
 
     private final ConsensusModule consensus;
+    private final NetworkLayer network;
     private final NodeId self;
     private final JobExecutor executor;
     private final ArtifactRegistry artifactRegistry;
@@ -37,9 +40,10 @@ public final class ProcessRuntimeAgent {
     private final AtomicInteger running = new AtomicInteger(0);
     private CheckpointManager checkpointManager; // set by Phase 6 wiring
 
-    public ProcessRuntimeAgent(ConsensusModule consensus, NodeId self, AegisFS fileSystem,
+    public ProcessRuntimeAgent(ConsensusModule consensus, NetworkLayer network, NodeId self, AegisFS fileSystem,
                                ArtifactRegistry artifactRegistry, ArtifactClassLoader artifactClassLoader) {
         this.consensus = consensus;
+        this.network = network;
         this.self = self;
         this.artifactRegistry = artifactRegistry;
         this.artifactClassLoader = artifactClassLoader;
@@ -52,6 +56,15 @@ public final class ProcessRuntimeAgent {
 
     public void start() {
         // RUN_JOB is delivered via the network handler installed below.
+        network.registerHandler(MessageType.CANCEL_JOB, msg -> {
+            try {
+                String jobId = new String(msg.payload(), java.nio.charset.StandardCharsets.UTF_8);
+                cancelJobLocal(jobId);
+            } catch (Exception e) {
+                log.error("Failed to process CANCEL_JOB", e);
+            }
+            return null;
+        });
         log.info("Process runtime agent started");
     }
 
@@ -60,7 +73,7 @@ public final class ProcessRuntimeAgent {
             RunJob runJob = RunJob.parseFrom(msg.payload());
             dispatchLocal(runJob.getRecord());
         } catch (Exception e) {
-            log.warn("bad RUN_JOB: {}", e.toString());
+            log.error("Failed to parse or dispatch RUN_JOB", e);
         }
         return null;
     }
@@ -69,6 +82,26 @@ public final class ProcessRuntimeAgent {
     public void dispatchLocal(JobRecord record) {
         Thread.ofVirtual().name("aegis-job-" + record.getSpec().getJobId())
                 .start(() -> executeJob(record));
+    }
+    
+    public void cancelJob(String jobId) {
+        registry.get(jobId).ifPresentOrElse(job -> {
+            NodeId assignedNode = NodeId.of(job.getAssignedNodeId().toByteArray());
+            if (self.equals(assignedNode)) {
+                cancelJobLocal(jobId);
+            } else {
+                log.info("Forwarding cancel for job {} to node {}", jobId, assignedNode.shortId());
+                network.sendAsync(assignedNode, MessageType.CANCEL_JOB, jobId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }, () -> {
+            log.warn("Cannot cancel unknown job {}", jobId);
+            cancelJobLocal(jobId); // Try locally anyway just in case
+        });
+    }
+
+    private void cancelJobLocal(String jobId) {
+        log.info("Canceling job {} locally", jobId);
+        executor.cancelJob(jobId);
     }
 
     public void setCheckpointManager(CheckpointManager checkpointManager) {
@@ -79,19 +112,43 @@ public final class ProcessRuntimeAgent {
         return registry;
     }
 
+    public ConsensusModule consensus() {
+        return consensus;
+    }
+
     public int runningJobs() {
         return running.get();
     }
 
     public boolean canAccept() {
-        return running.get() < MAX_CONCURRENT_JOBS;
+        boolean accept = running.get() < MAX_CONCURRENT_JOBS;
+        log.info("canAccept() returning {} (running={})", accept, running.get());
+        return accept;
     }
 
     private void executeJob(JobRecord record) {
         String jobId = record.getSpec().getJobId();
+        long executionId = record.getExecutionId();
         running.incrementAndGet();
+        
+        java.util.concurrent.ScheduledExecutorService hbScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        hbScheduler.scheduleAtFixedRate(() -> {
+            try {
+                com.aegisos.core.identity.NodeId leader = consensus.leaderId();
+                if (leader != null) {
+                    com.aegisos.proto.JobHeartbeat hb = com.aegisos.proto.JobHeartbeat.newBuilder()
+                            .setJobId(jobId)
+                            .setExecutionId(executionId)
+                            .build();
+                    network.sendAsync(leader, com.aegisos.core.message.MessageType.JOB_HEARTBEAT, hb.toByteArray());
+                }
+            } catch (Exception e) {
+                log.debug("Failed to send heartbeat for job {}: {}", jobId, e.getMessage());
+            }
+        }, 0, 10, java.util.concurrent.TimeUnit.SECONDS);
+
         try {
-            update(jobId, JobState.RUNNING, null, null);
+            update(jobId, executionId, JobState.RUNNING, null, null);
 
             byte[] restoreState = null;
             if (checkpointManager != null && !record.getCheckpointFileId().isEmpty()) {
@@ -99,6 +156,7 @@ public final class ProcessRuntimeAgent {
             }
 
             byte[] result;
+            int memoryMb = (int) record.getSpec().getResources().getMemoryMb();
             String artifactId = record.getSpec().getCodeFileId();
             if (!artifactId.isEmpty()) {
                 com.aegisos.proto.ArtifactRecord artifact = artifactRegistry.bySha256(artifactId)
@@ -107,33 +165,34 @@ public final class ProcessRuntimeAgent {
                 String[] args = Serialization.deserialize(record.getSpec().getArgs().toByteArray());
                 
                 if (checkpointManager != null) {
-                    result = checkpointManager.runArtifactWithCheckpointing(jobId, artifactId,
-                            artifact.getFsPath(), className, args, restoreState, artifactClassLoader);
+                    result = checkpointManager.runArtifactWithCheckpointing(jobId, executionId, artifactId,
+                            artifact.getFsPath(), className, args, restoreState, executor, memoryMb);
                 } else {
                     result = executor.runFromArtifact(jobId, artifactId, artifact.getFsPath(),
-                            className, args, restoreState);
+                            className, args, restoreState, memoryMb);
                 }
             } else {
                 if (checkpointManager != null) {
-                    result = checkpointManager.runWithCheckpointing(jobId,
-                            record.getSpec().getArgs().toByteArray(), restoreState, executor);
+                    result = checkpointManager.runWithCheckpointing(jobId, executionId,
+                            record.getSpec().getArgs().toByteArray(), restoreState, executor, memoryMb);
                 } else {
-                    result = executor.run(jobId, record.getSpec().getArgs().toByteArray(), restoreState);
+                    result = executor.run(jobId, record.getSpec().getArgs().toByteArray(), restoreState, memoryMb);
                 }
             }
 
-            update(jobId, JobState.COMPLETED, result, null);
+            update(jobId, executionId, JobState.COMPLETED, result, null);
             log.info("Job {} COMPLETED", jobId);
         } catch (Exception e) {
-            log.warn("Job {} FAILED: {}", jobId, e.toString());
-            update(jobId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
+            log.error("Job {} FAILED", jobId, e);
+            update(jobId, executionId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
         } finally {
+            hbScheduler.shutdownNow();
             running.decrementAndGet();
         }
     }
 
-    private void update(String jobId, JobState state, byte[] result, String error) {
-        JobUpdate.Builder b = JobUpdate.newBuilder().setJobId(jobId).setState(state);
+    private void update(String jobId, long executionId, JobState state, byte[] result, String error) {
+        JobUpdate.Builder b = JobUpdate.newBuilder().setJobId(jobId).setExecutionId(executionId).setState(state);
         if (result != null) {
             b.setResult(ByteString.copyFrom(result));
         }

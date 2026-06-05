@@ -144,10 +144,11 @@ enum CommandType {
   NODE_JOIN         = 4;
   NODE_LEAVE        = 5;
   UPDATE_JOB        = 6;
-  KV_PUT            = 7;
-  REGISTER_ARTIFACT = 8;
-  ADD_REPLICA       = 9;
-  REMOVE_REPLICA    = 10;
+  SUBMIT_JOB        = 7;
+  KV_PUT            = 8;
+  REGISTER_ARTIFACT = 9;
+  ADD_REPLICA       = 10;
+  REMOVE_REPLICA    = 11;
 }
 
 message StateCommand {
@@ -217,9 +218,18 @@ enum JobState {
   JOB_UNKNOWN = 0;
   QUEUED      = 1;
   RUNNING     = 2;
-  COMPLETED   = 3;
-  FAILED      = 4;
-  MIGRATING   = 5;
+  SUCCESS     = 3;
+  COMPLETED   = 4;
+  FAILED      = 5;
+  MIGRATING   = 6;
+  LOST        = 7;
+  ASSIGNED    = 8;
+  PENDING     = 9;
+}
+
+message ResourceRequest {
+  int32 cpu_cores = 1;
+  int64 memory_mb = 2;
 }
 
 message JobSpec {
@@ -229,6 +239,7 @@ message JobSpec {
   bytes  owner_node_id   = 4;
   bytes  code_chunk_id   = 5; // AegisFS chunk holding the job bytecode jar (optional)
   string code_file_id    = 6; // AegisFS file id for job code
+  ResourceRequest resources = 7;
 }
 
 message JobRecord {
@@ -240,10 +251,12 @@ message JobRecord {
   int64   completed_at    = 6;
   bytes   result          = 7;
   string  error           = 8;
+  uint64  execution_id    = 9;
 }
 
 message ProbeRequest {
   string job_id = 1;
+  ResourceRequest resources = 2;
 }
 
 message ProbeResult {
@@ -262,6 +275,12 @@ message JobUpdate {
   string   checkpoint_file_id = 3;
   bytes    result   = 4;
   string   error    = 5;
+  uint64   execution_id = 6;
+}
+
+message JobHeartbeat {
+  string job_id = 1;
+  uint64 execution_id = 2;
 }
 
 message ClientCommandResult {

@@ -27,9 +27,24 @@ public final class JobRegistry {
         stateMachine.register(CommandType.ASSIGN_JOB, (index, cmd) -> {
             try {
                 JobRecord record = JobRecord.parseFrom(cmd.getPayload());
-                jobs.put(record.getSpec().getJobId(), record);
+                jobs.compute(record.getSpec().getJobId(), (id, existing) -> {
+                    if (existing != null && existing.getExecutionId() >= record.getExecutionId()) {
+                        log.warn("Fencing rejected ASSIGN_JOB for {}: current execId {}, new execId {}",
+                                id, existing.getExecutionId(), record.getExecutionId());
+                        return existing;
+                    }
+                    return record;
+                });
             } catch (Exception e) {
                 log.warn("bad ASSIGN_JOB at {}", index);
+            }
+        });
+        stateMachine.register(CommandType.SUBMIT_JOB, (index, cmd) -> {
+            try {
+                JobRecord record = JobRecord.parseFrom(cmd.getPayload());
+                jobs.putIfAbsent(record.getSpec().getJobId(), record);
+            } catch (Exception e) {
+                log.warn("bad SUBMIT_JOB at {}", index);
             }
         });
         stateMachine.register(CommandType.UPDATE_JOB, (index, cmd) -> {
@@ -43,6 +58,11 @@ public final class JobRegistry {
 
     private void applyUpdate(JobUpdate update) {
         jobs.compute(update.getJobId(), (id, existing) -> {
+            if (existing != null && existing.getExecutionId() != update.getExecutionId()) {
+                log.warn("Fencing rejected update for job {}: current execId {}, update execId {}",
+                        id, existing.getExecutionId(), update.getExecutionId());
+                return existing;
+            }
             JobRecord.Builder b = existing == null ? JobRecord.newBuilder() : existing.toBuilder();
             JobState oldState = existing == null ? null : existing.getState();
             b.setState(update.getState());
