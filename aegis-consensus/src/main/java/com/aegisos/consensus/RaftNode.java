@@ -247,9 +247,16 @@ public final class RaftNode {
         role = RaftRole.LEADER;
         leaderId = self;
         electionTimer.stop();
+        
+        // Raft paper §5.4.2: A leader cannot determine if an entry from a previous term is committed
+        // until it commits an entry from its current term. Append a NO-OP to force commitIndex advancement.
+        long noOpIndex = raftLog.append(metadata.currentTerm(), com.aegisos.proto.StateCommand.newBuilder()
+                .setType(com.aegisos.proto.CommandType.CMD_UNKNOWN)
+                .build().toByteArray()).getIndex();
+                
         long next = raftLog.lastIndex() + 1;
         replicator.initLeader(votingPeers.get(), next);
-        log.info("Node {} became LEADER for term {}", self.shortId(), metadata.currentTerm());
+        log.info("Node {} became LEADER for term {}, appended NO-OP at {}", self.shortId(), metadata.currentTerm(), noOpIndex);
         scheduler.execute(this::broadcastAppendEntries);
     }
 

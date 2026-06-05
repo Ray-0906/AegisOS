@@ -46,8 +46,11 @@ public final class ProcessRuntimeAgent {
         this.executor = new JobExecutor(self, fileSystem, artifactClassLoader);
     }
 
-    public void start() {
+    public void registerAppliers() {
         registry.registerWith(consensus.stateMachine());
+    }
+
+    public void start() {
         // RUN_JOB is delivered via the network handler installed below.
         log.info("Process runtime agent started");
     }

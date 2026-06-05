@@ -143,7 +143,7 @@ public final class MetricsServer implements AutoCloseable {
     @Override
     public void close() {
         if (server != null) {
-            server.stop(0);
+            server.stop(1); // Use 1-second timeout to prevent shutdown hanging
             log.info("Metrics server stopped");
         }
     }

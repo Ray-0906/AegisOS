@@ -30,9 +30,19 @@ public final class MembershipList {
     private final byte[] selfPublicKey;
     private final String selfAddress;
     private final com.aegisos.proto.NodeRole selfRole;
-    private final AtomicLong selfVersion = new AtomicLong(1);
+    
+    // FUTURE: Replace timestamp incarnation numbers with strictly monotonic incarnation counters 
+    // persisted to disk to handle cross-machine clock skew.
+    private final AtomicLong selfVersion = new AtomicLong(System.currentTimeMillis());
 
     private final ConcurrentHashMap<NodeId, PeerEntry> peers = new ConcurrentHashMap<>();
+    
+    private final java.util.Map<NodeId, Long> evictedVersions = java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<NodeId, Long>(128, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<NodeId, Long> eldest) {
+            return size() > 10000;
+        }
+    });
 
     private final long suspectTimeoutMs;
     private final long deadTimeoutMs;
@@ -102,14 +112,15 @@ public final class MembershipList {
             if (id.equals(selfId)) {
                 continue; // we are authoritative about ourselves
             }
-            if (now - in.getLastSeen() > evictTimeoutMs) {
-                continue; // prevent resurrection of long-dead peers
+            
+            Long evictedVer = evictedVersions.get(id);
+            if (evictedVer != null && in.getVersion() <= evictedVer) {
+                continue; // prevent resurrection of evicted peers via cache
             }
+
             peers.merge(id, in, (existing, candidate) -> {
-                if (candidate.getVersion() > existing.getVersion()
-                        || (candidate.getVersion() == existing.getVersion()
-                        && candidate.getLastSeen() > existing.getLastSeen())) {
-                    return candidate;
+                if (existing == null || candidate.getVersion() > existing.getVersion()) {
+                    return candidate.toBuilder().setLastSeen(now).build(); // apply local clock
                 }
                 return existing;
             });
@@ -128,6 +139,7 @@ public final class MembershipList {
             PeerStatus next = p.getStatus();
             if (age > evictTimeoutMs) {
                 peers.remove(e.getKey());
+                evictedVersions.put(e.getKey(), p.getVersion());
                 log.info("Evicted dead peer {}", e.getKey().shortId());
                 continue;
             } else if (age > deadTimeoutMs) {

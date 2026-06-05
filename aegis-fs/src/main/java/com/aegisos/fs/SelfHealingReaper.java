@@ -65,13 +65,16 @@ public final class SelfHealingReaper implements AutoCloseable {
 
     private void scan() {
         for (FileMetadata file : fs.fileIndex().all()) {
-            boolean changed = false;
-            FileMetadata.Builder updated = file.toBuilder();
             for (int i = 0; i < file.getChunksCount(); i++) {
                 ChunkRef ref = file.getChunks(i);
-                if (!fs.chunkStore().has(ref.getChunkId().toByteArray())) {
-                    continue; // we don't hold this chunk
+                byte[] chunkIdBytes = ref.getChunkId().toByteArray();
+                String hexId = com.aegisos.core.util.HexUtil.encode(chunkIdBytes);
+                
+                // Only a HEALTHY node can act as a source for repair
+                if (fs.localHealth().getState(hexId) != ReplicaState.HEALTHY) {
+                    continue;
                 }
+                
                 List<NodeId> aliveHolders = aliveHolders(ref);
                 if (aliveHolders.size() >= replicationFactor) {
                     continue;
@@ -79,14 +82,11 @@ public final class SelfHealingReaper implements AutoCloseable {
                 if (!isHealerFor(aliveHolders)) {
                     continue; // another holder is responsible
                 }
-                ChunkRef healed = healChunk(ref, aliveHolders);
-                if (healed != null) {
-                    updated.setChunks(i, healed);
-                    changed = true;
+                
+                NodeId newTarget = healChunk(ref, aliveHolders);
+                if (newTarget != null) {
+                    proposeAddReplica(file.getFileId().toByteArray(), chunkIdBytes, newTarget.toBytes());
                 }
-            }
-            if (changed) {
-                proposeUpdate(updated.build());
             }
         }
     }
@@ -112,46 +112,38 @@ public final class SelfHealingReaper implements AutoCloseable {
         return min.equals(self);
     }
 
-    private ChunkRef healChunk(ChunkRef ref, List<NodeId> aliveHolders) {
+    private NodeId healChunk(ChunkRef ref, List<NodeId> aliveHolders) {
         byte[] chunkId = ref.getChunkId().toByteArray();
         byte[] data = fs.chunkStore().get(chunkId);
         if (data == null) {
             return null;
         }
-        int need = replicationFactor - aliveHolders.size();
-        List<NodeId> newHolders = new ArrayList<>(aliveHolders);
         for (NodeId target : discovery.membership().alivePeerIds()) {
-            if (need <= 0) {
-                break;
-            }
-            if (newHolders.contains(target)) {
+            if (aliveHolders.contains(target)) {
                 continue;
             }
             if (fs.replicateChunk(target, chunkId, data)) {
-                newHolders.add(target);
-                need--;
-                log.info("Re-replicated chunk {} to {}",
-                        com.aegisos.core.util.HexUtil.shortId(chunkId), target.shortId());
+                log.info("Re-replicated chunk {} to {}", com.aegisos.core.util.HexUtil.shortId(chunkId), target.shortId());
+                return target;
             }
         }
-        if (newHolders.size() == aliveHolders.size()) {
-            return null; // nothing added
-        }
-        ChunkRef.Builder b = ref.toBuilder().clearNodeIds();
-        for (NodeId h : newHolders) {
-            b.addNodeIds(ByteString.copyFrom(h.toBytes()));
-        }
-        return b.build();
+        return null; // nothing added
     }
 
-    private void proposeUpdate(FileMetadata metadata) {
+    private void proposeAddReplica(byte[] fileId, byte[] chunkId, byte[] targetNodeId) {
         try {
+            com.aegisos.proto.AddReplica cmd = com.aegisos.proto.AddReplica.newBuilder()
+                    .setFileId(ByteString.copyFrom(fileId))
+                    .setChunkId(ByteString.copyFrom(chunkId))
+                    .setNodeId(ByteString.copyFrom(targetNodeId))
+                    .build();
             consensus.propose(StateCommand.newBuilder()
-                    .setType(CommandType.REGISTER_FILE)
-                    .setPayload(metadata.toByteString())
-                    .build()).get(5, TimeUnit.SECONDS);
+                    .setType(CommandType.ADD_REPLICA)
+                    .setPayload(cmd.toByteString())
+                    .build());
+            // No need to get(), we let the state machine handle it.
         } catch (Exception e) {
-            log.debug("Failed to record re-replication: {}", e.toString());
+            log.debug("Failed to propose ADD_REPLICA: {}", e.toString());
         }
     }
 

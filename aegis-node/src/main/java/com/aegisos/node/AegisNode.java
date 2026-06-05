@@ -104,41 +104,29 @@ public final class AegisNode implements AutoCloseable {
         boolean isVotingMember = config.role() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER;
         consensus = new ConsensusModule(network, identity.nodeId(), config.raftDir(),
                 votingPeers, allPeers, isVotingMember);
-        consensus.start();
 
+        // 1. Construct all subsystems and wire dependencies
         artifactRegistry = new ArtifactRegistry();
-        artifactRegistry.registerWith(consensus.stateMachine());
-        // Eagerly replay persisted Raft log through all registered state-machine appliers
-        // (FileIndex, JobRegistry, ArtifactRegistry) before the node starts accepting work.
-        // Without this there is a startup race window where these in-memory maps are empty
-        // until the first leader heartbeat triggers the normal applyCommitted() path.
-        consensus.replayFromLog();
-
+        
         fileSystem = new AegisFS(network, consensus, discovery, identity.nodeId(),
                 config.clusterKey(), config.replicationFactor(), config.chunkDir());
-        fileSystem.start();
-
+                
         artifactCache = new ArtifactCache(config.artifactCacheDir(), fileSystem);
         artifactClassLoader = new ArtifactClassLoader(artifactCache);
 
         reaper = new SelfHealingReaper(fileSystem, consensus, discovery, identity.nodeId(),
                 config.replicationFactor(), config.reaperIntervalMs());
-        reaper.start();
 
         NodeResourcesView resourcesView = new NodeResourcesView();
         runtimeAgent = new ProcessRuntimeAgent(consensus, identity.nodeId(), fileSystem,
                 artifactRegistry, artifactClassLoader);
-        runtimeAgent.start();
-        network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
 
         scheduler = new Scheduler(network, discovery, consensus, resourcesView, identity.nodeId());
         scheduler.setAcceptProbe(runtimeAgent::canAccept);
-        scheduler.start();
 
         resourceReporter = new ResourceReporter(network, discovery, identity.nodeId(),
                 config.chunkDir(), resourcesView, runtimeAgent::runningJobs,
                 ResourceReporter.DEFAULT_INTERVAL_MS);
-        resourceReporter.start();
 
         checkpointManager = new CheckpointManager(fileSystem, identity.nodeId(),
                 config.checkpointIntervalMs(), this::recordCheckpoint);
@@ -146,10 +134,28 @@ public final class AegisNode implements AutoCloseable {
 
         migrationCoordinator = new MigrationCoordinator(discovery, consensus, scheduler,
                 network, identity.nodeId(), runtimeAgent);
-        migrationCoordinator.start();
 
         processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId());
         aegisOS = new AegisOS(fileSystem, processManager, new ClusterInfo(discovery));
+
+        // 2. Register all state machine appliers BEFORE log replay or Raft start
+        artifactRegistry.registerWith(consensus.stateMachine());
+        fileSystem.registerAppliers(); // We will add this to AegisFS
+        runtimeAgent.registerAppliers(); // We will add this to ProcessRuntimeAgent
+
+        // 3. Eagerly replay persisted Raft log through all registered state-machine appliers
+        // (FileIndex, JobRegistry, ArtifactRegistry) before the node starts accepting work.
+        consensus.replayFromLog();
+
+        // 4. Start all background subsystems now that in-memory state is fully populated
+        fileSystem.start();
+        reaper.start();
+        runtimeAgent.start();
+        network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
+        scheduler.start();
+        resourceReporter.start();
+        migrationCoordinator.start();
+        consensus.start(); // Start Raft last to avoid heartbeat races triggering applyCommitted early
 
         if (config.apiPort() > 0) {
             metricsServer = new MetricsServer(this, config.apiPort());
@@ -256,6 +262,7 @@ public final class AegisNode implements AutoCloseable {
             discovery.close();
         }
         network.close();
+        
         started = false;
     }
 }

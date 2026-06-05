@@ -137,15 +137,17 @@ message AppendEntriesResult {
 
 // Application state machine commands (section 3.4)
 enum CommandType {
-  CMD_UNKNOWN   = 0;
-  REGISTER_FILE = 1;
-  PLACE_CHUNK   = 2;
-  ASSIGN_JOB    = 3;
-  NODE_JOIN     = 4;
-  NODE_LEAVE    = 5;
-  UPDATE_JOB    = 6;
-  KV_PUT        = 7; // test-only KV store
+  CMD_UNKNOWN       = 0;
+  REGISTER_FILE     = 1;
+  PLACE_CHUNK       = 2;
+  ASSIGN_JOB        = 3;
+  NODE_JOIN         = 4;
+  NODE_LEAVE        = 5;
+  UPDATE_JOB        = 6;
+  KV_PUT            = 7;
   REGISTER_ARTIFACT = 8;
+  ADD_REPLICA       = 9;
+  REMOVE_REPLICA    = 10;
 }
 
 message StateCommand {
@@ -193,6 +195,18 @@ message FetchChunkResult {
   bytes chunk_id = 1;
   bool  found    = 2;
   bytes data     = 3;
+}
+
+message AddReplica {
+  bytes file_id  = 1;
+  bytes chunk_id = 2;
+  bytes node_id  = 3;
+}
+
+message RemoveReplica {
+  bytes file_id  = 1;
+  bytes chunk_id = 2;
+  bytes node_id  = 3;
 }
 
 // ---------------------------------------------------------------------------
