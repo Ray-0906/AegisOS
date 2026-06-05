@@ -30,6 +30,13 @@ public final class FileIndex {
             log.debug("Tombstoned file {}", metadata.getName());
             return;
         }
+        
+        String existingFileId = nameToFileId.get(metadata.getName());
+        if (existingFileId != null && !existingFileId.equals(fileId)) {
+            byFileId.remove(existingFileId);
+            log.debug("Overwriting file {}, removing old metadata {}", metadata.getName(), existingFileId);
+        }
+        
         byFileId.put(fileId, metadata);
         nameToFileId.put(metadata.getName(), fileId);
         log.debug("Registered file {} ({} chunks)", metadata.getName(), metadata.getChunksCount());
@@ -52,6 +59,11 @@ public final class FileIndex {
                     }
                 }
                 if (!alreadyHas) {
+                    if (ref.getNodeIdsCount() >= meta.getReplication()) {
+                        log.info("Ignored ADD_REPLICA for chunk {}: already fully replicated (RF={})", 
+                                HexUtil.encode(cmd.getChunkId().toByteArray()), meta.getReplication());
+                        break;
+                    }
                     com.aegisos.proto.ChunkRef newRef = ref.toBuilder().addNodeIds(cmd.getNodeId()).build();
                     builder.setChunks(i, newRef);
                     byFileId.put(fileId, builder.build());

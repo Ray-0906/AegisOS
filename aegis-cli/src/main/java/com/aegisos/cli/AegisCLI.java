@@ -9,6 +9,7 @@ import com.aegisos.cli.commands.PutCommand;
 import com.aegisos.cli.commands.RunCommand;
 import com.aegisos.cli.commands.StartCommand;
 import com.aegisos.cli.commands.StatusCommand;
+import com.aegisos.cli.commands.TestCommand;
 import picocli.CommandLine;
 
 @CommandLine.Command(
@@ -25,7 +26,8 @@ import picocli.CommandLine;
                 LsCommand.class,
                 RunCommand.class,
                 StatusCommand.class,
-                ArtifactCommand.class
+                ArtifactCommand.class,
+                TestCommand.class
         })
 // NOTE: all subcommands are wired now; their implementations are completed across phases.
 public final class AegisCLI implements Runnable {

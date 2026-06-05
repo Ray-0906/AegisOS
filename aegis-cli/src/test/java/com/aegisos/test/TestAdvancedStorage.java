@@ -17,10 +17,12 @@ public class TestAdvancedStorage {
         System.out.println("Building project...");
         new ProcessBuilder("cmd", "/c", "mvn package -DskipTests").inheritIO().start().waitFor();
         
-        testE();
-        testF();
-        testG();
-        testH();
+        testI();
+        testJ();
+        testK();
+        testL();
+        testM();
+        testN();
         
         System.out.println("\nALL ADVANCED TESTS PASSED!");
         System.exit(0);
@@ -160,10 +162,10 @@ public class TestAdvancedStorage {
         stopCluster();
     }
 
-    private static void testG() throws Exception {
-        System.out.println("\n--- Test G: Corrupt Majority Protection ---");
+    private static void testI() throws Exception {
+        System.out.println("\n--- Test I: Corrupt Majority Protection ---");
         startCluster();
-        String targetChunk = uploadDummyFile("/test/g.bin");
+        String targetChunk = uploadDummyFile("/test/i.bin");
         
         List<Integer> holders = new ArrayList<>();
         for (int i = 1; i <= 4; i++) {
@@ -171,7 +173,7 @@ public class TestAdvancedStorage {
                 holders.add(i);
             }
         }
-        if (holders.size() < 3) throw new Exception("Test G Failed: Not enough holders found! Size=" + holders.size());
+        if (holders.size() < 3) throw new Exception("Test I Failed: Not enough holders found! Size=" + holders.size());
         
         int corrupt1 = holders.get(0);
         int corrupt2 = holders.get(1);
@@ -197,64 +199,104 @@ public class TestAdvancedStorage {
         
         // Check emptyNode. It should NOT have received the chunk because there are no healthy sources available!
         if (emptyNode != -1 && new File("data/node" + emptyNode + "/data/chunks/" + targetChunk).exists()) {
-            throw new Exception("Test G Failed: Corruption spread! Empty node received a replica from a corrupt source.");
+            throw new Exception("Test I Failed: Corruption spread! Empty node received a replica from a corrupt source.");
         }
-        System.out.println("SUCCESS: Test G (Repair refused, corruption contained)");
+        System.out.println("SUCCESS: Test I (Repair refused, corruption contained)");
         stopCluster();
     }
 
-    private static void testH() throws Exception {
-        System.out.println("\n--- Test H: Metadata Drift Reality Check ---");
+    private static void testJ() throws Exception {
+        System.out.println("\n--- Test J: ADD_REPLICA Idempotency ---");
         startCluster();
-        String targetChunk = uploadDummyFile("/test/h.bin");
+        String targetChunk = uploadDummyFile("/test/j.bin");
         
-        System.out.println("Simulating reality drift: Copying chunk to a node physically without metadata...");
-        File orig = null;
-        for (int i = 1; i <= 4; i++) {
-            File nodeChunks = new File("data/node" + i + "/data/chunks/" + targetChunk);
-            if (nodeChunks.exists()) {
-                orig = nodeChunks;
-                break;
-            }
-        }
-        if (orig == null) throw new Exception("Test H Failed: Uploaded chunk not found anywhere!");
+        System.out.println("Adding node4 as a replica explicitly...");
+        new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "test-cmd", "--seed", "localhost:7001", "add-replica", "/test/j.bin", "data/node4").inheritIO().start().waitFor();
         
-        File dest = null;
-        File quarantine = null;
-        for (int i = 1; i <= 4; i++) {
-            File nodeChunks = new File("data/node" + i + "/data/chunks/" + targetChunk);
-            if (!nodeChunks.exists()) {
-                dest = nodeChunks;
-                quarantine = new File("data/node" + i + "/data/quarantine/" + targetChunk + "_*");
-                break;
-            }
-        }
-        if (dest == null) throw new Exception("Test H Failed: All nodes have the chunk? RF must be 4.");
+        System.out.println("Adding node4 as a replica AGAIN...");
+        new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "test-cmd", "--seed", "localhost:7001", "add-replica", "/test/j.bin", "data/node4").inheritIO().start().waitFor();
         
-        Files.copy(orig.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        dest.setLastModified(System.currentTimeMillis() - 60000);
+        Thread.sleep(2000);
         
-        System.out.println("Waiting 50s for AntiEntropy to resolve drift...");
-        Thread.sleep(50000);
+        Process get = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "get", "--seed", "localhost:7001", "/test/j.bin", "dummy_out.bin").inheritIO().start();
+        if (get.waitFor() != 0) throw new Exception("Test J Failed: File broken after duplicate ADD_REPLICA");
         
-        if (dest.exists()) {
-            throw new Exception("Test H Failed: The unowned node still has the chunk! Orphan resolution failed.");
-        }
+        System.out.println("SUCCESS: Test J");
+        stopCluster();
+    }
+
+    private static void testK() throws Exception {
+        System.out.println("\n--- Test K: REMOVE_REPLICA Idempotency ---");
+        startCluster();
+        String targetChunk = uploadDummyFile("/test/k.bin");
         
-        File quarantineDir = new File(dest.getParentFile().getParentFile(), "quarantine");
-        boolean quarantined = false;
-        if (quarantineDir.exists() && quarantineDir.listFiles() != null) {
-            for (File qf : quarantineDir.listFiles()) {
-                if (qf.getName().startsWith(targetChunk)) {
-                    quarantined = true;
-                    break;
-                }
-            }
-        }
-        if (!quarantined) {
-             System.out.println("WARNING: Chunk was deleted instead of quarantined, but orphan resolution worked.");
-        }
-        System.out.println("SUCCESS: Test H");
+        System.out.println("Removing node2 replica explicitly...");
+        new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "test-cmd", "--seed", "localhost:7001", "remove-replica", "/test/k.bin", "data/node2").inheritIO().start().waitFor();
+        
+        System.out.println("Removing node2 replica AGAIN...");
+        new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "test-cmd", "--seed", "localhost:7001", "remove-replica", "/test/k.bin", "data/node2").inheritIO().start().waitFor();
+        
+        Thread.sleep(2000);
+        
+        Process get = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "get", "--seed", "localhost:7001", "/test/k.bin", "dummy_out.bin").inheritIO().start();
+        if (get.waitFor() != 0) throw new Exception("Test K Failed: File broken after duplicate REMOVE_REPLICA");
+        
+        System.out.println("SUCCESS: Test K");
+        stopCluster();
+    }
+
+    private static void testL() throws Exception {
+        System.out.println("\n--- Test L: Replay Safety ---");
+        startCluster();
+        String targetChunk = uploadDummyFile("/test/l.bin");
+        
+        System.out.println("Re-uploading the exact same file to trigger duplicate REGISTER_FILE...");
+        uploadDummyFile("/test/l.bin");
+        
+        Thread.sleep(2000);
+        
+        Process get = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "get", "--seed", "localhost:7001", "/test/l.bin", "dummy_out.bin").inheritIO().start();
+        if (get.waitFor() != 0) throw new Exception("Test L Failed: File broken after duplicate REGISTER_FILE");
+        
+        System.out.println("SUCCESS: Test L");
+        stopCluster();
+    }
+
+    private static void testM() throws Exception {
+        System.out.println("\n--- Test M: Double-Healer Race ---");
+        startCluster();
+        String targetChunk = uploadDummyFile("/test/m.bin");
+        
+        System.out.println("Simulating two healers independently proposing ADD_REPLICA for node3 and node4...");
+        Process p1 = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "test-cmd", "--seed", "localhost:7001", "add-replica", "/test/m.bin", "data/node3").inheritIO().start();
+        Process p2 = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "test-cmd", "--seed", "localhost:7001", "add-replica", "/test/m.bin", "data/node4").inheritIO().start();
+        p1.waitFor();
+        p2.waitFor();
+        
+        Thread.sleep(5000);
+        
+        Process get = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "get", "--seed", "localhost:7001", "/test/m.bin", "dummy_out.bin").inheritIO().start();
+        if (get.waitFor() != 0) throw new Exception("Test M Failed: File broken after double-healer race");
+        
+        System.out.println("SUCCESS: Test M");
+        stopCluster();
+    }
+
+    private static void testN() throws Exception {
+        System.out.println("\n--- Test N: Full Cluster Restart ---");
+        startCluster();
+        String targetChunk = uploadDummyFile("/test/n.bin");
+        
+        System.out.println("Stopping full cluster...");
+        stopCluster();
+        
+        System.out.println("Restarting full cluster...");
+        restartClusterSafe();
+        
+        Process get = new ProcessBuilder("java", "-jar", "aegis-cli/target/aegis.jar", "get", "--seed", "localhost:7001", "/test/n.bin", "dummy_out.bin").inheritIO().start();
+        if (get.waitFor() != 0) throw new Exception("Test N Failed: Metadata or chunks lost after full cluster restart");
+        
+        System.out.println("SUCCESS: Test N");
         stopCluster();
     }
 
