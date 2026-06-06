@@ -36,7 +36,9 @@ public enum MessageType {
     PROBE_RESULT(42),
     RUN_JOB(43),
     JOB_UPDATE(44),
-    JOB_DONE(45);
+    JOB_DONE(45),
+    JOB_HEARTBEAT(46),
+    CANCEL_JOB(47);
 
     private final int code;
 

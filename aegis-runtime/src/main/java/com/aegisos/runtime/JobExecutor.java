@@ -19,6 +19,7 @@ public final class JobExecutor {
     private final NodeId self;
     private final AegisFS fileSystem;
     private final ArtifactClassLoader artifactClassLoader;
+    private final java.util.Map<String, ProcessSupervisor> activeSupervisors = new java.util.concurrent.ConcurrentHashMap<>();
 
     public JobExecutor(NodeId self, AegisFS fileSystem, ArtifactClassLoader artifactClassLoader) {
         this.self = self;
@@ -27,46 +28,47 @@ public final class JobExecutor {
     }
 
     /** Deserializes, optionally restores, and runs the job, returning the serialized result. */
-    public byte[] run(String jobId, byte[] jobBytes, byte[] restoreState) throws Exception {
-        AegisJob<?> job = Serialization.deserialize(jobBytes);
-        if (job == null) {
-            throw new IllegalArgumentException("job payload is empty");
+    public byte[] run(String jobId, byte[] jobBytes, byte[] restoreState, int memoryMb) throws Exception {
+        Object[] args = new Object[] {
+            jobId, self.toBytes(), null, null, jobBytes, restoreState, null, null
+        };
+        ProcessSupervisor supervisor = new ProcessSupervisor(jobId, memoryMb);
+        activeSupervisors.put(jobId, supervisor);
+        try {
+            return supervisor.runWorker(args);
+        } finally {
+            activeSupervisors.remove(jobId);
+            supervisor.cleanupFiles();
         }
-        if (restoreState != null && restoreState.length > 0) {
-            Serializable state = Serialization.deserialize(restoreState);
-            job.restoreState(state);
-            log.info("Restored job {} from checkpoint", jobId);
-        }
-        JobContext ctx = new JobContext(jobId, self, fileSystem);
-        Serializable result = job.execute(ctx);
-        return Serialization.serialize(result);
     }
 
     /** Artifact-based execution with isolated classloader. */
     public byte[] runFromArtifact(String jobId, String artifactId, String fsPath,
-                                  String className, String[] args,
-                                  byte[] restoreState) throws Exception {
-        try (URLClassLoader cl = artifactClassLoader.createLoader(artifactId, fsPath)) {
-            Class<?> clazz = Class.forName(className, true, cl);
-
-            AegisJob<?> job;
-            try {
-                job = (AegisJob<?>) clazz.getConstructor(String[].class)
-                        .newInstance((Object) args);
-            } catch (NoSuchMethodException e) {
-                job = (AegisJob<?>) clazz.getDeclaredConstructor().newInstance();
-            }
-
-            if (restoreState != null && restoreState.length > 0) {
-                Thread.currentThread().setContextClassLoader(cl);
-                Serializable state = Serialization.deserialize(restoreState);
-                job.restoreState(state);
-                log.info("Restored artifact job {} from checkpoint", jobId);
-            }
-
-            JobContext ctx = new JobContext(jobId, self, fileSystem);
-            Serializable result = job.execute(ctx);
-            return Serialization.serialize(result);
+                                  String className, String[] artifactArgs,
+                                  byte[] restoreState, int memoryMb) throws Exception {
+        byte[] artifactArgsBytes = Serialization.serialize(artifactArgs);
+        String localJarPath = artifactClassLoader.getCache().resolve(artifactId, fsPath).toAbsolutePath().toString();
+        Object[] args = new Object[] {
+            jobId, self.toBytes(), artifactId, className, null, restoreState, artifactArgsBytes, localJarPath
+        };
+        ProcessSupervisor supervisor = new ProcessSupervisor(jobId, memoryMb);
+        activeSupervisors.put(jobId, supervisor);
+        try {
+            return supervisor.runWorker(args);
+        } finally {
+            activeSupervisors.remove(jobId);
+            supervisor.cleanupFiles();
+        }
+    }
+    
+    public void cancelJob(String jobId) {
+        log.info("JobExecutor asked to cancel job: {}. Active supervisors: {}", jobId, activeSupervisors.keySet());
+        ProcessSupervisor supervisor = activeSupervisors.get(jobId);
+        if (supervisor != null) {
+            log.info("Supervisor found for job {}, calling kill()", jobId);
+            supervisor.kill();
+        } else {
+            log.warn("No supervisor found for job {}", jobId);
         }
     }
 
@@ -74,5 +76,11 @@ public final class JobExecutor {
     public byte[] captureState(AegisJob<?> job) {
         Serializable state = job.captureState();
         return state == null ? null : Serialization.serialize(state);
+    }
+
+    public void close() {
+        for (ProcessSupervisor supervisor : activeSupervisors.values()) {
+            supervisor.kill();
+        }
     }
 }

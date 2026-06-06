@@ -1,0 +1,282 @@
+22:06:40.090 INFO  [main] c.a.c.i.IdentityService - No identity found; generating a new Ed25519 keypair
+22:06:40.229 INFO  [main] c.a.c.i.IdentityService - Node identity ready: NodeId(7ab988617cde)
+22:06:40.253 INFO  [main] c.aegisos.node.AegisNode - Starting node NodeId(7ab988617cde)
+22:06:40.377 INFO  [main] c.a.n.tcp.TcpServer - TCP server listening on port 56230
+22:06:40.380 INFO  [main] c.a.network.NetworkLayer - NetworkLayer started, node f60a61b27cd9 advertising 127.0.0.1:56230
+22:06:40.458 INFO  [main] c.a.d.g.GossipProtocol - Gossip started (fanout=3, interval=1000ms)
+22:06:40.582 INFO  [main] c.a.n.c.HandshakeHandler - Handshake complete (initiator) with peer a74c9c62a284
+22:06:40.588 INFO  [main] c.a.d.DiscoveryService - Connected to seed localhost:7001 (a74c9c62a284)
+22:06:40.589 INFO  [main] c.a.d.DiscoveryService - Discovery started with 1 seed(s)
+22:06:40.597 INFO  [main] c.a.consensus.RaftLog - Loaded Raft log: 0 entries (lastIndex=0, lastTerm=0)
+22:06:40.603 INFO  [main] c.a.consensus.RaftNode - Raft node f60a61b27cd9 started as FOLLOWER (term 0)
+22:06:40.605 INFO  [main] c.a.c.ConsensusModule - Consensus module started
+22:06:40.613 INFO  [main] com.aegisos.fs.AegisFS - AegisFS started (replication factor 3)
+22:06:40.619 INFO  [main] c.a.fs.SelfHealingReaper - Self-healing reaper started (interval 60000ms)
+22:06:40.625 INFO  [main] c.a.r.ProcessRuntimeAgent - Process runtime agent started
+22:06:40.631 INFO  [main] c.a.scheduler.Scheduler - Scheduler started
+22:06:40.634 INFO  [main] c.a.s.ResourceReporter - Resource reporter started (interval 5000ms)
+22:06:40.637 INFO  [main] c.a.r.MigrationCoordinator - Migration coordinator started
+22:06:40.640 INFO  [main] c.aegisos.node.AegisNode - Node f60a61b27cd9 READY (port 56230)
+22:06:42.529 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 6908c1aead2b -> DEAD
+22:06:42.533 INFO  [virtual-45] c.a.d.g.MembershipList - Peer a2ae2a852851 -> SUSPECT
+22:06:42.534 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 3e60fa75f544 -> SUSPECT
+22:06:42.534 INFO  [virtual-45] c.a.d.g.MembershipList - Peer da05c02abb29 -> SUSPECT
+22:06:42.534 INFO  [virtual-45] c.a.d.g.MembershipList - Peer a4bf64a5de83 -> SUSPECT
+22:06:42.536 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e4ca0c3e3f1b -> SUSPECT
+22:06:42.536 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 5e4f15222f77
+22:06:42.537 INFO  [virtual-45] c.a.d.g.MembershipList - Peer cad52ffb93f3 -> SUSPECT
+22:06:42.537 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b946f0fe9641 -> SUSPECT
+22:06:42.538 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 5f01c7565c29 -> SUSPECT
+22:06:42.538 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 75fd773fd9c2 -> SUSPECT
+22:06:42.539 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b7db2383bcc7 -> SUSPECT
+22:06:42.539 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer de388bc30f85
+22:06:42.540 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b0eeb0faa4ea -> SUSPECT
+22:06:42.540 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer c3f969aeb60e
+22:06:42.541 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 042d148ce866 -> SUSPECT
+22:06:42.541 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e291a99d2b37 -> SUSPECT
+22:06:42.542 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b6f31f3439c9 -> SUSPECT
+22:06:42.543 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer a06159087062
+22:06:42.543 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 050b1f8fb533
+22:06:42.543 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 0ebf99ef9d2b -> SUSPECT
+22:06:42.543 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 1f6c7619463d -> SUSPECT
+22:06:42.545 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 729af3acb75b -> SUSPECT
+22:06:42.545 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 55f86a02b445 -> SUSPECT
+22:06:42.546 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 994639edbb39 -> SUSPECT
+22:06:42.547 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 16209786e6a9 -> SUSPECT
+22:06:42.548 INFO  [virtual-45] c.a.d.g.MembershipList - Peer ebcd4a24b3bf -> SUSPECT
+22:06:42.548 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer ae7c68714576
+22:06:42.549 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 639257ea631a -> SUSPECT
+22:06:42.549 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f074f9e9ef7c -> SUSPECT
+22:06:42.550 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer d80e404b55ee
+22:06:42.550 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 00995312daea -> SUSPECT
+22:06:42.551 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e31e9697933e -> SUSPECT
+22:06:42.551 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 09905cb64e3a -> SUSPECT
+22:06:42.553 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b2d26077423f -> SUSPECT
+22:06:42.553 INFO  [virtual-45] c.a.d.g.Members22:06:42.586 INFO  [virtual-41] c.a.n.c.HandshakeHandler - Handshake complete (initiator) with peer d17797b443c4
+22:06:42.609 INFO  [virtual-41] c.a.d.g.MembershipList - Peer 6908c1aead2b -> DEAD
+22:06:42.610 INFO  [virtual-41] c.a.d.g.MembershipList - Peer 70904d6e8295 -> ALIVE
+22:06:42.610 INFO  [virtual-41] c.a.d.g.MembershipList - Peer e4ca0c3e3f1b -> SUSPECT
+22ARTIFACT ID                                                      FILE NAME                             22:06:43.476 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer e118942a65d6
+22:06:43.477 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 79ca9a97b43b -> SUSPECT
+22:06:43.477 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f549d33f925a -> SUSPECT
+22:06:43.477 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f0687c4e9dc5 -> SUSPECT
+22:06:43.478 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 8d5d8ed49e00 -> SUSPECT
+22:06:43.478 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 3e8ab6c961c9 -> DEAD
+22:06:43.478 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 396161c76e59 -> DEAD
+22:06:43.478 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 96cc1c03a482 -> DEAD
+22:06:43.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b960598c1ddf -> DEAD
+22:06:43.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 38b5ff4c55a2 -> DEAD
+22:06:43.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 7acbc7b8d6ec -> SUSPECT
+22:06:43.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 849bc4a1fe21 -> SUSPECT
+22:06:43.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b778448d1130 -> SUSPECT
+22:06:43.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 2ee780d113e4 -> DEAD
+22:06:43.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 6c567051e84b -> SUSPECT
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 0d57434e2260 -> SUSPECT
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 27b3e375dab5 -> SUSPECT
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 1085b6e7154f -> SUSPECT
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 9272e7912dec -> DEAD
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 215073adb02e -> SUSPECT
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 914f9c6daeba -> SUSPECT
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 394a64fffe41
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 130bfb9b08b1 -> DEAD
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 57ba51d83348 -> DEAD
+22:06:43.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 0ed5258d56c9 -> SUSPECT
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 5a57cf6b0326 -> DEAD
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer c32c74e3cc2a -> DEAD
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 8c98278d8dcd -> DEAD
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer edb62e08301f -> DEAD
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer fab37cfe0910 -> SUSPECT
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 91cda80628f3 -> DEAD
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 58dad259bf32 -> DEAD
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer d9ee45508d2d -> SUSPECT
+22:06:43.481 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 40d2fbebe9d8
+22:06:43.482 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 4b2cd8a2a0c5 -> SUSPECT
+22:06:43.482 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 526c5e600014 -> SUSPECT
+22:06:43.482 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f3e609ce631d -> SUSPECT
+22:06:43.482 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 19b52ed7912e -> DEAD
+22:06:43.482 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 5f2231e5c0e5 -> SUSPECT
+22:06:43.482 INFO  [virtual-45] c.a.d.g.MembershipList - Peer a2f8c9ff25f0 -> DEAD
+22:06:43.483 INFO  [virtual-45] c.a.d.g.MembershipList - Peer db3ffda342f7 -> DEAD
+22:06:43.483 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 3deaade29761 -> SUSPECT
+22:06:43.483 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer a9fb250e3eaa
+22:06:43.483 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 7d8b23247d55 -> SUSPECT
+22:06:43.835 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:43.864 INFO  [aegis-recv-a74c9c62a284] c.a.consensu22:06:44.129 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received A22:06:44.478 INFO  [virtual-45] c.a.n.c.HandshakeHandler - Handshake complete (initiator) with peer 26cf20a07396
+22:06:44.494 INFO  [aegis-conn] c.a.n.c.HandshakeHandler - Handshake complete (responder) with peer 526c5e600014
+22:06:44.494 INFO  [aegis-conn] c.a.n.c.HandshakeHandler - Handshake complete (responder) with peer b778448d1130
+22:06:44.519 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 85c11c2c8603 -> DEAD
+22:06:44.519 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 86ca4de431f6 -> SUSPECT
+22:06:44.520 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 564877c71437 -> DEAD
+22:06:44.520 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 418d5d9089f0 -> SUSPECT
+22:06:44.520 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 38d6ca1fc81e
+22:06:44.520 INFO  [virtual-45] c.a.d.g.MembershipList - Peer aa51db8af8c7 -> SUSPECT
+22:06:44.520 INFO  [virtual-45] c.a.d.g.MembershipList - Peer c1456ce5fb63 -> SUSPECT
+22:06:44.520 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 94ce70a837f0 -> DEAD
+22:06:44.520 INFO  [virtual-45] c.a.d.g.MembershipList - Peer d288038fd52c -> SUSPECT
+22:06:44.520 INFO  [virtual-45] c.a.d.g.MembershipList - Peer aa3b600748e0 -> SUSPECT
+22:06:44.521 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 34b3dcaea406 -> DEAD
+22:06:44.521 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 9edc53fa6bae
+22:06:44.521 INFO  [virtual-45] c.a.d.g.MembershipList - Peer a6f8a4fa7364 -> SUSPECT
+22:06:44.521 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 6aef657b0792 -> SUSPECT
+22:06:44.521 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 7ab988617cde -> SUSPECT
+22:06:44.521 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 23c70b922e2f -> SUSPECT
+22:06:44.521 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e9fb0d463097 -> DEAD
+22:06:44.522 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer c2bf0a8e6317
+22:06:44.522 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f93e69657927 -> DEAD
+22:06:44.522 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer b3aef2a2c387
+22:06:44.522 INFO  [virtual-45] c.a.d.g.MembershipList - Peer c2a3d118e905 -> DEAD
+22:06:44.522 INFO  [virtual-45] c.a.d.g.MembershipList - Peer d17797b443c4 -> SUSPECT
+22:06:44.522 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 38b4161c75f4 -> DEAD
+22:06:44.522 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 5d58325582a9
+22:06:44.523 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 7375dfafd60e
+22:06:45.328 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:45.345 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.Raf22:06:45.358 INFO  [virtual-42] c.a.d.g.MembershipList - Peer eedd54eaf042 -> DEAD
+22:06:45.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer eedd54eaf042 -> DEAD
+22:06:45.481 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 1484608c38df -> DEAD
+22:06:45.483 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 2cd69fa7242f
+22:06:45.485 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 04f53da0da3c
+22:06:45.486 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e29dddfad362 -> DEAD
+22:06:45.489 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer c482d56a4cae
+22:06:45.490 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 1313e81b8bcd -> DEAD
+22:06:45.491 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 78f751e05c9f
+22:06:45.491 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 6509b575dafb
+22:06:45.492 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 32679174c10c
+22:06:46.478 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 70904d6e8295 -> DEAD
+22:06:46.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 1d0a902fce68 -> DEAD
+22:06:46.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer a237e1af0eb6 -> DEAD
+22:06:46.480 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 5bae3c436cdc -> DEAD
+22:06:46.618 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:46.680 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:47.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e5eeb635af85 -> DEAD
+22:06:47.494 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f412a047cd9c -> DEAD
+22:06:47.495 INFO  [virtual-45] c.a.d.g.MembershipList - Peer ae7707cf7e24 -> DEAD
+22:06:47.495 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 6ab9032b4860 -> DEAD
+22:06:47.496 INFO  [virtual-45] c.a.d.g.MembershipList - Peer da897a04b9f3 -> DEAD
+22:06:48.049 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=22:06:48.331 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:48.348 INFO  22:06:48.487 INFO  [virtual-45] c.a.d.g.MembershipList - Peer a2ae2a852851 -> DEAD
+22:06:48.488 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 3e60fa75f544 -> DEAD
+22:06:48.488 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 4e756b5b5e92 -> DEAD
+22:06:48.489 INFO  [virtual-45] c.a.d.g.MembershipList - Peer da05c02abb29 -> DEAD
+22:06:48.489 INFO  [virtual-45] c.a.d.g.MembershipList - Peer a4bf64a5de83 -> DEAD
+22:06:48.489 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 64626bc96ed8 -> DEAD
+22:06:48.490 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 8b9a5bc95fe3 -> DEAD
+22:06:48.490 INFO  [virtual-45] c.a.d.g.MembershipList - Peer cad52ffb93f3 -> DEAD
+22:06:48.490 INFO  [virtual-45] c.a.d.g.MembershipList - Peer d288038fd52c -> SUSPECT
+22:06:48.491 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 5f01c7565c29 -> DEAD
+22:06:48.491 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b7db2383bcc7 -> DEAD
+22:06:48.491 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 042d148ce866 -> DEAD
+22:06:48.492 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e291a99d2b37 -> DEAD
+22:06:48.492 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 0ebf99ef9d2b -> DEAD
+22:06:48.492 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 729af3acb75b -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 55f86a02b445 -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 994639edbb39 -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer ebcd4a24b3bf -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer ad92eec0a4d5 -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 00995312daea -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e31e9697933e -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 09905cb64e3a -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer ec4d80ba538b -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 5af67cd93d1a -> DEAD
+22:06:48.493 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 74a8b1675009 -> DEAD
+22:06:48.494 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 528f0b45dd36 -> DEAD
+22:06:49.328 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:49.343 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:49.472 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 93eafbdf4782
+22:06:49.473 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 3ccb71f53637
+22:06:49.473 INFO  [virtual-45] c.a.d.g.MembershipList - Peer e4ca0c3e3f1b -> DEAD
+22:06:49.473 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b946f0fe9641 -> DEAD
+22:06:49.473 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 75fd773fd9c2 -> DEAD
+22:06:49.473 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b0eeb0faa4ea -> DEAD
+22:06:49.474 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b6f31f3439c9 -> DEAD
+22:06:49.475 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 1f6c7619463d -> DEAD
+22:06:49.475 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 16209786e6a9 -> DEAD
+22:06:49.476 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 639257ea631a -> DEAD
+22:06:49.476 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f074f9e9ef7c -> DEAD
+22:06:49.476 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer f93ef4f7d28e
+22:06:49.476 INFO  [virtual-45] c.a.d.g.MembershipList - Peer b2d26077423f -> DEAD
+22:06:49.476 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 4b1e4b42ae76 -> DEAD
+22:06:49.476 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 11497b9c8077 -> DEAD
+22:06:49.478 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 15ec3b75b5d9 -> DEAD
+22:06:49.478 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 6bf324e24cb1 -> DEAD
+22:06:50.465 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 79ca9a97b43b -> DEAD
+22:06:50.465 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f549d33f925a -> DEAD
+22:06:50.466 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f0687c4e9dc5 -> DEAD
+22:06:50.466 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 8d5d8ed49e00 -> DEAD
+22:06:50.466 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 7acbc7b8d6ec -> DEAD
+22:06:50.467 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 849bc4a1fe21 -> DEAD
+22:06:50.469 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 6c567051e84b -> DEAD
+22:06:50.469 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 0d57434e2260 -> DEAD
+22:06:50.469 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 27b3e375dab5 -> DEAD
+22:06:50.470 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 1085b6e7154f -> DEAD
+22:06:50.470 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 215073adb02e -> DEAD
+22:06:50.470 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 914f9c6daeba -> DEAD
+22:06:50.470 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 8f8f934ce79e
+22:06:50.471 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 4b587347d35a
+22:06:50.471 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer a68f5ae155b4
+22:06:50.471 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 0ed5258d56c9 -> DEAD
+22:06:50.471 INFO  [virtual-45] c.a.d.g.MembershipList - Peer fab37cfe0910 -> DEAD
+22:06:50.471 INFO  [virtual-45] c.a.d.g.MembershipList - Peer d9ee45508d2d -> DEAD
+22:06:50.471 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 4b2cd8a2a0c5 -> DEAD
+22:06:50.472 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 77ef57a4ff3f
+22:06:50.472 INFO  [virtual-45] c.a.d.g.MembershipList - Peer f3e609ce631d -> DEAD
+22:06:50.472 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 5f2231e5c0e5 -> DEAD
+22:06:50.472 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 594d9eda45b6
+22:06:50.472 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 8dbc01a62175
+22:06:50.472 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 3deaade29761 -> DEAD
+22:06:50.472 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 23bc44e59fef
+22:06:50.472 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 7d8b23247d55 -> DEAD
+22:06:50.910 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:50.916 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=02222:06:51.474 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 86ca4de431f6 -> DEAD
+22:06:51.475 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 418d5d9089f0 -> DEAD
+22:06:51.476 INFO  [virtual-45] c.a.d.g.MembershipList - Peer aa51db8af8c7 -> DEAD
+22:06:51.476 INFO  [virtual-45] c.a.d.g.MembershipList - Peer c1456ce5fb63 -> DEAD
+22:06:51.477 INFO  [virtual-45] c.a.d.g.MembershipList - Peer aa3b600748e0 -> DEAD
+22:06:51.477 INFO  [virtual-45] c.a.d.g.MembershipList - Peer a6f8a4fa7364 -> DEAD
+22:06:51.478 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 6aef657b0792 -> DEAD
+22:06:51.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 7ab988617cde -> DEAD
+22:06:51.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer 23c70b922e2f -> DEAD
+22:06:51.479 INFO  [virtual-45] c.a.d.g.MembershipList - Peer d17797b443c4 -> DEAD
+22:06:52.121 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:52.183 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:52.471 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 15ea7fc50a4e
+22:06:52.472 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 8ccb7307ad0e
+22:06:52.473 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer d96e7627332b
+22:06:53.439 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:53.500 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 7c06b74f8057
+22:06:53.500 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer e3c69ae4642e
+22:06:53.501 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer fe0e55d96836
+22:06:53.501 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 9ea66725c8b0
+22:06:53.501 INFO  [virtual-45] c.a.d.g.MembershipList - Evicted dead peer 2974d38e7421
+ARTIFACT ID                                                      FILE NAME                              SIZE STATUS
+22:06:53.583 INFO  [main] c.aegisos.node.AegisNode - Shutting down node f60a61b27cd9
+icted dead peer 2974d38e7421
+ARTIFACT ID                                                      FILE NAME                              SIZE STATUS
+22:06:53.445 INFO  [main] c.aegisos.node.AegisNode - Shutting down node 26cf20a07396
+ist - Peer a74c9c62a284 -> DEAD
+22:06:51.096 INFO  [virtual-32] c.a.d.g.MembershipList - Peer 23c70b922e2f -> DEAD
+22:06:51.378 INFO  [aegis-recv-cad52ffb93f3] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:51.426 INFO  [aegis-recv-cad52ffb93f3] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:51.664 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:51.668 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:52.089 INFO  [virtual-32] c.a.d.g.MembershipList - Evicted dead peer 15ea7fc50a4e
+22:06:52.090 INFO  [virtual-32] c.a.d.g.MembershipList - Evicted dead peer 8ccb7307ad0e
+22:06:52.090 INFO  [virtual-32] c.a.d.g.MembershipList - Peer a6f8a4fa7364 -> DEAD
+22:06:52.091 INFO  [virtual-32] c.a.d.g.MembershipList - Evicted dead peer d96e7627332b
+22:06:52.323 INFO  [aegis-recv-cad52ffb93f3] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:52.338 INFO  [aegis-recv-cad52ffb93f3] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+ARTIFACT ID                                                      FILE NAME                              SIZE STATUS
+22:06:52.810 INFO  [main] c.aegisos.node.AegisNode - Shutting down node 1085b6e7154f
+endEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:52.034 INFO  [virtual-41] c.a.d.g.MembershipList - Evicted dead peer 15ea7fc50a4e
+22:06:52.034 INFO  [virtual-41] c.a.d.g.MembershipList - Evicted dead peer 8ccb7307ad0e
+22:06:52.035 INFO  [virtual-41] c.a.d.g.MembershipList - Peer aa51db8af8c7 -> DEAD
+22:06:52.035 INFO  [virtual-41] c.a.d.g.MembershipList - Peer aa3b600748e0 -> DEAD
+22:06:52.036 INFO  [virtual-41] c.a.d.g.MembershipList - Peer 7ab988617cde -> DEAD
+22:06:52.037 INFO  [virtual-41] c.a.d.g.MembershipList - Peer 23c70b922e2f -> DEAD
+22:06:52.038 INFO  [virtual-41] c.a.d.g.MembershipList - Evicted dead peer d96e7627332b
+22:06:52.090 INFO  [aegis-recv-a74c9c62a284] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:52.666 INFO  [aegis-recv-cad52ffb93f3] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+22:06:52.712 INFO  [aegis-recv-cad52ffb93f3] c.a.consensus.RaftNode - RaftNode received AppendEntries: prevLogIndex=0, entries=0, leaderCommit=0
+ARTIFACT ID                                                      FILE NAME                              SIZE STATUS
+22:06:52.777 INFO  [main] c.aegisos.node.AegisNode - Shutting down node 526c5e600014
+c.aegisos.node.AegisNode - Shutting down node b778448d1130

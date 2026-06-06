@@ -46,4 +46,8 @@ public final class LogReplicator {
     public void onFailure(NodeId peer) {
         nextIndex.computeIfPresent(peer, (k, v) -> Math.max(1L, v - 1));
     }
+
+    public void onFailure(NodeId peer, long followerLastIndex) {
+        nextIndex.computeIfPresent(peer, (k, v) -> Math.max(1L, Math.min(v - 1, followerLastIndex + 1)));
+    }
 }

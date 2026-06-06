@@ -30,9 +30,71 @@ public final class FileIndex {
             log.debug("Tombstoned file {}", metadata.getName());
             return;
         }
+        
+        String existingFileId = nameToFileId.get(metadata.getName());
+        if (existingFileId != null && !existingFileId.equals(fileId)) {
+            byFileId.remove(existingFileId);
+            log.debug("Overwriting file {}, removing old metadata {}", metadata.getName(), existingFileId);
+        }
+        
         byFileId.put(fileId, metadata);
         nameToFileId.put(metadata.getName(), fileId);
         log.debug("Registered file {} ({} chunks)", metadata.getName(), metadata.getChunksCount());
+    }
+
+    public void applyAddReplica(com.aegisos.proto.AddReplica cmd) {
+        String fileId = HexUtil.encode(cmd.getFileId().toByteArray());
+        FileMetadata meta = byFileId.get(fileId);
+        if (meta == null) return;
+        
+        FileMetadata.Builder builder = meta.toBuilder();
+        for (int i = 0; i < builder.getChunksCount(); i++) {
+            com.aegisos.proto.ChunkRef ref = builder.getChunks(i);
+            if (java.util.Arrays.equals(ref.getChunkId().toByteArray(), cmd.getChunkId().toByteArray())) {
+                boolean alreadyHas = false;
+                for (com.google.protobuf.ByteString existing : ref.getNodeIdsList()) {
+                    if (java.util.Arrays.equals(existing.toByteArray(), cmd.getNodeId().toByteArray())) {
+                        alreadyHas = true;
+                        break;
+                    }
+                }
+                if (!alreadyHas) {
+                    com.aegisos.proto.ChunkRef newRef = ref.toBuilder().addNodeIds(cmd.getNodeId()).build();
+                    builder.setChunks(i, newRef);
+                    byFileId.put(fileId, builder.build());
+                    log.info("Added replica {} to chunk {}", HexUtil.encode(cmd.getNodeId().toByteArray()), HexUtil.encode(cmd.getChunkId().toByteArray()));
+                }
+                break;
+            }
+        }
+    }
+
+    public void applyRemoveReplica(com.aegisos.proto.RemoveReplica cmd) {
+        String fileId = HexUtil.encode(cmd.getFileId().toByteArray());
+        FileMetadata meta = byFileId.get(fileId);
+        if (meta == null) return;
+        
+        FileMetadata.Builder builder = meta.toBuilder();
+        for (int i = 0; i < builder.getChunksCount(); i++) {
+            com.aegisos.proto.ChunkRef ref = builder.getChunks(i);
+            if (java.util.Arrays.equals(ref.getChunkId().toByteArray(), cmd.getChunkId().toByteArray())) {
+                com.aegisos.proto.ChunkRef.Builder refBuilder = ref.toBuilder().clearNodeIds();
+                boolean removed = false;
+                for (com.google.protobuf.ByteString existing : ref.getNodeIdsList()) {
+                    if (java.util.Arrays.equals(existing.toByteArray(), cmd.getNodeId().toByteArray())) {
+                        removed = true;
+                    } else {
+                        refBuilder.addNodeIds(existing);
+                    }
+                }
+                if (removed) {
+                    builder.setChunks(i, refBuilder.build());
+                    byFileId.put(fileId, builder.build());
+                    log.info("Removed replica {} from chunk {}", HexUtil.encode(cmd.getNodeId().toByteArray()), HexUtil.encode(cmd.getChunkId().toByteArray()));
+                }
+                break;
+            }
+        }
     }
 
     public Optional<FileMetadata> byName(String name) {

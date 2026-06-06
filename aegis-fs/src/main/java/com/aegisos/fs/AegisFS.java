@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
  * Distributed, content-addressed, encrypted file system (design section 3.5).
  * Chunks are stored on N nodes; file metadata lives in the Raft log.
  */
-public final class AegisFS {
+public final class AegisFS implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(AegisFS.class);
     private static final long COMMIT_TIMEOUT_MS = 10_000;
@@ -44,6 +44,10 @@ public final class AegisFS {
     private final ChunkPlacement placement;
     private final FileIndex fileIndex = new FileIndex();
 
+    private final LocalHealthStore localHealth;
+    private final ChunkScrubber scrubber;
+    private final AntiEntropyManager antiEntropy;
+
     public AegisFS(NetworkLayer network, ConsensusModule consensus, DiscoveryService discovery,
                    NodeId self, byte[] clusterKey, int replicationFactor, Path chunkDir) {
         this.consensus = consensus;
@@ -54,10 +58,13 @@ public final class AegisFS {
         this.store = new ChunkStore(chunkDir);
         this.replicator = new ChunkReplicator(network, store, self);
         this.placement = new ChunkPlacement(discovery, self);
+        
+        this.localHealth = new LocalHealthStore(chunkDir);
+        this.scrubber = new ChunkScrubber(this, this.localHealth, self);
+        this.antiEntropy = new AntiEntropyManager(this, this.localHealth, self, consensus);
     }
 
-    public void start() {
-        replicator.start();
+    public void registerAppliers() {
         consensus.stateMachine().register(CommandType.REGISTER_FILE, (index, cmd) -> {
             try {
                 fileIndex.applyRegisterFile(FileMetadata.parseFrom(cmd.getPayload()));
@@ -65,6 +72,26 @@ public final class AegisFS {
                 log.warn("bad REGISTER_FILE at {}", index);
             }
         });
+        consensus.stateMachine().register(CommandType.ADD_REPLICA, (index, cmd) -> {
+            try {
+                fileIndex.applyAddReplica(com.aegisos.proto.AddReplica.parseFrom(cmd.getPayload()));
+            } catch (Exception e) {
+                log.warn("bad ADD_REPLICA at {}", index);
+            }
+        });
+        consensus.stateMachine().register(CommandType.REMOVE_REPLICA, (index, cmd) -> {
+            try {
+                fileIndex.applyRemoveReplica(com.aegisos.proto.RemoveReplica.parseFrom(cmd.getPayload()));
+            } catch (Exception e) {
+                log.warn("bad REMOVE_REPLICA at {}", index);
+            }
+        });
+    }
+
+    public void start() {
+        replicator.start();
+        scrubber.start();
+        antiEntropy.start();
         log.info("AegisFS started (replication factor {})", replicationFactor);
     }
 
@@ -74,6 +101,10 @@ public final class AegisFS {
 
     public FileIndex fileIndex() {
         return fileIndex;
+    }
+
+    public LocalHealthStore localHealth() {
+        return localHealth;
     }
 
     /** Stores an already-encrypted chunk on a target node (used by self-healing). */
@@ -182,6 +213,20 @@ public final class AegisFS {
             consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             throw new IOException("failed to commit file metadata: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void close() {
+        try {
+            antiEntropy.close();
+        } catch (Exception e) {
+            log.warn("Error closing antiEntropy: {}", e.toString());
+        }
+        try {
+            scrubber.close();
+        } catch (Exception e) {
+            log.warn("Error closing scrubber: {}", e.toString());
         }
     }
 }

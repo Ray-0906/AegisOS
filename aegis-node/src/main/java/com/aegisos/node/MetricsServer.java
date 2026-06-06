@@ -84,6 +84,44 @@ public final class MetricsServer implements AutoCloseable {
             }
         });
 
+        server.createContext("/cancel", exchange -> {
+            if ("POST".equals(exchange.getRequestMethod())) {
+                String query = exchange.getRequestURI().getQuery();
+                log.info("Received /cancel request with query: {}", query);
+                if (query != null && query.startsWith("jobId=")) {
+                    String jobId = query.substring(6);
+                    if (jobId.isEmpty()) {
+                        log.warn("Received empty jobId in /cancel request!");
+                        exchange.sendResponseHeaders(400, -1);
+                        return;
+                    }
+                    node.runtimeAgent().cancelJob(jobId);
+                    String resp = "{\"status\":\"canceling\"}";
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, resp.getBytes().length);
+                    java.io.OutputStream os = exchange.getResponseBody();
+                    os.write(resp.getBytes());
+                    os.close();
+                    return;
+                }
+            }
+            exchange.sendResponseHeaders(400, -1);
+        });
+
+        server.createContext("/allocator", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            String dump = node.resourceAllocator().dumpStatus();
+            byte[] bytes = dump.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+
         // A single virtual thread is sufficient — both endpoints are read-only and fast.
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
@@ -110,6 +148,7 @@ public final class MetricsServer implements AutoCloseable {
         // --- Jobs ---
         Collection<JobRecord> allJobs = node.runtimeAgent().registry().all();
         long queued    = allJobs.stream().filter(j -> j.getState() == JobState.QUEUED).count();
+        long pending   = allJobs.stream().filter(j -> j.getState() == JobState.PENDING).count();
         long running   = allJobs.stream().filter(j -> j.getState() == JobState.RUNNING).count();
         long completed = allJobs.stream().filter(j -> j.getState() == JobState.COMPLETED).count();
         long failed    = allJobs.stream().filter(j -> j.getState() == JobState.FAILED).count();
@@ -126,7 +165,7 @@ public final class MetricsServer implements AutoCloseable {
                   "term"        : %d,
                   "commitIndex" : %d,
                   "aliveNodes"  : %d,
-                  "jobs"        : { "QUEUED": %d, "RUNNING": %d, "COMPLETED": %d, "FAILED": %d },
+                  "jobs"        : { "PENDING": %d, "QUEUED": %d, "RUNNING": %d, "COMPLETED": %d, "FAILED": %d },
                   "localChunks" : %d
                 }
                 """,
@@ -136,14 +175,14 @@ public final class MetricsServer implements AutoCloseable {
                 term,
                 commitIndex,
                 aliveNodes,
-                queued, running, completed, failed,
+                pending, queued, running, completed, failed,
                 localChunks);
     }
 
     @Override
     public void close() {
         if (server != null) {
-            server.stop(0);
+            server.stop(1); // Use 1-second timeout to prevent shutdown hanging
             log.info("Metrics server stopped");
         }
     }

@@ -33,7 +33,7 @@ class Phase6Test {
 
             // ~8s job, checkpointing every ~1s.
             JobHandle handle = submitter.api().getProcessManager().submit(
-                    new CheckpointableSum(target, 100));
+                    new CheckpointableSum(target, 100), 1, 512);
             String jobId = handle.jobId();
 
             // Wait until the job is assigned and running on some node.
@@ -62,6 +62,7 @@ class Phase6Test {
     private static Optional<NodeId> assignedNode(AegisNode node, String jobId) {
         return node.runtimeAgent().registry().get(jobId)
                 .map(JobRecord::getAssignedNodeId)
+                .filter(b -> !b.isEmpty())
                 .map(b -> NodeId.of(b.toByteArray()));
     }
 }

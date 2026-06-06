@@ -15,6 +15,10 @@ public final class ArtifactClassLoader {
     public ArtifactClassLoader(ArtifactCache cache) {
         this.cache = cache;
     }
+    
+    public ArtifactCache getCache() {
+        return cache;
+    }
 
     /**
      * Creates a NEW isolated URLClassLoader for the given artifact.

@@ -43,36 +43,51 @@ public final class ProcessManager {
     }
 
     /** Submits a job: schedules it on the best-fit node and dispatches it for execution. */
-    public JobHandle submit(AegisJob<?> job) throws Exception {
+    public JobHandle submit(AegisJob<?> job, int cpuCores, long memoryMb) throws Exception {
         String jobId = UUID.randomUUID().toString();
+        
+        com.aegisos.proto.ResourceRequest req = com.aegisos.proto.ResourceRequest.newBuilder()
+                .setCpuCores(cpuCores)
+                .setMemoryMb(memoryMb)
+                .build();
+                
         JobSpec spec = JobSpec.newBuilder()
                 .setJobId(jobId)
                 .setClassName(job.getClass().getName())
                 .setArgs(ByteString.copyFrom(Serialization.serialize(job)))
                 .setOwnerNodeId(ByteString.copyFrom(self.toBytes()))
+                .setResources(req)
                 .build();
 
-        NodeId target = scheduleWithRetry(spec);
+        long pending = agent.registry().all().stream().filter(r -> r.getState() == JobState.PENDING).count();
+        if (pending >= 1000) {
+            throw new IllegalStateException("Admission queue full");
+        }
+
         JobRecord record = JobRecord.newBuilder()
                 .setSpec(spec)
-                .setAssignedNodeId(ByteString.copyFrom(target.toBytes()))
-                .setState(JobState.QUEUED)
+                .setState(JobState.PENDING)
+                .setExecutionId(0)
                 .build();
 
-        if (target.equals(self)) {
-            agent.dispatchLocal(record);
-        } else {
-            network.sendAsync(target, MessageType.RUN_JOB,
-                    RunJob.newBuilder().setRecord(record).build().toByteArray());
-        }
-        log.info("Submitted job {} to {}", jobId, target.shortId());
+        agent.consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
+                .setType(com.aegisos.proto.CommandType.SUBMIT_JOB)
+                .setPayload(record.toByteString())
+                .build()).get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+        log.info("Submitted job {} (PENDING)", jobId);
         return new JobHandle(jobId);
     }
 
     /** Submits an artifact-based job: worker will download artifact, load class, and execute. */
-    public JobHandle submitArtifact(String artifactId, String className, java.util.List<String> args) throws Exception {
+    public JobHandle submitArtifact(String artifactId, String className, java.util.List<String> args, int cpuCores, long memoryMb) throws Exception {
         String jobId = UUID.randomUUID().toString();
         byte[] argsBytes = Serialization.serialize((Serializable) args.toArray(new String[0]));
+
+        com.aegisos.proto.ResourceRequest req = com.aegisos.proto.ResourceRequest.newBuilder()
+                .setCpuCores(cpuCores)
+                .setMemoryMb(memoryMb)
+                .build();
 
         JobSpec spec = JobSpec.newBuilder()
                 .setJobId(jobId)
@@ -80,30 +95,39 @@ public final class ProcessManager {
                 .setArgs(ByteString.copyFrom(argsBytes))
                 .setCodeFileId(artifactId)
                 .setOwnerNodeId(ByteString.copyFrom(self.toBytes()))
+                .setResources(req)
                 .build();
 
-        NodeId target = scheduleWithRetry(spec);
+        long pending = agent.registry().all().stream().filter(r -> r.getState() == JobState.PENDING).count();
+        if (pending >= 1000) {
+            throw new IllegalStateException("Admission queue full");
+        }
+
         JobRecord record = JobRecord.newBuilder()
                 .setSpec(spec)
-                .setAssignedNodeId(ByteString.copyFrom(target.toBytes()))
-                .setState(JobState.QUEUED)
+                .setState(JobState.PENDING)
+                .setExecutionId(0)
                 .build();
 
-        if (target.equals(self)) {
-            agent.dispatchLocal(record);
-        } else {
-            network.sendAsync(target, MessageType.RUN_JOB,
-                    RunJob.newBuilder().setRecord(record).build().toByteArray());
-        }
-        log.info("Submitted artifact job {} (artifact: {}) to {}", jobId, artifactId, target.shortId());
+        agent.consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
+                .setType(com.aegisos.proto.CommandType.SUBMIT_JOB)
+                .setPayload(record.toByteString())
+                .build()).get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+        log.info("Submitted artifact job {} (artifact: {}) (PENDING)", jobId, artifactId);
         return new JobHandle(jobId);
     }
 
     private NodeId scheduleWithRetry(JobSpec spec) throws Exception {
         long deadline = System.currentTimeMillis() + SCHEDULE_RETRY_WINDOW_MS;
         while (true) {
+            Optional<JobRecord> existing = agent.registry().get(spec.getJobId());
+            if (existing.isPresent()) {
+                return NodeId.of(existing.get().getAssignedNodeId().toByteArray());
+            }
+
             try {
-                return scheduler.schedule(spec);
+                return scheduler.schedule(spec, 1L);
             } catch (Exception e) {
                 if (isNotLeaderException(e)) {
                     // #region agent log

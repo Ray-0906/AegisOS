@@ -114,7 +114,7 @@ public class Phase7Test {
         // Since testJar doesn't actually contain TestJob, if we try to dynamically load it, it fails.
         // But we can test that submitArtifact routes properly.
         JobHandle handle = cluster.node(0).api().getProcessManager().submitArtifact(
-                artifactId, TestJob.class.getName(), List.of("AegisOS"));
+                artifactId, TestJob.class.getName(), List.of("AegisOS"), 1, 512);
 
         // Since TestJob is on the test classpath, the ArtifactClassLoader (which falls back to parent)
         // will successfully find and execute it. We just want to verify submitArtifact routed correctly.

@@ -64,13 +64,38 @@ public final class ChunkStore {
         }
     }
 
-    /** Hex ids of all locally-stored chunks. */
+    public boolean isOlderThan(byte[] chunkId, long ageMs) {
+        try {
+            Path p = pathFor(chunkId);
+            if (!Files.exists(p)) return false;
+            long age = System.currentTimeMillis() - Files.getLastModifiedTime(p).toMillis();
+            return age > ageMs;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    public void quarantine(byte[] chunkId) {
+        try {
+            Path p = pathFor(chunkId);
+            if (Files.exists(p)) {
+                Path quarantineDir = dir.resolveSibling("quarantine");
+                Files.createDirectories(quarantineDir);
+                Path dest = quarantineDir.resolve(HexUtil.encode(chunkId) + "_" + System.currentTimeMillis());
+                Files.move(p, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                log.info("Quarantined chunk {}", HexUtil.shortId(chunkId));
+            }
+        } catch (IOException e) {
+            log.warn("failed quarantining chunk: {}", e.getMessage());
+        }
+    }
+
     public List<String> listChunkIds() {
         List<String> ids = new ArrayList<>();
         try (Stream<Path> files = Files.list(dir)) {
             files.filter(Files::isRegularFile)
                     .map(p -> p.getFileName().toString())
-                    .filter(name -> !name.endsWith(".tmp"))
+                    .filter(name -> name.matches("^[a-fA-F0-9]+$"))
                     .forEach(ids::add);
         } catch (IOException e) {
             log.warn("failed listing chunks: {}", e.getMessage());
