@@ -39,6 +39,7 @@ public final class ProcessRuntimeAgent {
     private final JobRegistry registry = new JobRegistry();
     private final AtomicInteger running = new AtomicInteger(0);
     private CheckpointManager checkpointManager; // set by Phase 6 wiring
+    private volatile boolean shuttingDown = false;
 
     public ProcessRuntimeAgent(ConsensusModule consensus, NetworkLayer network, NodeId self, AegisFS fileSystem,
                                ArtifactRegistry artifactRegistry, ArtifactClassLoader artifactClassLoader) {
@@ -183,8 +184,12 @@ public final class ProcessRuntimeAgent {
             update(jobId, executionId, JobState.COMPLETED, result, null);
             log.info("Job {} COMPLETED", jobId);
         } catch (Exception e) {
-            log.error("Job {} FAILED", jobId, e);
-            update(jobId, executionId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
+            if (shuttingDown) {
+                log.info("Job {} aborted due to node shutdown, ignoring failure so it can be marked LOST.", jobId);
+            } else {
+                log.error("Job {} FAILED", jobId, e);
+                update(jobId, executionId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
+            }
         } finally {
             hbScheduler.shutdownNow();
             running.decrementAndGet();
@@ -207,5 +212,12 @@ public final class ProcessRuntimeAgent {
         } catch (Exception e) {
             log.debug("failed to record job update for {}: {}", jobId, e.toString());
         }
+    }
+
+    public void close() {
+        log.info("ProcessRuntimeAgent shutting down");
+        shuttingDown = true;
+        // Cancel all active jobs to ensure child processes are killed
+        executor.close();
     }
 }

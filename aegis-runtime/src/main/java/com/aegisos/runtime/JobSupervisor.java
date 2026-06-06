@@ -133,7 +133,8 @@ public final class JobSupervisor implements AutoCloseable {
                 continue;
             }
 
-            boolean isDead = discovery.membership().statusOf(assigned) == PeerStatus.DEAD;
+            boolean isDeadOrUnknown = discovery.membership().statusOf(assigned) == PeerStatus.DEAD ||
+                                      discovery.membership().statusOf(assigned) == PeerStatus.PEER_UNKNOWN;
             boolean staleHeartbeat = false;
 
             if (record.getState() == JobState.RUNNING) {
@@ -143,7 +144,7 @@ public final class JobSupervisor implements AutoCloseable {
                 }
             }
 
-            if (isDead && (record.getState() == JobState.QUEUED || staleHeartbeat)) {
+            if (isDeadOrUnknown && (record.getState() == JobState.QUEUED || staleHeartbeat)) {
                 log.info("Job {} on failed node {}. Emitting LOST state.", jobId, assigned.shortId());
                 emitLostState(jobId, record);
             }

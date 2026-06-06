@@ -260,6 +260,9 @@ public final class AegisNode implements AutoCloseable {
         if (checkpointManager != null) {
             checkpointManager.stop();
         }
+        if (runtimeAgent != null) {
+            runtimeAgent.close();
+        }
         if (resourceReporter != null) {
             resourceReporter.close();
         }

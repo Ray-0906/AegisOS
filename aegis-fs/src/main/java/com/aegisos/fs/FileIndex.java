@@ -59,11 +59,6 @@ public final class FileIndex {
                     }
                 }
                 if (!alreadyHas) {
-                    if (ref.getNodeIdsCount() >= meta.getReplication()) {
-                        log.info("Ignored ADD_REPLICA for chunk {}: already fully replicated (RF={})", 
-                                HexUtil.encode(cmd.getChunkId().toByteArray()), meta.getReplication());
-                        break;
-                    }
                     com.aegisos.proto.ChunkRef newRef = ref.toBuilder().addNodeIds(cmd.getNodeId()).build();
                     builder.setChunks(i, newRef);
                     byFileId.put(fileId, builder.build());

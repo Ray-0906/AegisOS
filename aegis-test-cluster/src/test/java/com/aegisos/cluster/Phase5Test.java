@@ -30,7 +30,7 @@ class Phase5Test {
             AegisNode submitter = nodes.get(0);
 
             // Single job: count primes up to 10000 (expected 1229).
-            JobHandle handle = submitter.api().getProcessManager().submit(new PrimeCounter(10_000), 1, 512);
+            JobHandle handle = submitter.api().getProcessManager().submit(new PrimeCounter(10_000), 1, 128);
             Long result = submitter.api().getProcessManager().awaitResult(handle, 30_000);
             assertEquals(1229L, result, "prime count up to 10000 should be 1229");
         }

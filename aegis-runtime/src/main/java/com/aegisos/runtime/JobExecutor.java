@@ -77,4 +77,10 @@ public final class JobExecutor {
         Serializable state = job.captureState();
         return state == null ? null : Serialization.serialize(state);
     }
+
+    public void close() {
+        for (ProcessSupervisor supervisor : activeSupervisors.values()) {
+            supervisor.kill();
+        }
+    }
 }

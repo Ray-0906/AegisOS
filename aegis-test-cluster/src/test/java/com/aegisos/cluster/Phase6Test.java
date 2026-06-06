@@ -62,6 +62,7 @@ class Phase6Test {
     private static Optional<NodeId> assignedNode(AegisNode node, String jobId) {
         return node.runtimeAgent().registry().get(jobId)
                 .map(JobRecord::getAssignedNodeId)
+                .filter(b -> !b.isEmpty())
                 .map(b -> NodeId.of(b.toByteArray()));
     }
 }
