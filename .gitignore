@@ -60,3 +60,6 @@ my_test_file.txt
 recovered_*.txt
 *.log
 *.txt
+
+# Benchmarks
+aegis-test-cluster/benchmarks/
