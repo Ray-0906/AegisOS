@@ -272,6 +272,13 @@ public final class AegisNode implements AutoCloseable {
         if (reaper != null) {
             reaper.close();
         }
+        if (fileSystem != null) {
+            try {
+                fileSystem.close();
+            } catch (Exception e) {
+                log.warn("Error closing fileSystem: {}", e.toString());
+            }
+        }
         if (consensus != null) {
             consensus.close();
         }

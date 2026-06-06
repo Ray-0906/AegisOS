@@ -73,7 +73,7 @@ public final class PeerConnection implements AutoCloseable {
     }
 
     /** Sends an encrypted, signed application message to the peer. */
-    public void send(MessageType type, byte[] payload, long correlation) throws IOException {
+    public synchronized void send(MessageType type, byte[] payload, long correlation) throws IOException {
         byte[] nonce = session.cipher().newNonce();
         MessageHeader header = MessageHeader.newBuilder()
                 .setSenderId(ByteString.copyFrom(identity.nodeId().toBytes()))

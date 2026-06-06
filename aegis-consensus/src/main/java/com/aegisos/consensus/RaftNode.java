@@ -143,6 +143,10 @@ public final class RaftNode {
         return commitIndex;
     }
 
+    public long lastApplied() {
+        return lastApplied;
+    }
+
     // --- client submission ----------------------------------------------
 
     /** Leader-only: appends a command and completes when it is committed. */
@@ -328,7 +332,7 @@ public final class RaftNode {
                 replicator.onSuccess(peer, matchIndex);
                 advanceCommit();
             } else {
-                replicator.onFailure(peer);
+                replicator.onFailure(peer, result.getMatchIndex());
             }
         } finally {
             lock.unlock();

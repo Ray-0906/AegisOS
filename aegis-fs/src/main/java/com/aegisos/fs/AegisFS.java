@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
  * Distributed, content-addressed, encrypted file system (design section 3.5).
  * Chunks are stored on N nodes; file metadata lives in the Raft log.
  */
-public final class AegisFS {
+public final class AegisFS implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(AegisFS.class);
     private static final long COMMIT_TIMEOUT_MS = 10_000;
@@ -213,6 +213,20 @@ public final class AegisFS {
             consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             throw new IOException("failed to commit file metadata: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void close() {
+        try {
+            antiEntropy.close();
+        } catch (Exception e) {
+            log.warn("Error closing antiEntropy: {}", e.toString());
+        }
+        try {
+            scrubber.close();
+        } catch (Exception e) {
+            log.warn("Error closing scrubber: {}", e.toString());
         }
     }
 }

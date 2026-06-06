@@ -46,7 +46,7 @@ class Phase4Test {
             assertArrayEquals(data, readBack, "file read from B must match what A wrote");
 
             // Pick a chunk holder that is not the current leader, then kill it.
-            FileMetadata meta = a.fileSystem().fileIndex().byName(name).orElseThrow();
+            FileMetadata meta = b.fileSystem().fileIndex().byName(name).orElseThrow();
             ChunkRef firstChunk = meta.getChunks(0);
             NodeId victimId = pickNonLeaderHolder(nodes, firstChunk);
             AegisNode victim = nodes.stream()

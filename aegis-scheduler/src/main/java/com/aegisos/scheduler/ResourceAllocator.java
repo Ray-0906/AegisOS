@@ -139,6 +139,13 @@ public class ResourceAllocator implements AutoCloseable {
         return sb.toString();
     }
 
+    public synchronized int hardAllocatedCpu() { return hardAllocatedCpu; }
+    public synchronized long hardAllocatedMem() { return hardAllocatedMem; }
+    public synchronized int softReservedCpu() { return softReservedCpu; }
+    public synchronized long softReservedMem() { return softReservedMem; }
+    public Map<String, SoftReservation> softReservations() { return softReservations; }
+    public Map<String, ResourceRequest> hardAllocations() { return hardAllocations; }
+
     @Override
     public void close() {
         reaper.shutdownNow();
