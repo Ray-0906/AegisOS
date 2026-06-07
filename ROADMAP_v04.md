@@ -1,50 +1,41 @@
-# AegisOS v0.4 Roadmap & Backlog
+# AegisOS v0.4 Roadmap: The Correctness Release
 
-This document captures the highest leverage work for the v0.4 release. Having proven core correctness (storage integrity, consensus, runtime recovery, scheduler, process isolation), v0.4 shifts focus heavily toward operability, safety at scale, and observability.
+This document outlines the v0.4 plan to transition AegisOS from "functionally complete" to "provably correct under churn." The highest priority is safety, observability, and auditability.
 
----
+## Core Architectural Invariants
 
-## High Priority
+1. **Raft metadata is authoritative. Observed state is evidence.** (ADR-016)
+2. **Audit Report ≠ Repair Recommendation.** We explicitly separate auditing, repair recommendation, and repair execution to prevent destructive actions from transient issues.
 
-### 1. Replica Metadata Pruning
-We have rigorously proven that `SelfHealingReaper` correctly identifies missing/corrupt chunks and refuses to spread corruption. However, we need a robust, automated mechanism to actively prune dead replica references from the Raft `FileIndex`. 
-- **Goal:** When a node permanently leaves the cluster, its chunk locations should be gracefully excised from the metadata to avoid unbounded accumulation of stale references.
-- **Evidence:** Recent storage integrity tests demonstrate that missing replicas currently require explicit `REMOVE_REPLICA` commands before healing can proceed. We need a daemon to automate this.
+## Sprint Plan
 
-### 2. Observability & Metrics
-Currently, we rely heavily on log parsing (`nodeX.log`) to understand system behavior. We need a proper metrics subsystem.
-- **Goal:** Expose real-time, queryable metrics.
-- **Key Metrics to Track:**
-  - `cluster_jobs_running`
-  - `cluster_jobs_pending`
-  - `cluster_cpu_allocated`
-  - `cluster_memory_allocated`
-  - `raft_commit_index`
-  - `artifact_replication_factor` (health check across AegisFS)
+### Sprint 1: Membership & Foundations
+* **Close ADR-013 (Client Mode vs. Node Mode):** Establish strict, accurate membership. If membership is wrong, node counts, replica counts, and audits are wrong.
+* **Define Verification Contracts:** Refine ADR-017 to explicitly define who initiates verification, what constitutes evidence (object-specific), and what threshold allows repair.
 
-### 3. Raft Snapshots / Log Compaction
-The Raft log is currently an unbounded append-only file. As jobs execute and files are uploaded, this log will eventually exhaust memory/disk on long-running clusters.
-- **Goal:** Implement Raft log compaction. Nodes should periodically snapshot the `ClusterStateMachine` state to disk and truncate the prefix of the Raft log.
-- **Impact:** Drastically faster node restart times and bounded storage requirements for the control plane.
+### Sprint 2: Storage-First Auditing
+* **Implement the Audit Layer:** Detect and report divergence between Raft metadata and physical reality, starting with Storage (AegisFS) due to observed metadata growth issues (`MetadataReplicas=53` vs `LiveReplicas=3`).
+* **Periodic & Triggered Scans:**
+  - Periodic audit: `60s` intervals.
+  - Membership-triggered audit: `Immediate` (when a node joins, leaves, or is declared DEAD).
 
----
+### Sprint 3: Safe Reconciliation & Repair
+* **Execute Repairs based on Verified Audits:** Ensure repairs only occur when evidence meets strict, object-specific thresholds.
+  - *Storage:* Two consecutive scans confirming divergence.
+  - *Jobs:* Node DEAD + heartbeat expired + job absent + two scans.
+* **Mitigate False-Positive Reconciliation:** Prevent the cluster from committing repairs based on flawed audit data, which is currently the single largest risk for cluster-wide corruption.
 
-## Medium Priority
+### Sprint 4: Snapshots & Log Compaction
+* **Raft Snapshots:** Implement state machine snapshotting and log truncation to prevent unbounded memory/disk usage on long-running clusters.
+* *Note: Can be swapped with Sprint 5 depending on operational pressure.*
 
-### 1. Backpressure & Flow Control
-- **Goal:** Implement explicit backpressure on the `PeerConnection` layer. Prevent OOM scenarios when transferring large artifacts or during intense Raft log catch-ups.
-
-### 2. Dynamic Membership (Joint Consensus)
-- **Goal:** Formalize Raft membership changes using the Joint Consensus protocol. Currently, membership relies on a slightly static assumption based on gossip discovery. We need formal cluster reconfiguration to safely add/remove voters without split-brain risks.
+### Sprint 5: Observability & Expansion
+* **Metrics & Telemetry:** Expose real-time data (`cluster_jobs_running`, replication lag, scheduler queue latency, recovery latency) to monitor the correctness of the new audit and repair mechanisms.
+* **Full Reconciliation Expansion:** Extend the audit and repair loops to cover all subsystems.
 
 ---
 
-## Out of Scope for v0.4 (Do NOT build yet)
-
-Do not get distracted by the following features. They are strictly v0.5 or later, as they introduce massive complexity that is unnecessary until the core observability and compaction primitives exist.
-
-- Containers / Docker / containerd integration
-- Kubernetes integration / Operators
+## Out of Scope for v0.4
+- Containers / Kubernetes integration
 - Multi-tenancy & strict user isolation
-- Fair scheduling / Priority queues
-- GPU scheduling & specialized hardware affinities
+- Fair scheduling / GPU affinities
