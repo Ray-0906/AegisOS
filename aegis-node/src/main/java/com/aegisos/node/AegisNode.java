@@ -158,12 +158,15 @@ public final class AegisNode implements AutoCloseable {
         reaper.start();
         runtimeAgent.start();
         network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
+        
+        QueryHandler queryHandler = new QueryHandler(discovery, fileSystem);
+        network.registerHandler(MessageType.CLIENT_QUERY, queryHandler::handle);
         scheduler.start();
         resourceReporter.start();
         jobSupervisor.start();
         consensus.start(); // Start Raft last to avoid heartbeat races triggering applyCommitted early
 
-        if (config.apiPort() > 0) {
+        if (config.apiPort() >= 0) {
             metricsServer = new MetricsServer(this, config.apiPort());
             metricsServer.start();
         }
@@ -178,6 +181,10 @@ public final class AegisNode implements AutoCloseable {
 
     public NetworkLayer network() {
         return network;
+    }
+
+    public MetricsServer metrics() {
+        return metricsServer;
     }
 
     public DiscoveryService discovery() {

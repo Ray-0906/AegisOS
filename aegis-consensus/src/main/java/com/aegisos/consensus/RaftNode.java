@@ -139,6 +139,10 @@ public final class RaftNode {
         return metadata.currentTerm();
     }
 
+    public List<NodeId> votingPeers() {
+        return votingPeers.get();
+    }
+
     public long commitIndex() {
         return commitIndex;
     }

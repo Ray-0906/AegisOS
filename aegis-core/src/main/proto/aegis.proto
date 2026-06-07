@@ -290,6 +290,28 @@ message ClientCommandResult {
   string error    = 4;
 }
 
+enum QueryType {
+  QUERY_UNKNOWN    = 0;
+  LIST_NODES       = 1;
+  CLUSTER_INFO     = 2;
+  FS_LIST          = 3;
+  FS_GET           = 4;
+  JOB_STATUS       = 5;
+  ARTIFACT_LIST    = 6;
+  ALLOCATOR_STATUS = 7;
+  LOCAL_CHUNKS     = 8;
+}
+
+message ClientQuery {
+  QueryType type = 1;
+  bytes payload  = 2;
+}
+
+message ClientQueryResult {
+  bytes  payload = 1;
+  string error   = 2;
+}
+
 // test-only
 message KvPut {
   string key   = 1;

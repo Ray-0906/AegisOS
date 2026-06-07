@@ -44,6 +44,10 @@ public final class MetricsServer implements AutoCloseable {
         this.port = port;
     }
 
+    public int boundPort() {
+        return server != null ? server.getAddress().getPort() : port;
+    }
+
     public void start() throws IOException {
         // Use explicit IPv4 wildcard + non-zero backlog; the JDK HttpServer on Windows
         // may silently fail to accept connections when bound with InetSocketAddress(port, 0).
@@ -108,6 +112,19 @@ public final class MetricsServer implements AutoCloseable {
             exchange.sendResponseHeaders(400, -1);
         });
 
+        server.createContext("/membership", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            byte[] body = buildMembershipJson().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        });
+
         server.createContext("/allocator", exchange -> {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
@@ -122,10 +139,142 @@ public final class MetricsServer implements AutoCloseable {
             }
         });
 
+        server.createContext("/audit/local-chunks", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            var chunks = node.fileSystem().chunkStore().listChunkIds();
+            StringBuilder sb = new StringBuilder("[\n");
+            for (int i = 0; i < chunks.size(); i++) {
+                sb.append("  \"").append(chunks.get(i)).append("\"").append(i < chunks.size() - 1 ? ",\n" : "\n");
+            }
+            sb.append("]");
+            byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+
+        server.createContext("/audit/storage", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            try {
+                com.aegisos.fs.audit.ChunkMetadataInventory inventory = new com.aegisos.fs.audit.ChunkMetadataInventory(node.fileSystem().fileIndex());
+                java.util.List<com.aegisos.fs.audit.ChunkMetadataInventory.ChunkInventoryRecord> expected = 
+                        inventory.build();
+                        
+                com.aegisos.fs.audit.ObservedStateCollector collector = new com.aegisos.fs.audit.ObservedStateCollector();
+                java.util.Map<com.aegisos.core.identity.NodeId, java.util.Set<String>> observed = 
+                        collector.observeRemoteState(node.network(), node.discovery().membership(), node.identity().nodeId(), node.fileSystem().chunkStore());
+                        
+                com.aegisos.fs.audit.DivergenceReportGenerator generator = new com.aegisos.fs.audit.DivergenceReportGenerator();
+                java.util.List<com.aegisos.fs.audit.DivergenceReportGenerator.UnderReplicatedChunk> divergences = 
+                        generator.detectUnderReplicated(expected, observed);
+
+                StringBuilder sb = new StringBuilder();
+                sb.append("{\n  \"underReplicatedChunks\": [\n");
+                for (int i = 0; i < divergences.size(); i++) {
+                    var chunk = divergences.get(i);
+                    sb.append("    {\n");
+                    sb.append("      \"chunkId\": \"").append(chunk.chunkIdHex).append("\",\n");
+                    sb.append("      \"requiredReplicationFactor\": ").append(chunk.requiredReplicationFactor).append(",\n");
+                    sb.append("      \"actualPhysicalCount\": ").append(chunk.actualPhysicalCount).append(",\n");
+                    sb.append("      \"missingFromNodes\": [");
+                    for (int j = 0; j < chunk.missingFromNodes.size(); j++) {
+                        sb.append("\"").append(chunk.missingFromNodes.get(j).shortId()).append("\"");
+                        if (j < chunk.missingFromNodes.size() - 1) sb.append(", ");
+                    }
+                    sb.append("]\n    }");
+                    if (i < divergences.size() - 1) sb.append(",");
+                    sb.append("\n");
+                }
+                sb.append("  ]\n}");
+                
+                byte[] bytes = sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (java.io.OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to generate storage audit report", e);
+                exchange.sendResponseHeaders(500, -1);
+            }
+        });
+
         // A single virtual thread is sufficient — both endpoints are read-only and fast.
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
         log.info("Metrics server listening on http://0.0.0.0:{}/ (endpoints: /metrics, /health)", port);
+    }
+
+    private String buildMembershipJson() {
+        java.util.List<com.aegisos.core.identity.NodeId> raftVotersList = node.consensus().raftNode().votingPeers();
+        java.util.List<com.aegisos.proto.PeerEntry> gossipPeersList = node.discovery().membership().allPeers();
+        
+        java.util.Set<String> raftSet = new java.util.HashSet<>();
+        raftSet.add(node.identity().nodeId().shortId());
+        for (com.aegisos.core.identity.NodeId id : raftVotersList) {
+            raftSet.add(id.shortId());
+        }
+        
+        java.util.Set<String> gossipSet = new java.util.HashSet<>();
+        gossipSet.add(node.identity().nodeId().shortId());
+        for (com.aegisos.proto.PeerEntry p : gossipPeersList) {
+            gossipSet.add(com.aegisos.core.util.HexUtil.shortId(p.getNodeId().toByteArray()));
+        }
+        
+        java.util.List<String> onlyInRaft = new java.util.ArrayList<>();
+        for (String r : raftSet) {
+            if (!gossipSet.contains(r)) onlyInRaft.add(r);
+        }
+        
+        java.util.List<String> onlyInGossip = new java.util.ArrayList<>();
+        for (String g : gossipSet) {
+            if (!raftSet.contains(g)) onlyInGossip.add(g);
+        }
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\n  \"raftVoters\": [");
+        int count = 0;
+        for (String r : raftSet) {
+            sb.append("\"").append(r).append("\"");
+            if (++count < raftSet.size()) sb.append(", ");
+        }
+        sb.append("],\n  \"gossipPeers\": [\n");
+        
+        if (!gossipPeersList.isEmpty()) {
+            count = 0;
+            for (com.aegisos.proto.PeerEntry p : gossipPeersList) {
+                String id = com.aegisos.core.util.HexUtil.shortId(p.getNodeId().toByteArray());
+                sb.append("    { \"nodeId\": \"").append(id)
+                  .append("\", \"status\": \"").append(p.getStatus().name())
+                  .append("\", \"role\": \"").append(p.getRole().name()).append("\" }");
+                if (++count < gossipPeersList.size()) sb.append(",\n");
+            }
+        }
+        sb.append("\n  ],\n  \"delta\": {\n    \"onlyInRaft\": [");
+        
+        count = 0;
+        for (String id : onlyInRaft) {
+            sb.append("\"").append(id).append("\"");
+            if (++count < onlyInRaft.size()) sb.append(", ");
+        }
+        sb.append("],\n    \"onlyInGossip\": [");
+        count = 0;
+        for (String id : onlyInGossip) {
+            sb.append("\"").append(id).append("\"");
+            if (++count < onlyInGossip.size()) sb.append(", ");
+        }
+        sb.append("]\n  }\n}\n");
+        
+        return sb.toString();
     }
 
     private String buildMetrics() {
@@ -186,4 +335,6 @@ public final class MetricsServer implements AutoCloseable {
             log.info("Metrics server stopped");
         }
     }
+
+
 }
