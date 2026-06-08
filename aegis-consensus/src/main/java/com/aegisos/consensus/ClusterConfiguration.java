@@ -26,16 +26,6 @@ public final class ClusterConfiguration {
         this.version = 0;
     }
 
-    /**
-     * Initializes the configuration for bootstrap mode.
-     */
-    public void initBootstrap(NodeId self) {
-        this.version = 1;
-        this.voters.clear();
-        this.voters.add(self);
-        this.observers.clear();
-        log.info("Initialized bootstrap ClusterConfiguration with voters = [{}] (version 1)", self.shortId());
-    }
 
     /**
      * Initializes the configuration for join mode.

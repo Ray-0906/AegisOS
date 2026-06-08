@@ -8,64 +8,148 @@
 ## 0. TL;DR
 
 - **What it is:** AegisOS — a secure, peer-to-peer, distributed OS runtime in **Java 21**. Nodes authenticate, gossip membership, store files, and execute JAR artifacts. 
-- **Current Phase:** We are in the middle of the **v0.4 Correctness and Observability Refactor**. We are shifting the system from "assumed correctness" to "proven correctness" by building strict audit frameworks, removing architectural coupling, and formalizing verification contracts.
-- **Milestone Status:** Sprints 1 and 2 are **COMPLETE and VERIFIED**. We are preparing to begin Sprint 3.
+- **Current Phase:** We are in the **v0.4 Correctness and Observability Refactor**. The system has moved from "assumed correctness" to "proven correctness" with strict audit frameworks, membership decoupling, and verification contracts.
+- **Milestone Status:** Sprints 1, 2, and 3 are **COMPLETE and SIGNED OFF**. Ready to begin Sprint 4 (Reconciliation Engine).
 
 ---
 
-## 1. Work Completed in v0.4 So Far
+## 1. Work Completed in v0.4
 
 ### Sprint 1: CLI Isolation and Membership Visibility
-- **CLI Isolation (ADR-018):** Previously, CLI commands forced the CLI to join the cluster as a transient Gossip member, polluting `votingPeers` and disrupting consensus. This has been fixed. The CLI now connects via a strict Client-Server boundary using `CLIENT_COMMAND` and `CLIENT_QUERY` on the existing single-transport TCP `NetworkLayer`.
-- **Visibility:** Exposed `GET /membership` endpoint on the `MetricsServer` to compare Raft Voters against Gossip Peers.
-- **Discovery:** Revealed a critical architectural flaw: Raft's `votingPeers` is currently populated directly from Gossip's `MembershipList`. This means Raft quorum size is an emergent property of Gossip.
+- **CLI Isolation (ADR-018):** CLI no longer joins as a transient Gossip member. Uses strict Client-Server boundary via `CLIENT_COMMAND` and `CLIENT_QUERY` on the `NetworkLayer`.
+- **Visibility:** Exposed `GET /membership` endpoint on `MetricsServer`.
+- **Discovery:** Revealed critical flaw: Raft's `votingPeers` was populated from Gossip's `MembershipList`.
 
 ### Sprint 2: Storage Audit Framework (Measurement-Only)
-- **Source of Truth (ADR-016):** Confirmed the Raft Log is the ultimate authority, and `FileIndex` is its deterministic materialized view.
-- **Audit Implementation:** Built a read-only pipeline that extracts expected state (`ChunkMetadataInventory`), compares it against physical reality (`ObservedStateCollector`), and generates a diff (`DivergenceReportGenerator`). 
-- **Endpoint:** Exposed `GET /audit/storage` on the `MetricsServer`.
-- **Validation:** Wrote `StorageAuditRealityTest` which proves the pipeline correctly detects an induced physical chunk deletion as `UNDER_REPLICATED`, and clears the divergence when the chunk is restored. 
-- **Crucial Rule Maintained:** The audit framework *strictly* observes. It contains exactly zero repair or mutation logic.
+- **Source of Truth (ADR-016):** Raft Log → `ClusterStateMachine` → `FileIndex` (materialized view).
+- **Audit pipeline:** `ChunkMetadataInventory` → `ObservedStateCollector` → `DivergenceReportGenerator`.
+- **Endpoint:** `GET /audit/storage`.
+- **Validation:** `StorageAuditRealityTest` detects induced `UNDER_REPLICATED` divergence and clears on restore.
+- **Rule:** Audit strictly observes. Zero repair or mutation logic.
+
+### Sprint 3: Raft Membership Correctness ✅ SIGNED OFF
+- **Core change:** `votingPeers` now comes from `ClusterConfiguration.voters()` (Raft-replicated), NOT from Gossip. Gossip is now a liveness concern only.
+- **Bootstrap/Join split:**
+  - `--bootstrap`: Genesis `ADD_VOTER(self)` at log index 1, self-elects.
+  - Default (join mode): Empty voters, non-electable, waits for leader promotion.
+- **Voter set derived from log:** `ClusterConfiguration` is always reconstructed via state machine replay, never set imperatively.
+- **Dynamic electability:** `BooleanSupplier isVotingMember` allows voter promotion without restart.
+- **Leader-side safety guards:** Existence/reachability, replication lag, not-already-voter, one-in-flight constraint.
+- **Self-removal:** Leader can `REMOVE_VOTER(self)` — steps down, new leader elected.
+- **Non-voter vote granting:** `handleRequestVote()` does NOT check `isVotingMember`. Non-voters grant votes per Raft paper. Only `onElectionTimeout()` gates election initiation.
+
+#### Key files
+| File | Purpose |
+|------|---------|
+| [ClusterConfiguration.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-consensus/src/main/java/com/aegisos/consensus/ClusterConfiguration.java) | Raft-replicated voter/observer set with version counter |
+| [ConsensusModule.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-consensus/src/main/java/com/aegisos/consensus/ConsensusModule.java) | Genesis entry, membership validation, lag threshold |
+| [RaftNode.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-consensus/src/main/java/com/aegisos/consensus/RaftNode.java) | Election gate, vote granting, self-removal fix, replayCommitted() |
+| [AegisNode.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-node/src/main/java/com/aegisos/node/AegisNode.java) | Dynamic votingPeers/isVotingMember suppliers |
+
+#### Test coverage (31 tests, all passing)
+| Test | What it proves |
+|------|---------------|
+| `PartitionSafetyTest` | Network partition: only majority elects leader |
+| `RaftQuorumIsolationTest` | Dead voters stay in quorum (Gossip DEAD ≠ voter removal) |
+| `SelfRemovalLeaderTest` | Leader removes self, steps down, new leader elected |
+| `VoterPromotionTest` | Promoted non-voter starts election after leader death |
+| `JoinModeNonElectableTest` | Join-mode node cannot self-elect |
+| `AddOfflineVoterRejectedTest` | Cannot promote unreachable node |
+| `ConfigurationSurvivesRestartTest` | ADD_VOTER entries survive full cluster restart |
+| `NonVoterGrantsVoteTest` | Non-voters grant RequestVote RPCs |
 
 ---
 
 ## 2. Core Architecture Decision Records (ADRs)
 
-Before writing code for any reconciliation, you must understand these locked ADRs in `docs/adr/`:
+Before writing code, understand these locked ADRs in `docs/adr/`:
 
 | ADR | Decision |
-| --- | --- |
-| **ADR-016** | **Source of Truth Policy.** The Raft Log is authoritative. `FileIndex` is the authoritative materialized view. We audit the physical reality against the materialized view. |
-| **ADR-018** | **Client Transport Strategy.** Clients (CLI) use the existing `NetworkLayer` via `CLIENT_COMMAND`/`CLIENT_QUERY`. We do NOT add HTTP `api_port` fields to Gossip `Hello` messages just for client convenience. |
-| **ADR-017** | **Verification Contract.** **[LOCKED FOR SPRINT 3]** Strictly defines what evidence is required before proposing a repair to Raft. Example: Storage repairs require *two consecutive audit scans* + *membership validation* + *physical observation agreement*. |
+|-----|----------|
+| **ADR-016** | **Source of Truth Policy.** Raft Log is authoritative. `FileIndex` is the authoritative materialized view. |
+| **ADR-017** | **Verification Contract.** Repairs require *two consecutive audit scans* + *membership validation* + *physical observation agreement*. |
+| **ADR-018** | **Client Transport Strategy.** Clients (CLI) use `CLIENT_COMMAND`/`CLIENT_QUERY` via `NetworkLayer`. No HTTP port in Gossip. |
 
 ---
 
 ## 3. Current Project State
 
 | Area | Status |
-| --- | --- |
-| Storage durability | Proven |
-| Corruption detection | Proven |
-| CLI membership isolation | Proven |
-| Membership visibility | Proven |
-| Storage audit framework | Proven |
-| **Raft decoupling from Gossip** | **NOT BUILT (High Risk)** |
-| **Reconciliation engine** | **NOT BUILT** |
-| Formal cluster configuration | Not built |
-| Snapshots | Not built |
+|------|--------|
+| Storage durability | ✅ Proven |
+| Corruption detection | ✅ Proven |
+| CLI membership isolation | ✅ Proven |
+| Membership visibility | ✅ Proven |
+| Storage audit framework | ✅ Proven |
+| Raft decoupled from Gossip | ✅ **Proven (Sprint 3)** |
+| Formal cluster configuration | ✅ **Built (Sprint 3)** |
+| **Reconciliation engine** | **NOT BUILT (Sprint 4)** |
+| **Snapshots** | **NOT BUILT (Sprint 6)** |
 
 ---
 
-## 4. Where to Start (Sprint 3)
+## 4. Sprint Roadmap
 
-We are currently parked at a major architectural checkpoint. The implementation plan for Sprint 3 has been drafted and submitted to the user for review.
+```text
+Sprint 1  ✅  CLI Isolation + Membership Visibility
+Sprint 2  ✅  Storage Audit Framework (Measurement-Only)
+Sprint 3  ✅  Raft Membership Correctness
+Sprint 4  ←   Reconciliation Engine
+Sprint 5       Observability Expansion
+Sprint 6       Snapshots
+```
 
-**DO NOT WRITE RECONCILIATION CODE YET.** 
+---
 
-The biggest unsolved correctness risk is the coupling of Raft to Gossip (`votingPeers = discovery.membership().allPeers()`). If we build automated Raft repair proposals on top of a dynamically shrinking/growing quorum, we risk catastrophic split-brain scenarios. 
+## 5. Where to Start (Sprint 4: Reconciliation Engine)
 
-**Next Steps for You:**
-1. Read the drafted `implementation_plan.md` in the workspace root.
-2. Await the user's feedback on Sprint 3 Sequencing (whether to fix Raft decoupling in Sprint 3A before building the Reconciliation Engine in Sprint 3B) and Raft Bootstrapping semantics.
-3. Execute the approved plan.
+The biggest remaining correctness risk is now the repair/reconciliation pipeline.
+
+### What Sprint 4 should build
+
+The reconciliation engine operates **on top of** the membership model established in Sprint 3. It should:
+
+1. **Use the audit pipeline from Sprint 2** — `ChunkMetadataInventory` + `ObservedStateCollector` + `DivergenceReportGenerator` provide the input.
+2. **Propose repairs via Raft** — any mutation must go through `consensus.propose()`.
+3. **Respect ADR-017** — repairs require two consecutive audit scans + membership validation + physical observation agreement before proposal.
+4. **Never bypass ClusterConfiguration** — the reconciliation engine must check `ClusterConfiguration.voters()` for membership decisions, not Gossip.
+
+### Critical constraints
+
+- **Do NOT auto-promote nodes.** Voter management is manual (`add-voter` / `remove-voter` CLI commands).
+- **Do NOT couple repair logic to Gossip liveness.** Use Gossip only for "is this node reachable?" checks, never for "who is in the cluster?"
+- **Scope to `UNDER_REPLICATED` first.** Start with the simplest case (missing replicas), not over-replication or corruption repair.
+
+### Key entry points
+
+- [DivergenceReportGenerator.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-fs/src/main/java/com/aegisos/fs/DivergenceReportGenerator.java) — produces the divergence report
+- [ObservedStateCollector.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-fs/src/main/java/com/aegisos/fs/ObservedStateCollector.java) — queries physical chunk presence
+- [ChunkMetadataInventory.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-fs/src/main/java/com/aegisos/fs/ChunkMetadataInventory.java) — derives expected state from metadata
+
+### What to read first
+
+1. This handoff (you're reading it)
+2. `docs/adr/` — the three locked ADRs
+3. `docs/v0.4/raft-membership-design-review.md` — Sprint 3 design rationale
+4. The Sprint 3 walkthrough artifact (conversation artifacts directory)
+5. `StorageAuditRealityTest.java` — the Sprint 2 proof that the audit pipeline works
+
+---
+
+## 6. Build and Test
+
+```bash
+# Full build
+mvn clean install
+
+# Run all integration tests (includes chaos marathon, ~7 min)
+mvn test -pl aegis-test-cluster
+
+# Run only Sprint 3 safety tests (~40s)
+mvn test -pl aegis-test-cluster -Dtest="PartitionSafetyTest,RaftQuorumIsolationTest,SelfRemovalLeaderTest,VoterPromotionTest,ConfigurationSurvivesRestartTest,NonVoterGrantsVoteTest,JoinModeNonElectableTest"
+
+# Run a 3-node cluster locally
+java -jar aegis-cli/target/aegis-cli-*.jar start --bootstrap --port 7001 --home node1
+java -jar aegis-cli/target/aegis-cli-*.jar start --seed 127.0.0.1:7001 --port 7002 --home node2
+java -jar aegis-cli/target/aegis-cli-*.jar start --seed 127.0.0.1:7001 --port 7003 --home node3
+```
