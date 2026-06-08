@@ -89,26 +89,47 @@ public final class StorageVerifier {
 
         List<Long> evidenceScans = store.evidenceScansFor(chunkId, REQUIRED_CONSECUTIVE_SCANS);
 
-        // Step 2: Membership check — are the missing nodes actually ALIVE?
+        // Step 2: Membership check — is there at least one missing node that is ALIVE?
+        // Rationale: Absence on a DEAD or UNREACHABLE node is expected and is NOT a repair trigger.
+        // Therefore, we only care about missing nodes that are expected to be ALIVE.
+        // If a missing node is not ALIVE, we ignore it. If there are no ALIVE missing nodes left, then we cannot verify.
+        boolean hasAliveMissing = false;
         for (NodeId missingNode : divergence.missingFromNodes) {
             PeerStatus status = discovery.membership().statusOf(missingNode);
-            if (status != PeerStatus.ALIVE) {
-                return new VerificationResult(
-                        chunkId,
-                        VerificationStatus.NODE_UNAVAILABLE,
-                        "Node " + missingNode.shortId() + " has status " + status.name()
-                                + "; cannot verify divergence while node is unavailable",
-                        currentScanId,
-                        evidenceScans
-                );
+            if (status == PeerStatus.ALIVE) {
+                hasAliveMissing = true;
+                break;
             }
+        }
+        if (!hasAliveMissing) {
+            return new VerificationResult(
+                    chunkId,
+                    VerificationStatus.NODE_UNAVAILABLE,
+                    "No missing nodes are currently ALIVE; cannot verify divergence",
+                    currentScanId,
+                    evidenceScans
+            );
         }
 
         // Step 3: Re-observe physical reality NOW
         try {
             Map<NodeId, Set<String>> freshObserved =
                     observedStateCollector.observeRemoteState(network, discovery.membership(), self, chunkStore);
-            List<ChunkMetadataInventory.ChunkInventoryRecord> freshExpected = inventory.build();
+            List<ChunkMetadataInventory.ChunkInventoryRecord> freshExpectedRaw = inventory.build();
+            List<ChunkMetadataInventory.ChunkInventoryRecord> freshExpected = new java.util.ArrayList<>();
+            for (ChunkMetadataInventory.ChunkInventoryRecord rec : freshExpectedRaw) {
+                List<NodeId> aliveExpected = new java.util.ArrayList<>();
+                for (NodeId node : rec.expectedReplicaNodes()) {
+                    if (node.equals(self) || discovery.membership().statusOf(node) == PeerStatus.ALIVE) {
+                        aliveExpected.add(node);
+                    }
+                }
+                freshExpected.add(new ChunkMetadataInventory.ChunkInventoryRecord(
+                        rec.chunkIdHex(),
+                        rec.requiredReplicationFactor(),
+                        aliveExpected
+                ));
+            }
 
             DivergenceReportGenerator generator = new DivergenceReportGenerator();
             List<DivergenceReportGenerator.UnderReplicatedChunk> freshDivergences =

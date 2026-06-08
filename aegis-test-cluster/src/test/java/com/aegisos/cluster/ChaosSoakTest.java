@@ -165,7 +165,7 @@ public class ChaosSoakTest {
                         () -> replacement.artifactRegistry().bySha256(currentArtifactId).isPresent());
                 assertTrue(replacementWarm, "Replacement node must catch up registry");
 
-                // Wait for SelfHealingReaper to restore chunks (interval is 2s in tests)
+                // Wait for the audit-based repair pipeline to restore chunks
                 Thread.sleep(8000);
 
                 // Verify replication factor is back to 3

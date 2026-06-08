@@ -151,6 +151,8 @@ enum CommandType {
   REMOVE_REPLICA    = 11;
   ADD_VOTER         = 12;
   REMOVE_VOTER      = 13;
+  REPAIR_CHUNK      = 14;
+  REPAIR_COMPLETE   = 15;
 }
 
 message StateCommand {
@@ -210,6 +212,26 @@ message RemoveReplica {
   bytes file_id  = 1;
   bytes chunk_id = 2;
   bytes node_id  = 3;
+}
+
+// Two-phase repair (Sprint 5 / ADR-019)
+// Phase A: Records the FACT that repair is authorized.
+// Contains NO operational data (no source, no target).
+message RepairChunk {
+  string repair_id              = 1;  // UUID, unique per repair attempt
+  bytes  chunk_id               = 2;  // which chunk needs repair
+  repeated int64 evidence_scans = 3;  // scan IDs from verification
+  int64  verified_at            = 4;  // timestamp of verification
+}
+
+// Phase B: Records the RESULT of a successful physical copy.
+// Contains operational data because it reflects completed reality.
+message RepairComplete {
+  string repair_id      = 1;  // matches the REPAIR_CHUNK repair_id
+  bytes  file_id        = 2;  // resolved during copy execution
+  bytes  chunk_id       = 3;
+  bytes  target_node_id = 4;  // where the chunk was actually stored
+  bytes  source_node_id = 5;  // where it was fetched from (audit trail)
 }
 
 // ---------------------------------------------------------------------------

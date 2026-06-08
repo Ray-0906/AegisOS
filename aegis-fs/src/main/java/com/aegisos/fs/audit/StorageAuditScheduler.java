@@ -4,6 +4,7 @@ import com.aegisos.core.identity.NodeId;
 import com.aegisos.discovery.DiscoveryService;
 import com.aegisos.fs.AegisFS;
 import com.aegisos.network.NetworkLayer;
+import com.aegisos.proto.PeerStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,6 +48,9 @@ public final class StorageAuditScheduler implements AutoCloseable {
 
     private volatile List<VerificationResult> currentVerifications = Collections.emptyList();
     private volatile List<RepairRecommendation> currentRecommendations = Collections.emptyList();
+    private volatile RepairProposer repairProposer;
+    private volatile List<RepairOutcome> currentRepairOutcomes = Collections.emptyList();
+    private final List<RepairOutcome> historicalRepairOutcomes = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
@@ -98,15 +102,30 @@ public final class StorageAuditScheduler implements AutoCloseable {
         if (!isLeader.getAsBoolean()) {
             currentVerifications = Collections.emptyList();
             currentRecommendations = Collections.emptyList();
+            currentRepairOutcomes = Collections.emptyList();
             log.debug("Skip audit scan: not the consensus leader");
             return;
         }
         long scanId = scanCounter.incrementAndGet();
         long timestamp = System.currentTimeMillis();
 
-        // Step 1: Collect expected inventory
+        // Step 1: Collect expected inventory (filtering only alive expected nodes)
         ChunkMetadataInventory inventory = new ChunkMetadataInventory(fileSystem.fileIndex());
-        List<ChunkMetadataInventory.ChunkInventoryRecord> expected = inventory.build();
+        List<ChunkMetadataInventory.ChunkInventoryRecord> expectedRaw = inventory.build();
+        List<ChunkMetadataInventory.ChunkInventoryRecord> expected = new ArrayList<>();
+        for (ChunkMetadataInventory.ChunkInventoryRecord rec : expectedRaw) {
+            List<NodeId> aliveExpected = new ArrayList<>();
+            for (NodeId node : rec.expectedReplicaNodes()) {
+                if (node.equals(self) || discovery.membership().statusOf(node) == PeerStatus.ALIVE) {
+                    aliveExpected.add(node);
+                }
+            }
+            expected.add(new ChunkMetadataInventory.ChunkInventoryRecord(
+                    rec.chunkIdHex(),
+                    rec.requiredReplicationFactor(),
+                    aliveExpected
+            ));
+        }
 
         // Step 2: Observe physical state
         ObservedStateCollector collector = new ObservedStateCollector();
@@ -125,6 +144,7 @@ public final class StorageAuditScheduler implements AutoCloseable {
         if (divergences.isEmpty()) {
             currentVerifications = Collections.emptyList();
             currentRecommendations = Collections.emptyList();
+            currentRepairOutcomes = Collections.emptyList();
             log.debug("Audit scan {} complete: no divergences", scanId);
             return;
         }
@@ -168,8 +188,20 @@ public final class StorageAuditScheduler implements AutoCloseable {
         currentVerifications = Collections.unmodifiableList(newVerifications);
         currentRecommendations = Collections.unmodifiableList(newRecommendations);
 
-        log.info("Audit scan {} complete: {} divergences, {} verified, {} recommendations",
-                scanId, divergences.size(), newRecommendations.size(), newRecommendations.size());
+        // Step 7 & 8: Propose and execute repairs
+        if (repairProposer != null && isLeader.getAsBoolean()) {
+            List<RepairOutcome> phaseA = repairProposer.proposeRepairs();
+            List<RepairOutcome> phaseB = repairProposer.executeAndComplete();
+            List<RepairOutcome> merged = new ArrayList<>(phaseA);
+            merged.addAll(phaseB);
+            currentRepairOutcomes = Collections.unmodifiableList(merged);
+            historicalRepairOutcomes.addAll(merged);
+        } else {
+            currentRepairOutcomes = Collections.emptyList();
+        }
+
+        log.info("Audit scan {} complete: {} divergences, {} verified, {} recommendations, {} repair outcomes",
+                scanId, divergences.size(), newRecommendations.size(), newRecommendations.size(), currentRepairOutcomes.size());
     }
 
     public List<VerificationResult> getVerifications() {
@@ -182,6 +214,18 @@ public final class StorageAuditScheduler implements AutoCloseable {
 
     public AuditReportStore getStore() {
         return store;
+    }
+
+    public void setRepairProposer(RepairProposer proposer) {
+        this.repairProposer = proposer;
+    }
+
+    public List<RepairOutcome> getRepairOutcomes() {
+        return currentRepairOutcomes;
+    }
+
+    public List<RepairOutcome> getHistoricalRepairOutcomes() {
+        return new ArrayList<>(historicalRepairOutcomes);
     }
 
     @Override

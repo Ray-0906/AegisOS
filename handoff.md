@@ -9,7 +9,7 @@
 
 - **What it is:** AegisOS — a secure, peer-to-peer, distributed OS runtime in **Java 21**. Nodes authenticate, gossip membership, store files, and execute JAR artifacts. 
 - **Current Phase:** We are in the **v0.4 Correctness and Observability Refactor**. The system has moved from "assumed correctness" to "proven correctness" with strict audit frameworks, membership decoupling, and verification contracts.
-- **Milestone Status:** Sprints 1, 2, 3, and 4 are **COMPLETE and SIGNED OFF**. Ready to begin Sprint 5 (Observability Expansion).
+- **Milestone Status:** Sprints 1, 2, 3, 4, and 5 are **COMPLETE and SIGNED OFF**. Sprint 6 (Snapshots & Log Compaction) is the next planned work.
 
 ---
 
@@ -71,6 +71,20 @@
   - `LeaderOnlyAuditSchedulerTest` (integration): Tests leader-only semantics and failover audit handoff.
   - `Sprint4SignOffTest` (integration): Tests the complete 4-phase non-mutating pipeline.
 
+### Sprint 5: Two-Phase Repair Execution ✅ SIGNED OFF
+- **Two-Phase Repair (ADR-019):** Repair is split into two committed Raft entries to guarantee that metadata always equals physical reality at every committed state transition.
+  - **Phase A:** `REPAIR_CHUNK` creates a `RepairTask(PENDING)` — no FileIndex mutation.
+  - **Phase B:** `REPAIR_COMPLETE` applies `ADD_REPLICA` to FileIndex — metadata matches reality.
+- **RepairProposer:** Leader-only engine that consumes `RepairRecommendation` from Sprint 4's verification pipeline. Applies freshness guard, pre-proposal re-verification (using physical observation, not stale metadata), and one-repair-per-chunk-in-flight limit.
+- **RepairTaskStore:** Raft-replicated state tracking repair lifecycle (PENDING → COMPLETE / EXPIRED). Tasks expire after `repairTaskTimeoutSeconds` (default 300s).
+- **Source/Target Selection:** Operational decisions made after `REPAIR_CHUNK` commit, using physical observation (`ObservedStateCollector`) instead of `FileIndex` metadata to avoid stale-state bugs.
+- **Failure Handling:** Copy failures leave `FileIndex` unchanged; the audit pipeline naturally re-detects the divergence. Leadership transfers do NOT continue half-finished repairs — new leaders wait for PENDING tasks to expire before independently re-verifying.
+- **Legacy Cleanup:** `SelfHealingReaper.java` deleted. All references and test comments updated to reference the new audit-based repair pipeline.
+- **Test coverage:**
+  - `RepairExecutionSignOffTest` (integration): 7-phase test validating the complete audit → verify → recommend → REPAIR_CHUNK → copy → REPAIR_COMPLETE → clean pipeline.
+  - `RepairCopyFailureTest` (integration): 4-phase test proving copy failures leave FileIndex unchanged and the pipeline retries.
+  - `RepairLeaderFailoverTest` (integration): 5-phase test proving new leaders do not continue half-finished repairs, build fresh evidence, and complete repairs independently.
+
 ---
 
 ## 2. Core Architecture Decision Records (ADRs)
@@ -82,6 +96,7 @@ Before writing code, understand these locked ADRs in `docs/adr/`:
 | **ADR-016** | **Source of Truth Policy.** Raft Log is authoritative. `FileIndex` is the authoritative materialized view. |
 | **ADR-017** | **Verification Contract.** Repairs require *two consecutive audit scans* + *membership validation* + *physical observation agreement*. |
 | **ADR-018** | **Client Transport Strategy.** Clients (CLI) use `CLIENT_COMMAND`/`CLIENT_QUERY` via `NetworkLayer`. No HTTP port in Gossip. |
+| **ADR-019** | **Repair Execution Contract.** Leader-only repair proposals via `REPAIR_CHUNK`. Requires freshness guard, pre-proposal re-verification, in-flight limits, and idempotent apply. Physical copy is a post-commit side effect. |
 
 ---
 
@@ -97,7 +112,11 @@ Before writing code, understand these locked ADRs in `docs/adr/`:
 | Raft decoupled from Gossip | ✅ **Proven (Sprint 3)** |
 | Formal cluster configuration | ✅ **Built (Sprint 3)** |
 | **Reconciliation engine** | ✅ **Proven (Sprint 4)** |
+| **Repair execution** | ✅ **Proven (Sprint 5)** |
 | **Snapshots** | **NOT BUILT (Sprint 6)** |
+
+> [!NOTE]
+> **Legacy Code Removed:** `SelfHealingReaper.java` was a pre-ADR-017 self-healing mechanism. It was deleted after Sprint 5 acceptance tests passed. The two-phase repair pipeline (ADR-019) is now the sole repair path.
 
 ---
 
@@ -108,44 +127,39 @@ Sprint 1  ✅  CLI Isolation + Membership Visibility
 Sprint 2  ✅  Storage Audit Framework (Measurement-Only)
 Sprint 3  ✅  Raft Membership Correctness
 Sprint 4  ✅  Verification + Recommendation Pipeline
-Sprint 5  ←   Observability Expansion
-Sprint 6       Snapshots
+Sprint 5  ✅  Two-Phase Repair Execution
+Sprint 6  ←   Snapshots & Log Compaction
 ```
 
 ---
 
-## 5. Where to Start (Sprint 4: Reconciliation Engine)
+## 5. Where to Start (Sprint 6: Snapshots & Log Compaction)
 
-The biggest remaining correctness risk is now the repair/reconciliation pipeline.
+The biggest remaining operational risk is unbounded Raft log growth.
 
-### What Sprint 4 should build
+### What Sprint 6 should build
 
-The reconciliation engine operates **on top of** the membership model established in Sprint 3. It should:
+Raft snapshots and log compaction to prevent unbounded memory/disk usage on long-running clusters.
 
-1. **Use the audit pipeline from Sprint 2** — `ChunkMetadataInventory` + `ObservedStateCollector` + `DivergenceReportGenerator` provide the input.
-2. **Propose repairs via Raft** — any mutation must go through `consensus.propose()`.
-3. **Respect ADR-017** — repairs require two consecutive audit scans + membership validation + physical observation agreement before proposal.
-4. **Never bypass ClusterConfiguration** — the reconciliation engine must check `ClusterConfiguration.voters()` for membership decisions, not Gossip.
-
-### Critical constraints
-
-- **Do NOT auto-promote nodes.** Voter management is manual (`add-voter` / `remove-voter` CLI commands).
-- **Do NOT couple repair logic to Gossip liveness.** Use Gossip only for "is this node reachable?" checks, never for "who is in the cluster?"
-- **Scope to `UNDER_REPLICATED` first.** Start with the simplest case (missing replicas), not over-replication or corruption repair.
+1. **State Machine Snapshotting** — serialize `ClusterStateMachine` state (ClusterConfiguration, FileIndex, ArtifactRegistry, RepairTaskStore) to disk.
+2. **Log Truncation** — discard committed log entries up to the snapshot index.
+3. **Snapshot Transfer** — allow new/lagging nodes to catch up via snapshot install instead of full log replay.
+4. **Snapshot Trigger** — configurable threshold (e.g., every 10,000 committed entries).
 
 ### Key entry points
 
-- [DivergenceReportGenerator.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-fs/src/main/java/com/aegisos/fs/DivergenceReportGenerator.java) — produces the divergence report
-- [ObservedStateCollector.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-fs/src/main/java/com/aegisos/fs/ObservedStateCollector.java) — queries physical chunk presence
-- [ChunkMetadataInventory.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-fs/src/main/java/com/aegisos/fs/ChunkMetadataInventory.java) — derives expected state from metadata
+- [ClusterStateMachine.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-consensus/src/main/java/com/aegisos/consensus/ClusterStateMachine.java) — the state that needs snapshotting
+- [RaftNode.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-consensus/src/main/java/com/aegisos/consensus/RaftNode.java) — log truncation and snapshot install RPC
+- [AegisFS.java](file:///c:/Users/astra/Desktop/projects/AgeisOS/aegis-fs/src/main/java/com/aegisos/fs/AegisFS.java) — FileIndex and RepairTaskStore serialization
 
 ### What to read first
 
 1. This handoff (you're reading it)
-2. `docs/adr/` — the three locked ADRs
-3. `docs/v0.4/raft-membership-design-review.md` — Sprint 3 design rationale
-4. The Sprint 3 walkthrough artifact (conversation artifacts directory)
-5. `StorageAuditRealityTest.java` — the Sprint 2 proof that the audit pipeline works
+2. `docs/adr/` — the four locked ADRs
+3. `docs/v0.4/sprint5-repair-design.md` — Sprint 5 design with two-phase state machine flow
+4. `docs/v0.4/raft-membership-design-review.md` — Sprint 3 design rationale
+5. The Sprint 5 walkthrough artifact (conversation artifacts directory)
+6. `RepairExecutionSignOffTest.java` — the proof that the two-phase repair pipeline works
 
 ---
 
@@ -160,6 +174,9 @@ mvn test -pl aegis-test-cluster
 
 # Run only Sprint 3 safety tests (~40s)
 mvn test -pl aegis-test-cluster -Dtest="PartitionSafetyTest,RaftQuorumIsolationTest,SelfRemovalLeaderTest,VoterPromotionTest,ConfigurationSurvivesRestartTest,NonVoterGrantsVoteTest,JoinModeNonElectableTest"
+
+# Run Sprint 5 repair acceptance tests (~15s)
+mvn test -pl aegis-test-cluster -Dtest="RepairExecutionSignOffTest,RepairCopyFailureTest,RepairLeaderFailoverTest"
 
 # Run a 3-node cluster locally
 java -jar aegis-cli/target/aegis-cli-*.jar start --bootstrap --port 7001 --home node1

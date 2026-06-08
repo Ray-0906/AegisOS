@@ -21,8 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 
  * Simulates an aggressive evening of abuse: 10 cycles of random node kills,
  * restarts, artifact uploads, and job executions on a cluster that is 
- * constantly churning. Proves that SelfHealingReaper successfully restores
- * the replication factor (RF=3) for artifacts after node deaths.
+ * constantly churning. Proves that the two-phase repair pipeline successfully
+ * restores the replication factor (RF=3) for artifacts after node deaths.
  */
 public class Phase10ChaosMarathonTest {
 
@@ -162,10 +162,10 @@ public class Phase10ChaosMarathonTest {
                         () -> replacement.artifactRegistry().bySha256(currentArtifactId).isPresent());
                 assertTrue(replacementWarm, "Replacement node must catch up registry");
 
-                // Wait for SelfHealingReaper to restore chunks to the replacement node
+                // Wait for audit-based repair pipeline to restore chunks to the replacement node
                 Thread.sleep(8000);
 
-                // Assert that the SelfHealingReaper actually restored RF=3
+                // Assert that the repair pipeline actually restored RF=3
                 assertReplicationFactorRestored(cluster, currentArtifactId, 3);
 
                 // 4. Periodically upload a new artifact to test write availability

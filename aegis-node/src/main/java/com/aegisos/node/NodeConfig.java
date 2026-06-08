@@ -29,6 +29,8 @@ public final class NodeConfig {
     private String clusterSecret = "aegis-dev-cluster-secret";
     private boolean bootstrap = false;
     private int membershipLagThreshold = 10;
+    private int repairRecommendationMaxAgeSeconds = 180;
+    private int repairTaskTimeoutSeconds = 300;
 
     public boolean bootstrap() {
         return bootstrap;
@@ -49,6 +51,24 @@ public final class NodeConfig {
 
     public NodeConfig membershipLagThreshold(int threshold) {
         this.membershipLagThreshold = threshold;
+        return this;
+    }
+
+    public int repairRecommendationMaxAgeSeconds() {
+        return repairRecommendationMaxAgeSeconds;
+    }
+
+    public NodeConfig repairRecommendationMaxAgeSeconds(int sec) {
+        this.repairRecommendationMaxAgeSeconds = sec;
+        return this;
+    }
+
+    public int repairTaskTimeoutSeconds() {
+        return repairTaskTimeoutSeconds;
+    }
+
+    public NodeConfig repairTaskTimeoutSeconds(int sec) {
+        this.repairTaskTimeoutSeconds = sec;
         return this;
     }
 

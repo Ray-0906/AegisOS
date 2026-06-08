@@ -9,8 +9,8 @@ import com.aegisos.core.identity.KeyStore;
 import com.aegisos.core.message.MessageType;
 import com.aegisos.discovery.DiscoveryService;
 import com.aegisos.fs.AegisFS;
-import com.aegisos.fs.SelfHealingReaper;
 import com.aegisos.fs.audit.StorageAuditScheduler;
+import com.aegisos.fs.audit.RepairProposer;
 import com.aegisos.network.NetworkLayer;
 import com.aegisos.proto.CommandType;
 import com.aegisos.proto.JobState;
@@ -50,7 +50,6 @@ public final class AegisNode implements AutoCloseable {
     private ArtifactRegistry artifactRegistry;
     private ArtifactCache artifactCache;
     private ArtifactClassLoader artifactClassLoader;
-    private SelfHealingReaper reaper;
     private StorageAuditScheduler auditScheduler;
     private ResourceReporter resourceReporter;
     private Scheduler scheduler;
@@ -118,10 +117,22 @@ public final class AegisNode implements AutoCloseable {
         artifactCache = new ArtifactCache(config.artifactCacheDir(), fileSystem);
         artifactClassLoader = new ArtifactClassLoader(artifactCache);
 
-        reaper = new SelfHealingReaper(fileSystem, consensus, discovery, identity.nodeId(),
-                config.replicationFactor(), config.reaperIntervalMs());
+
 
         auditScheduler = new StorageAuditScheduler(fileSystem, discovery, network, identity.nodeId(), consensus::isLeader);
+
+        RepairProposer proposer = new RepairProposer(
+            auditScheduler,
+            consensus,
+            fileSystem,
+            discovery,
+            network,
+            identity.nodeId(),
+            fileSystem.repairTaskStore(),
+            config.repairRecommendationMaxAgeSeconds() * 1000L,
+            config.repairTaskTimeoutSeconds() * 1000L
+        );
+        auditScheduler.setRepairProposer(proposer);
 
         NodeResourcesView resourcesView = new NodeResourcesView();
         runtimeAgent = new ProcessRuntimeAgent(consensus, network, identity.nodeId(), fileSystem,
@@ -159,7 +170,6 @@ public final class AegisNode implements AutoCloseable {
 
         // 4. Start all background subsystems now that in-memory state is fully populated
         fileSystem.start();
-        reaper.start();
         auditScheduler.start();
         runtimeAgent.start();
         network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
@@ -288,9 +298,7 @@ public final class AegisNode implements AutoCloseable {
         if (auditScheduler != null) {
             auditScheduler.close();
         }
-        if (reaper != null) {
-            reaper.close();
-        }
+
         if (fileSystem != null) {
             try {
                 fileSystem.close();

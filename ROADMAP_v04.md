@@ -9,29 +9,40 @@ This document outlines the v0.4 plan to transition AegisOS from "functionally co
 
 ## Sprint Plan
 
-### Sprint 1: Membership & Foundations
-* **Close ADR-013 (Client Mode vs. Node Mode):** Establish strict, accurate membership. If membership is wrong, node counts, replica counts, and audits are wrong.
-* **Define Verification Contracts:** Refine ADR-017 to explicitly define who initiates verification, what constitutes evidence (object-specific), and what threshold allows repair.
+### Sprint 1: CLI Isolation & Membership Visibility ✅ COMPLETE
+* **ADR-013 (Client Mode vs. Node Mode):** CLI no longer joins as a transient Gossip member. Uses strict Client-Server boundary.
+* **ADR-018 (Client Transport Strategy):** Exposed `GET /membership` endpoint for visibility.
 
-### Sprint 2: Storage-First Auditing
-* **Implement the Audit Layer:** Detect and report divergence between Raft metadata and physical reality, starting with Storage (AegisFS) due to observed metadata growth issues (`MetadataReplicas=53` vs `LiveReplicas=3`).
-* **Periodic & Triggered Scans:**
-  - Periodic audit: `60s` intervals.
-  - Membership-triggered audit: `Immediate` (when a node joins, leaves, or is declared DEAD).
+### Sprint 2: Storage-First Auditing ✅ COMPLETE
+* **ADR-016 (Source of Truth Policy):** Raft Log → `ClusterStateMachine` → `FileIndex` is authoritative.
+* **Audit Layer:** `ChunkMetadataInventory` → `ObservedStateCollector` → `DivergenceReportGenerator`.
+* **Periodic Scans:** `60s` intervals via `StorageAuditScheduler`.
+* **Rule:** Audit strictly observes. Zero repair or mutation logic.
 
-### Sprint 3: Safe Reconciliation & Repair
-* **Execute Repairs based on Verified Audits:** Ensure repairs only occur when evidence meets strict, object-specific thresholds.
-  - *Storage:* Two consecutive scans confirming divergence.
-  - *Jobs:* Node DEAD + heartbeat expired + job absent + two scans.
-* **Mitigate False-Positive Reconciliation:** Prevent the cluster from committing repairs based on flawed audit data, which is currently the single largest risk for cluster-wide corruption.
+### Sprint 3: Raft Membership Correctness ✅ COMPLETE
+* **Raft decoupled from Gossip:** `votingPeers` from `ClusterConfiguration.voters()` (Raft-replicated), NOT Gossip.
+* **Bootstrap/Join split:** Genesis `ADD_VOTER(self)` at log index 1.
+* **Dynamic electability:** `BooleanSupplier isVotingMember` for voter promotion without restart.
+* **8 safety tests:** PartitionSafety, QuorumIsolation, SelfRemoval, VoterPromotion, etc.
 
-### Sprint 4: Snapshots & Log Compaction
-* **Raft Snapshots:** Implement state machine snapshotting and log truncation to prevent unbounded memory/disk usage on long-running clusters.
-* *Note: Can be swapped with Sprint 5 depending on operational pressure.*
+### Sprint 4: Verification + Recommendation Pipeline ✅ COMPLETE
+* **ADR-017 (Verification Contract):** Two consecutive audit scans + membership validation + physical observation.
+* **StorageVerifier:** Validates divergences via persistence, liveness, and re-observation.
+* **Target-free recommendations:** `RepairRecommendation` carries evidence, no placement decisions.
+* **Leader-only semantics:** Audit cycles run exclusively on the active consensus leader.
 
-### Sprint 5: Observability & Expansion
-* **Metrics & Telemetry:** Expose real-time data (`cluster_jobs_running`, replication lag, scheduler queue latency, recovery latency) to monitor the correctness of the new audit and repair mechanisms.
-* **Full Reconciliation Expansion:** Extend the audit and repair loops to cover all subsystems.
+### Sprint 5: Two-Phase Repair Execution ✅ COMPLETE
+* **ADR-019 (Repair Execution Contract):** Two-phase repair guaranteeing metadata == reality at every committed transition.
+* **Phase A:** `REPAIR_CHUNK` creates PENDING task (no metadata mutation).
+* **Phase B:** `REPAIR_COMPLETE` applies `ADD_REPLICA` to FileIndex after physical copy succeeds.
+* **RepairProposer:** Freshness guard, pre-proposal re-verification, one-repair-per-chunk-in-flight.
+* **RepairTaskStore:** Raft-replicated PENDING/COMPLETE/EXPIRED lifecycle.
+* **Legacy cleanup:** `SelfHealingReaper.java` deleted.
+* **3 acceptance tests:** RepairExecutionSignOff, RepairCopyFailure, RepairLeaderFailover.
+
+### Sprint 6: Snapshots & Log Compaction ← NEXT
+* **Raft Snapshots:** Implement state machine snapshotting and log truncation to prevent unbounded memory/disk usage.
+* **Snapshot Transfer:** Allow lagging nodes to catch up via snapshot install.
 
 ---
 
@@ -39,3 +50,4 @@ This document outlines the v0.4 plan to transition AegisOS from "functionally co
 - Containers / Kubernetes integration
 - Multi-tenancy & strict user isolation
 - Fair scheduling / GPU affinities
+

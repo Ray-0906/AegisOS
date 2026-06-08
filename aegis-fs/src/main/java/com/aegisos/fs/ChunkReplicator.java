@@ -54,7 +54,7 @@ public final class ChunkReplicator {
                     req.toByteArray(), CHUNK_RPC_TIMEOUT_MS).get(CHUNK_RPC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             return StoreChunkAck.parseFrom(reply.payload()).getStored();
         } catch (Exception e) {
-            log.debug("storeOn {} failed: {}", target.shortId(), e.toString());
+            log.warn("storeOn {} failed: {}", target.shortId(), e.toString(), e);
             return false;
         }
     }

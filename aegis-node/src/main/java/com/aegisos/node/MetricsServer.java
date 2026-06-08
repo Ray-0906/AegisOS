@@ -275,6 +275,72 @@ public final class MetricsServer implements AutoCloseable {
             }
         });
 
+        server.createContext("/audit/repairs", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            try {
+                var outcomes = node.auditScheduler().getHistoricalRepairOutcomes();
+                StringBuilder sb = new StringBuilder("[\n");
+                for (int i = 0; i < outcomes.size(); i++) {
+                    var o = outcomes.get(i);
+                    sb.append("  {\n");
+                    sb.append("    \"chunkId\": \"").append(o.chunkId()).append("\",\n");
+                    sb.append("    \"status\": \"").append(o.status().name()).append("\",\n");
+                    sb.append("    \"details\": \"").append(escapeJson(o.details())).append("\",\n");
+                    sb.append("    \"repairId\": ").append(o.repairId() == null ? "null" : "\"" + o.repairId() + "\"").append("\n");
+                    sb.append("  }");
+                    if (i < outcomes.size() - 1) sb.append(",");
+                    sb.append("\n");
+                }
+                sb.append("]");
+                byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to list repair outcomes", e);
+                exchange.sendResponseHeaders(500, -1);
+            }
+        });
+
+        server.createContext("/audit/tasks", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            try {
+                var tasks = node.fileSystem().repairTaskStore().all();
+                StringBuilder sb = new StringBuilder("[\n");
+                for (int i = 0; i < tasks.size(); i++) {
+                    var t = tasks.get(i);
+                    sb.append("  {\n");
+                    sb.append("    \"repairId\": \"").append(t.repairId()).append("\",\n");
+                    sb.append("    \"chunkId\": \"").append(t.chunkIdHex()).append("\",\n");
+                    sb.append("    \"evidenceScans\": ").append(t.evidenceScans()).append(",\n");
+                    sb.append("    \"verifiedAt\": ").append(t.verifiedAt()).append(",\n");
+                    sb.append("    \"committedAt\": ").append(t.committedAt()).append(",\n");
+                    sb.append("    \"status\": \"").append(t.status().name()).append("\"\n");
+                    sb.append("  }");
+                    if (i < tasks.size() - 1) sb.append(",");
+                    sb.append("\n");
+                }
+                sb.append("]");
+                byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to list repair tasks", e);
+                exchange.sendResponseHeaders(500, -1);
+            }
+        });
+
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
         log.info("Metrics server listening on http://0.0.0.0:{}/ (endpoints: /metrics, /health)", port);
