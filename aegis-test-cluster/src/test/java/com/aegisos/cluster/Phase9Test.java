@@ -119,6 +119,7 @@ public class Phase9Test {
     @Test
     void newNodeCatchesUpArtifactRegistryFromLog() throws Exception {
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));
@@ -162,6 +163,7 @@ public class Phase9Test {
     @Test
     void leaderDeathTriggersReelectionWithTwoSurvivors() throws Exception {
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));
@@ -214,6 +216,7 @@ public class Phase9Test {
     @Test
     void repeatedNodeChurnDoesNotBreakArtifactRuntime() throws Exception {
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));

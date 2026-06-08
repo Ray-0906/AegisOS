@@ -43,7 +43,7 @@ public final class RaftNode {
     private final RaftStateMachine stateMachine;
     private final Supplier<List<NodeId>> votingPeers;
     private final Supplier<List<NodeId>> allPeers;
-    private final boolean isVotingMember;
+    private final java.util.function.BooleanSupplier isVotingMember;
 
     private final ReentrantLock lock = new ReentrantLock();
     private final ScheduledExecutorService scheduler =
@@ -61,7 +61,7 @@ public final class RaftNode {
                     RaftTransport transport, RaftStateMachine stateMachine,
                     Supplier<List<NodeId>> votingPeers,
                     Supplier<List<NodeId>> allPeers,
-                    boolean isVotingMember) {
+                    java.util.function.BooleanSupplier isVotingMember) {
         this.self = self;
         this.raftLog = raftLog;
         this.metadata = metadata;
@@ -112,7 +112,8 @@ public final class RaftNode {
                     }
                 }
             }
-            log.info("Raft node {} startup replay complete (lastApplied={})", self.shortId(), lastApplied);
+            commitIndex = lastApplied;
+            log.info("Raft node {} startup replay complete (lastApplied={}, commitIndex={})", self.shortId(), lastApplied, commitIndex);
         } finally {
             lock.unlock();
         }
@@ -151,6 +152,18 @@ public final class RaftNode {
         return lastApplied;
     }
 
+    public long lastLogIndex() {
+        return raftLog.lastIndex();
+    }
+
+    public long matchIndex(NodeId peer) {
+        return replicator.matchIndex(peer);
+    }
+
+    public RaftLog raftLog() {
+        return raftLog;
+    }
+
     // --- client submission ----------------------------------------------
 
     /** Leader-only: appends a command and completes when it is committed. */
@@ -183,7 +196,8 @@ public final class RaftNode {
             if (role == RaftRole.LEADER) {
                 return;
             }
-            if (!isVotingMember) {
+            if (!isVotingMember.getAsBoolean()) {
+                electionTimer.reset();
                 return;
             }
             startElection();
@@ -265,6 +279,7 @@ public final class RaftNode {
         long next = raftLog.lastIndex() + 1;
         replicator.initLeader(votingPeers.get(), next);
         log.info("Node {} became LEADER for term {}, appended NO-OP at {}", self.shortId(), metadata.currentTerm(), noOpIndex);
+        advanceCommit();
         scheduler.execute(this::broadcastAppendEntries);
     }
 
@@ -379,6 +394,10 @@ public final class RaftNode {
                 CompletableFuture<Long> future = pending.remove(entry.getIndex());
                 if (future != null) {
                     future.complete(entry.getIndex());
+                }
+                if (role == RaftRole.LEADER && !isVotingMember.getAsBoolean()) {
+                    log.info("Leader {} was removed from voters set; stepping down to FOLLOWER", self.shortId());
+                    stepDown(metadata.currentTerm());
                 }
             }
         }

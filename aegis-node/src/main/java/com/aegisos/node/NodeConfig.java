@@ -27,9 +27,29 @@ public final class NodeConfig {
     private com.aegisos.proto.NodeRole role = com.aegisos.proto.NodeRole.CLUSTER_MEMBER;
     // v0.1: a shared cluster secret wraps per-chunk keys. Override in production.
     private String clusterSecret = "aegis-dev-cluster-secret";
+    private boolean bootstrap = false;
+    private int membershipLagThreshold = 10;
+
+    public boolean bootstrap() {
+        return bootstrap;
+    }
+
+    public NodeConfig bootstrap(boolean b) {
+        this.bootstrap = b;
+        return this;
+    }
 
     public Path homeDir() {
         return homeDir;
+    }
+
+    public int membershipLagThreshold() {
+        return membershipLagThreshold;
+    }
+
+    public NodeConfig membershipLagThreshold(int threshold) {
+        this.membershipLagThreshold = threshold;
+        return this;
     }
 
     public NodeConfig homeDir(Path dir) {

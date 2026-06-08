@@ -52,12 +52,34 @@ public class AuthoritativeMetadataSourceTest {
                     .port(0)
                     .advertiseHost("127.0.0.1");
             
+            boolean isBootstrap = nodes.isEmpty();
+            config.bootstrap(isBootstrap);
+            
             if (!nodes.isEmpty()) {
                 config.addSeed(new Endpoint("127.0.0.1", nodes.get(0).network().boundPort()));
             }
             AegisNode node = new AegisNode(config);
             node.start();
             nodes.add(node);
+            
+            if (!isBootstrap) {
+                // Wait for Gossip and replicator catch up, then add voter.
+                AegisNode leader = nodes.get(0);
+                ClusterHarness.await(10000, () -> {
+                    com.aegisos.proto.PeerStatus status = leader.discovery().membership().statusOf(node.identity().nodeId());
+                    return status == com.aegisos.proto.PeerStatus.ALIVE || status == com.aegisos.proto.PeerStatus.SUSPECT;
+                });
+                ClusterHarness.await(10000, () -> {
+                    long leaderLast = leader.consensus().raftNode().lastLogIndex();
+                    long match = leader.consensus().raftNode().matchIndex(node.identity().nodeId());
+                    return (leaderLast - match) <= 10;
+                });
+                com.aegisos.proto.StateCommand addCmd = com.aegisos.proto.StateCommand.newBuilder()
+                        .setType(com.aegisos.proto.CommandType.ADD_VOTER)
+                        .setPayload(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
+                        .build();
+                leader.consensus().propose(addCmd).get(10, java.util.concurrent.TimeUnit.SECONDS);
+            }
         }
 
         ClusterHarness.await(5000, () -> nodes.stream().allMatch(n -> n.discovery().membership().alivePeerIds().size() == 2));

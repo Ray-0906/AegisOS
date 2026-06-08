@@ -88,8 +88,8 @@ public class MembershipVisibilityTest {
     private void assertMembershipCorrectness(String json, int expectedNodes) {
         // Very basic JSON verification to avoid Jackson dependency.
         
-        // Check raftVoters count
-        Matcher raftMatcher = Pattern.compile("\"raftVoters\"\\s*:\\s*\\[([^\\]]*)\\]").matcher(json);
+        // Check voters count inside raftConfiguration
+        Matcher raftMatcher = Pattern.compile("\"voters\"\\s*:\\s*\\[([^\\]]*)\\]").matcher(json);
         assertTrue(raftMatcher.find());
         String raftVotersStr = raftMatcher.group(1);
         int raftCount = raftVotersStr.trim().isEmpty() ? 0 : raftVotersStr.split(",").length;
@@ -108,11 +108,11 @@ public class MembershipVisibilityTest {
         assertEquals(expectedNodes, gossipCount, "Expected exactly " + expectedNodes + " gossip peers. JSON: " + json);
         
         // Check delta is empty
-        Matcher deltaRaftMatcher = Pattern.compile("\"onlyInRaft\"\\s*:\\s*\\[\\s*\\]").matcher(json);
-        assertTrue(deltaRaftMatcher.find(), "onlyInRaft delta must be empty");
+        Matcher deltaRaftMatcher = Pattern.compile("\"votersNotInGossip\"\\s*:\\s*\\[\\s*\\]").matcher(json);
+        assertTrue(deltaRaftMatcher.find(), "votersNotInGossip delta must be empty");
         
-        Matcher deltaGossipMatcher = Pattern.compile("\"onlyInGossip\"\\s*:\\s*\\[\\s*\\]").matcher(json);
-        assertTrue(deltaGossipMatcher.find(), "onlyInGossip delta must be empty");
+        Matcher deltaGossipMatcher = Pattern.compile("\"gossipNotInVoters\"\\s*:\\s*\\[\\s*\\]").matcher(json);
+        assertTrue(deltaGossipMatcher.find(), "gossipNotInVoters delta must be empty");
     }
 
     private void runTransientClientQuery(String seedStr) throws Exception {

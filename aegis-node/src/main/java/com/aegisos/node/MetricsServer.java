@@ -215,12 +215,14 @@ public final class MetricsServer implements AutoCloseable {
     }
 
     private String buildMembershipJson() {
-        java.util.List<com.aegisos.core.identity.NodeId> raftVotersList = node.consensus().raftNode().votingPeers();
+        com.aegisos.consensus.ClusterConfiguration config = node.consensus().clusterConfiguration();
+        long version = config.version();
+        java.util.Set<com.aegisos.core.identity.NodeId> voters = config.voters();
+        
         java.util.List<com.aegisos.proto.PeerEntry> gossipPeersList = node.discovery().membership().allPeers();
         
         java.util.Set<String> raftSet = new java.util.HashSet<>();
-        raftSet.add(node.identity().nodeId().shortId());
-        for (com.aegisos.core.identity.NodeId id : raftVotersList) {
+        for (com.aegisos.core.identity.NodeId id : voters) {
             raftSet.add(id.shortId());
         }
         
@@ -230,25 +232,29 @@ public final class MetricsServer implements AutoCloseable {
             gossipSet.add(com.aegisos.core.util.HexUtil.shortId(p.getNodeId().toByteArray()));
         }
         
-        java.util.List<String> onlyInRaft = new java.util.ArrayList<>();
+        java.util.List<String> votersNotInGossip = new java.util.ArrayList<>();
         for (String r : raftSet) {
-            if (!gossipSet.contains(r)) onlyInRaft.add(r);
+            if (!gossipSet.contains(r)) votersNotInGossip.add(r);
         }
         
-        java.util.List<String> onlyInGossip = new java.util.ArrayList<>();
+        java.util.List<String> gossipNotInVoters = new java.util.ArrayList<>();
         for (String g : gossipSet) {
-            if (!raftSet.contains(g)) onlyInGossip.add(g);
+            if (!raftSet.contains(g)) gossipNotInVoters.add(g);
         }
         
         StringBuilder sb = new StringBuilder();
-        sb.append("{\n  \"raftVoters\": [");
+        sb.append("{\n");
+        sb.append("  \"raftConfiguration\": {\n");
+        sb.append("    \"version\": ").append(version).append(",\n");
+        sb.append("    \"voters\": [");
         int count = 0;
-        for (String r : raftSet) {
-            sb.append("\"").append(r).append("\"");
-            if (++count < raftSet.size()) sb.append(", ");
+        for (com.aegisos.core.identity.NodeId id : voters) {
+            sb.append("\"").append(id.shortId()).append("\"");
+            if (++count < voters.size()) sb.append(", ");
         }
-        sb.append("],\n  \"gossipPeers\": [\n");
+        sb.append("]\n  },\n");
         
+        sb.append("  \"gossipPeers\": [\n");
         if (!gossipPeersList.isEmpty()) {
             count = 0;
             for (com.aegisos.proto.PeerEntry p : gossipPeersList) {
@@ -259,18 +265,22 @@ public final class MetricsServer implements AutoCloseable {
                 if (++count < gossipPeersList.size()) sb.append(",\n");
             }
         }
-        sb.append("\n  ],\n  \"delta\": {\n    \"onlyInRaft\": [");
+        sb.append("\n  ],\n");
         
+        sb.append("  \"delta\": {\n");
+        sb.append("    \"votersNotInGossip\": [");
         count = 0;
-        for (String id : onlyInRaft) {
+        for (String id : votersNotInGossip) {
             sb.append("\"").append(id).append("\"");
-            if (++count < onlyInRaft.size()) sb.append(", ");
+            if (++count < votersNotInGossip.size()) sb.append(", ");
         }
-        sb.append("],\n    \"onlyInGossip\": [");
+        sb.append("],\n");
+        
+        sb.append("    \"gossipNotInVoters\": [");
         count = 0;
-        for (String id : onlyInGossip) {
+        for (String id : gossipNotInVoters) {
             sb.append("\"").append(id).append("\"");
-            if (++count < onlyInGossip.size()) sb.append(", ");
+            if (++count < gossipNotInVoters.size()) sb.append(", ");
         }
         sb.append("]\n  }\n}\n");
         

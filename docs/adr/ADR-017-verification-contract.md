@@ -1,8 +1,7 @@
 # ADR-017: Verification Contract
 
 ## Status
-DRAFT — sections marked [TBD] will be completed during Sprint 2
-using real audit observations. Lock before Sprint 3 begins.
+ACCEPTED (Locked for Sprint 3)
 
 ## Date
 2026-06-07
@@ -17,40 +16,33 @@ with full consensus guarantees.
 A false-positive repair is worse than metadata drift.
 It is consistent wrongness, replicated cluster-wide.
 
-## Who Initiates Verification
-The LEADER NODE exclusively.
+## Q1: Who Initiates Verification?
+The **LEADER NODE exclusively**.
 
 Two triggers (both required):
-- PERIODIC: every `aegis.audit.interval.seconds` (default: [TBD — set after
-  Sprint 2 observations. Do not hardcode 60 until audit data justifies it.])
-- MEMBERSHIP_CHANGE: fires immediately on node JOIN, node LEAVE, or node
+- **PERIODIC**: every `aegis.audit.interval.seconds` (default: 60)
+- **MEMBERSHIP_CHANGE**: fires immediately on node JOIN, node LEAVE, or node
   declared DEAD. No delay. These events are rare and high-signal.
 
 Non-leader nodes NEVER initiate verification.
 They respond to leader queries only.
 
-## Evidence Requirements by Object Type
+## Q2: What Evidence is Required? (By Object Type)
 
-Evidence requirements are OBJECT-SPECIFIC.
-There is no universal rule.
+Evidence requirements are OBJECT-SPECIFIC. There is no universal rule.
 
 ### Storage Chunks
 
 A repair proposal MAY be submitted to Raft ONLY when ALL of the
 following conditions are simultaneously true:
 
-1. The chunk is absent from a node that Raft metadata declares as a
-   replica holder.
-2. That node is confirmed LIVE in current Raft membership.
-   (Absence on a DEAD or UNREACHABLE node is expected and is NOT a
-   repair trigger.)
-3. The chunk's checksum on surviving holders matches the registry
-   checksum. (Protects against corrupted-registry false positives.)
-4. The same divergence was observed in at least TWO consecutive audit
-   scans, each separated by the full audit interval.
-   (Single-scan divergence NEVER triggers a proposal.)
-5. The surviving confirmed replica count is below the configured
-   replication factor.
+1. **Physical Observation Agreement**: The chunk is confirmed absent from a node that Raft metadata declares as a replica holder.
+2. **Membership Validation**: That node is confirmed LIVE in current Raft membership. (Absence on a DEAD or UNREACHABLE node is expected and is NOT a repair trigger.)
+3. **Checksum Match**: The chunk's checksum on surviving holders matches the registry checksum. (Protects against corrupted-registry false positives.)
+4. **Two Consecutive Audit Scans**: The exact same divergence was observed in at least TWO consecutive audit scans, each separated by the full audit interval. (Single-scan divergence NEVER triggers a proposal.)
+5. The surviving confirmed replica count is below the configured replication factor.
+
+*In short: Two consecutive audit scans + membership validation + physical observation agreement.*
 
 ### Jobs
 
@@ -62,7 +54,7 @@ following conditions are simultaneously true:
    Job absence on a live node is NOT sufficient evidence — it may be
    a GC pause, slow executor, or transient condition.
 2. The heartbeat from the assigned node has expired past the configured
-   threshold (`aegis.job.heartbeat.timeout.seconds`, default: [TBD]).
+   threshold (`aegis.job.heartbeat.timeout.seconds`, default: 30).
 3. The job is absent from execution records on the assigned node.
 4. The same orphaned state was observed in at least TWO consecutive
    audit scans.
@@ -79,23 +71,34 @@ following conditions are simultaneously true:
 3. The cache node is confirmed LIVE.
 4. The same divergence was observed in at least TWO consecutive scans.
 
+## Q3: What Action is Proposed?
+
+Important workflow constraint. The system MUST follow this sequence strictly:
+
+```text
+Audit
+   ↓
+Verification
+   ↓
+Repair Recommendation
+   ↓
+Raft Proposal
+   ↓
+Commit
+   ↓
+Repair Execution
+```
+
+**NOT:** `Audit → Repair`
+
+We do NOT bypass consensus. The output of the Verification phase is a `Repair Recommendation` that gets submitted to the `ClusterStateMachine` via a Raft `StateCommand` (e.g. `ADD_REPLICA`, `SCHEDULE_JOB`). Only upon successful Raft commit does the actual repair execution (e.g. copying the chunk, spinning up the job) take place.
+
 ## Minimum Confirmation Threshold
 Single-scan divergence NEVER produces a repair proposal.
-The two-scan minimum is enforced STRUCTURALLY (by the AuditReportStore
+The two-scan minimum is enforced STRUCTURALLY (e.g. by an `AuditReportStore`
 consecutive-scan API), not by convention or comment.
-
-## Audit Interval
-[TBD — to be determined from Sprint 2 observations.
-Configurable via `aegis.audit.interval.seconds`.
-Do not hardcode until real divergence data exists.]
 
 ## False-Positive Risk
 This is the primary risk of the reconciliation engine.
 The two-scan rule and the object-type-specific preconditions are the
 primary defenses. Do not weaken or bypass them without a new ADR.
-
-## Sections Remaining for Sprint 2
-- Confirmed audit interval value
-- Job heartbeat timeout threshold
-- Edge cases discovered during storage audit implementation
-- Any additional preconditions revealed by real divergence patterns

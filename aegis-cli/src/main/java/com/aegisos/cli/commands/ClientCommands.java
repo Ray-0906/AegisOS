@@ -342,6 +342,60 @@ final class ClientCommands {
         }
     }
 
+    static int runAddVoter(List<String> seeds, String targetNodeIdHex) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis raft add-voter: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    byte[] payload = com.aegisos.core.util.HexUtil.decode(targetNodeIdHex);
+                    com.aegisos.proto.StateCommand cmd = com.aegisos.proto.StateCommand.newBuilder()
+                            .setType(com.aegisos.proto.CommandType.ADD_VOTER)
+                            .setPayload(com.google.protobuf.ByteString.copyFrom(payload))
+                            .build();
+                    node.consensus().propose(cmd).get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    System.out.println("Voter " + targetNodeIdHex + " added successfully.");
+                    return 0;
+                } catch (Exception e) {
+                    System.err.println("Failed to add voter " + targetNodeIdHex + ": " + e.getMessage());
+                    return 1;
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("aegis raft add-voter failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    static int runRemoveVoter(List<String> seeds, String targetNodeIdHex) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis raft remove-voter: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    byte[] payload = com.aegisos.core.util.HexUtil.decode(targetNodeIdHex);
+                    com.aegisos.proto.StateCommand cmd = com.aegisos.proto.StateCommand.newBuilder()
+                            .setType(com.aegisos.proto.CommandType.REMOVE_VOTER)
+                            .setPayload(com.google.protobuf.ByteString.copyFrom(payload))
+                            .build();
+                    node.consensus().propose(cmd).get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    System.out.println("Voter " + targetNodeIdHex + " removed successfully.");
+                    return 0;
+                } catch (Exception e) {
+                    System.err.println("Failed to remove voter " + targetNodeIdHex + ": " + e.getMessage());
+                    return 1;
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("aegis raft remove-voter failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
     private static int notReady(String cmd) {
         System.err.println("aegis " + cmd + ": not available in this build");
         return 2;

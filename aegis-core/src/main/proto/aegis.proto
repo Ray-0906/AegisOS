@@ -149,6 +149,8 @@ enum CommandType {
   REGISTER_ARTIFACT = 9;
   ADD_REPLICA       = 10;
   REMOVE_REPLICA    = 11;
+  ADD_VOTER         = 12;
+  REMOVE_VOTER      = 13;
 }
 
 message StateCommand {

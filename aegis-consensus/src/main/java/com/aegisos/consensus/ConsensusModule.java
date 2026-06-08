@@ -10,6 +10,7 @@ import com.aegisos.proto.ClientCommandResult;
 import com.aegisos.proto.RequestVote;
 import com.aegisos.proto.RequestVoteResult;
 import com.aegisos.proto.StateCommand;
+import com.aegisos.proto.CommandType;
 import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,15 +35,52 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
     private final NetworkLayer network;
     private final RaftNode raftNode;
     private final ClusterStateMachine stateMachine;
+    private final ClusterConfiguration clusterConfiguration;
+    private final java.util.function.Function<NodeId, com.aegisos.proto.PeerStatus> peerStatusSupplier;
+    private final int lagThreshold;
 
     public ConsensusModule(NetworkLayer network, NodeId self, Path raftDir,
                            Supplier<List<NodeId>> votingPeers,
                            Supplier<List<NodeId>> allPeers,
-                           boolean isVotingMember) {
+                           java.util.function.BooleanSupplier isVotingMember,
+                           boolean bootstrap,
+                           int lagThreshold,
+                           java.util.function.Function<NodeId, com.aegisos.proto.PeerStatus> peerStatusSupplier) {
         this.network = network;
         this.stateMachine = new ClusterStateMachine();
+        this.clusterConfiguration = new ClusterConfiguration();
+        this.peerStatusSupplier = peerStatusSupplier;
+        this.lagThreshold = lagThreshold;
+
+        // Register configuration appliers.
+        this.stateMachine.register(CommandType.ADD_VOTER, clusterConfiguration::applyAddVoter);
+        this.stateMachine.register(CommandType.REMOVE_VOTER, clusterConfiguration::applyRemoveVoter);
+
         RaftLog raftLog = new RaftLog(raftDir.resolve("log.bin"));
         RaftMetadataStore metadata = new RaftMetadataStore(raftDir.resolve("meta.properties"));
+
+        // Initialize ClusterConfiguration based on existence of log and bootstrap flag.
+        boolean logExists = raftLog.lastIndex() > 0;
+        if (logExists) {
+            this.clusterConfiguration.initJoin();
+        } else {
+            if (bootstrap) {
+                try {
+                    StateCommand initCmd = StateCommand.newBuilder()
+                            .setType(CommandType.ADD_VOTER)
+                            .setPayload(ByteString.copyFrom(self.toBytes()))
+                            .build();
+                    raftLog.append(0, initCmd.toByteArray());
+                    log.info("Appended genesis ADD_VOTER for self ({}) at index 1", self.shortId());
+                } catch (Exception e) {
+                    log.error("Failed to append genesis configuration", e);
+                }
+                this.clusterConfiguration.initJoin();
+            } else {
+                this.clusterConfiguration.initJoin();
+            }
+        }
+
         this.raftNode = new RaftNode(self, raftLog, metadata, this, stateMachine, votingPeers, allPeers, isVotingMember);
     }
 
@@ -56,6 +94,10 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
 
     public RaftNode raftNode() {
         return raftNode;
+    }
+
+    public ClusterConfiguration clusterConfiguration() {
+        return clusterConfiguration;
     }
 
     public ClusterStateMachine stateMachine() {
@@ -85,11 +127,87 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
      * Proposes a command to the cluster. If this node is the leader it submits directly,
      * otherwise it forwards to the known leader. Completes when the command is committed.
      */
+    private void validateMembershipChange(StateCommand command) {
+        if (command.getType() == CommandType.ADD_VOTER) {
+            NodeId target = NodeId.of(command.getPayload().toByteArray());
+
+            // 1. Existence / Reachability: must be ALIVE or SUSPECT in Gossip
+            com.aegisos.proto.PeerStatus status = peerStatusSupplier.apply(target);
+            if (status != com.aegisos.proto.PeerStatus.ALIVE && status != com.aegisos.proto.PeerStatus.SUSPECT) {
+                throw new IllegalArgumentException("Cannot add voter: target node is not reachable or unknown (status=" + status + ")");
+            }
+
+            // 2. Replication lag: matchIndex must be within an acceptable lag of leader's last log index.
+            long leaderLastIndex = raftNode.lastLogIndex();
+            long followerMatchIndex = raftNode.matchIndex(target);
+            long lag = leaderLastIndex - followerMatchIndex;
+            if (lag > lagThreshold) {
+                throw new IllegalArgumentException("Cannot add voter: target node is lagging too far behind (lag=" + lag + " entries, limit is " + lagThreshold + ")");
+            }
+
+            // 3. Not already a voter: check ClusterConfiguration voters
+            if (clusterConfiguration.isVoter(target)) {
+                throw new IllegalArgumentException("Cannot add voter: target node is already a voter");
+            }
+
+            // 4. In-flight constraint: Only one configuration change may be in-flight at a time.
+            if (hasUncommittedConfigChanges()) {
+                throw new IllegalStateException("Cannot add voter: another membership change is already in progress (uncommitted)");
+            }
+
+        } else if (command.getType() == CommandType.REMOVE_VOTER) {
+            NodeId target = NodeId.of(command.getPayload().toByteArray());
+
+            // 1. Minimum voters: Reject REMOVE_VOTER if it would reduce voters below 1
+            int currentVoterCount = clusterConfiguration.voters().size();
+            if (!clusterConfiguration.isVoter(target)) {
+                throw new IllegalArgumentException("Cannot remove voter: target node is not a voter");
+            }
+            if (currentVoterCount <= 1) {
+                throw new IllegalArgumentException("Cannot remove voter: removing target would reduce voter count below 1");
+            }
+
+            // 2. In-flight constraint
+            if (hasUncommittedConfigChanges()) {
+                throw new IllegalStateException("Cannot remove voter: another membership change is already in progress (uncommitted)");
+            }
+        }
+    }
+
+    private boolean hasUncommittedConfigChanges() {
+        long commitIdx = raftNode.commitIndex();
+        long lastIdx = raftNode.lastLogIndex();
+        for (long idx = commitIdx + 1; idx <= lastIdx; idx++) {
+            com.aegisos.proto.RaftLogEntry entry = raftNode.raftLog().get(idx);
+            if (entry != null) {
+                try {
+                    StateCommand cmd = StateCommand.parseFrom(entry.getCommand());
+                    if (cmd.getType() == CommandType.ADD_VOTER || cmd.getType() == CommandType.REMOVE_VOTER) {
+                        return true;
+                    }
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Proposes a command to the cluster. If this node is the leader it submits directly,
+     * otherwise it forwards to the known leader. Completes when the command is committed.
+     */
     public CompletableFuture<Long> propose(StateCommand command) {
-        byte[] bytes = command.toByteArray();
         if (raftNode.isLeader()) {
+            try {
+                validateMembershipChange(command);
+            } catch (Exception e) {
+                return CompletableFuture.failedFuture(e);
+            }
+            byte[] bytes = command.toByteArray();
             return raftNode.submit(bytes);
         }
+        byte[] bytes = command.toByteArray();
         NodeId leader = raftNode.leaderId();
         if (leader == null) {
             // #region agent log
@@ -108,7 +226,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                         ClientCommandResult result = ClientCommandResult.parseFrom(reply.payload());
                         if (!result.getSuccess()) {
                             throw new NotLeaderException(result.getLeaderId().isEmpty() ? null
-                                    : NodeId.of(result.getLeaderId().toByteArray()));
+                                     : NodeId.of(result.getLeaderId().toByteArray()));
                         }
                         return result.getIndex();
                     } catch (CompletionException ce) {
@@ -152,6 +270,8 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
             result.setError("not leader");
         } else {
             try {
+                StateCommand cmd = StateCommand.parseFrom(msg.payload());
+                validateMembershipChange(cmd);
                 long index = raftNode.submit(msg.payload()).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
                 result.setSuccess(true).setIndex(index);
             } catch (Exception e) {

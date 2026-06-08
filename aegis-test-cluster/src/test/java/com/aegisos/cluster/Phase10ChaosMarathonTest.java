@@ -122,6 +122,7 @@ public class Phase10ChaosMarathonTest {
         Random rand = new Random(); // Fully random seed for repeated testing
 
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));
