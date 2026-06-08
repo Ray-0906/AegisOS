@@ -9,7 +9,7 @@
 
 - **What it is:** AegisOS — a secure, peer-to-peer, distributed OS runtime in **Java 21**. Nodes authenticate, gossip membership, store files, and execute JAR artifacts. 
 - **Current Phase:** We are in the **v0.4 Correctness and Observability Refactor**. The system has moved from "assumed correctness" to "proven correctness" with strict audit frameworks, membership decoupling, and verification contracts.
-- **Milestone Status:** Sprints 1, 2, and 3 are **COMPLETE and SIGNED OFF**. Ready to begin Sprint 4 (Reconciliation Engine).
+- **Milestone Status:** Sprints 1, 2, 3, and 4 are **COMPLETE and SIGNED OFF**. Ready to begin Sprint 5 (Observability Expansion).
 
 ---
 
@@ -58,6 +58,19 @@
 | `ConfigurationSurvivesRestartTest` | ADD_VOTER entries survive full cluster restart |
 | `NonVoterGrantsVoteTest` | Non-voters grant RequestVote RPCs |
 
+### Sprint 4: Verification + Recommendation Pipeline ✅ SIGNED OFF
+- **Verification Engine:** `StorageVerifier` validates divergences via (1) persistence checks (at least 2 consecutive scans), (2) liveness checks on missing nodes, and (3) re-observing physical reality at verification time against a frozen snapshot.
+- **Target-Free Recommendations:** `RepairRecommendation` generates target-free, placement-free recommendations containing identical evidence scans.
+- **Leader-Only Semantics:** Audit scans and recommendation cycles run exclusively on the active consensus leader. Followers bypass the runs and clear their local state.
+- **AuditReportStore:** Leader-local ephemeral in-memory sliding window of the last 20 scans. 
+  > [!NOTE]
+  > **Leadership Ephemeral State:** `AuditReportStore` is leader-local ephemeral state. It is not replicated and is intentionally discarded on leadership change. This is because **audit history is evidence, whereas cluster state is authority** (very different responsibilities).
+- **Test coverage:**
+  - `AuditPersistenceTest` (unit): Tests scan persistence, sliding window capacity, and gaps.
+  - `StorageVerificationTest` (integration): Tests verification status transitions (`VERIFIED`, `INSUFFICIENT_HISTORY`, `NODE_UNAVAILABLE`, `OBSERVATION_MISMATCH`, `NO_LONGER_DIVERGENT`) and recommendation stability across 5 scans.
+  - `LeaderOnlyAuditSchedulerTest` (integration): Tests leader-only semantics and failover audit handoff.
+  - `Sprint4SignOffTest` (integration): Tests the complete 4-phase non-mutating pipeline.
+
 ---
 
 ## 2. Core Architecture Decision Records (ADRs)
@@ -83,7 +96,7 @@ Before writing code, understand these locked ADRs in `docs/adr/`:
 | Storage audit framework | ✅ Proven |
 | Raft decoupled from Gossip | ✅ **Proven (Sprint 3)** |
 | Formal cluster configuration | ✅ **Built (Sprint 3)** |
-| **Reconciliation engine** | **NOT BUILT (Sprint 4)** |
+| **Reconciliation engine** | ✅ **Proven (Sprint 4)** |
 | **Snapshots** | **NOT BUILT (Sprint 6)** |
 
 ---
@@ -94,8 +107,8 @@ Before writing code, understand these locked ADRs in `docs/adr/`:
 Sprint 1  ✅  CLI Isolation + Membership Visibility
 Sprint 2  ✅  Storage Audit Framework (Measurement-Only)
 Sprint 3  ✅  Raft Membership Correctness
-Sprint 4  ←   Reconciliation Engine
-Sprint 5       Observability Expansion
+Sprint 4  ✅  Verification + Recommendation Pipeline
+Sprint 5  ←   Observability Expansion
 Sprint 6       Snapshots
 ```
 

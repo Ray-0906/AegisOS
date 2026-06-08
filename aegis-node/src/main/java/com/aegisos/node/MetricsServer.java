@@ -209,6 +209,72 @@ public final class MetricsServer implements AutoCloseable {
         });
 
         // A single virtual thread is sufficient — both endpoints are read-only and fast.
+
+        server.createContext("/audit/verifications", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            try {
+                var verifications = node.auditScheduler().getVerifications();
+                StringBuilder sb = new StringBuilder("[\n");
+                for (int i = 0; i < verifications.size(); i++) {
+                    var v = verifications.get(i);
+                    sb.append("  {\n");
+                    sb.append("    \"chunkId\": \"").append(v.chunkId()).append("\",\n");
+                    sb.append("    \"status\": \"").append(v.status().name()).append("\",\n");
+                    sb.append("    \"details\": \"").append(escapeJson(v.details())).append("\",\n");
+                    sb.append("    \"scanIdVerifiedAgainst\": ").append(v.scanIdVerifiedAgainst()).append(",\n");
+                    sb.append("    \"evidenceScans\": ").append(v.evidenceScans()).append("\n");
+                    sb.append("  }");
+                    if (i < verifications.size() - 1) sb.append(",");
+                    sb.append("\n");
+                }
+                sb.append("]");
+                byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to generate verifications report", e);
+                exchange.sendResponseHeaders(500, -1);
+            }
+        });
+
+        server.createContext("/audit/recommendations", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            try {
+                var recommendations = node.auditScheduler().getRecommendations();
+                StringBuilder sb = new StringBuilder("[\n");
+                for (int i = 0; i < recommendations.size(); i++) {
+                    var r = recommendations.get(i);
+                    sb.append("  {\n");
+                    sb.append("    \"chunkId\": \"").append(r.chunkId()).append("\",\n");
+                    sb.append("    \"divergenceType\": \"").append(r.divergenceType()).append("\",\n");
+                    sb.append("    \"evidenceScans\": ").append(r.evidenceScans()).append(",\n");
+                    sb.append("    \"recommendedAt\": ").append(r.recommendedAt()).append("\n");
+                    sb.append("  }");
+                    if (i < recommendations.size() - 1) sb.append(",");
+                    sb.append("\n");
+                }
+                sb.append("]");
+                byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to generate recommendations report", e);
+                exchange.sendResponseHeaders(500, -1);
+            }
+        });
+
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
         log.info("Metrics server listening on http://0.0.0.0:{}/ (endpoints: /metrics, /health)", port);
@@ -336,6 +402,15 @@ public final class MetricsServer implements AutoCloseable {
                 aliveNodes,
                 pending, queued, running, completed, failed,
                 localChunks);
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 
     @Override
