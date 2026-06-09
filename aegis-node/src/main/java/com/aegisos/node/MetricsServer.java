@@ -341,6 +341,44 @@ public final class MetricsServer implements AutoCloseable {
             }
         });
 
+        server.createContext("/raft/metrics", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            try {
+                var raftNode = node.consensus().raftNode();
+                var raftLog = raftNode.raftLog();
+                String body = String.format("""
+                        {
+                          "logEntryCount"        : %d,
+                          "logSizeEstimateBytes" : %d,
+                          "diskSizeBytes"        : %d,
+                          "commitIndex"          : %d,
+                          "lastApplied"          : %d,
+                          "lastLogIndex"         : %d,
+                          "currentTerm"          : %d
+                        }
+                        """,
+                        raftLog.entryCount(),
+                        raftLog.logSizeEstimateBytes(),
+                        raftLog.diskSizeBytes(),
+                        raftNode.commitIndex(),
+                        raftNode.lastApplied(),
+                        raftNode.lastLogIndex(),
+                        raftNode.currentTerm());
+                byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to generate Raft metrics", e);
+                exchange.sendResponseHeaders(500, -1);
+            }
+        });
+
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
         log.info("Metrics server listening on http://0.0.0.0:{}/ (endpoints: /metrics, /health)", port);

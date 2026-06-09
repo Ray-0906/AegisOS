@@ -186,4 +186,27 @@ public final class RaftLog {
         }
         return candidateLastIndex >= myIndex;
     }
+
+    /** Returns the estimated total serialized size of all log entries in bytes. */
+    public synchronized long logSizeEstimateBytes() {
+        long total = 0;
+        for (RaftLogEntry entry : entries) {
+            total += entry.getSerializedSize();
+        }
+        return total;
+    }
+
+    /** Returns the on-disk log file size in bytes, or -1 if unavailable. */
+    public long diskSizeBytes() {
+        try {
+            return Files.exists(file) ? Files.size(file) : 0;
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
+    /** Returns the number of entries in the log. */
+    public synchronized int entryCount() {
+        return entries.size();
+    }
 }
