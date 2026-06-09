@@ -24,23 +24,33 @@ import java.util.List;
  * <p>Persistence (resolved open question Q4) is an append-only file: each entry is
  * length-prefixed. Conflicting suffixes are removed by truncating and rewriting the file
  * (rare in steady state). RocksDB-backed storage is a documented future option.
+ *
+ * <p>Sprint 6: Supports log truncation via {@link #truncatePrefix} after snapshot
+ * creation. A {@code snapshotIndex}/{@code snapshotTerm} offset tracks the truncation
+ * point so all index-based lookups remain correct.
  */
 public final class RaftLog {
 
     private static final Logger log = LoggerFactory.getLogger(RaftLog.class);
 
     private final Path file;
-    private final List<RaftLogEntry> entries = new ArrayList<>(); // entries.get(i) has index i+1
+    private final Path snapshotMetaFile;
+    private final List<RaftLogEntry> entries = new ArrayList<>(); // entries.get(i) has index snapshotIndex + i + 1
     private DataOutputStream appendStream;
+
+    private long snapshotIndex = 0;  // last index included in the snapshot
+    private long snapshotTerm = 0;   // term of the entry at snapshotIndex
 
     public RaftLog(Path file) {
         this.file = file;
+        this.snapshotMetaFile = file.resolveSibling("snapshot-meta.bin");
         load();
     }
 
     private synchronized void load() {
         try {
             Files.createDirectories(file.getParent());
+            loadSnapshotMeta();
             if (Files.exists(file)) {
                 try (DataInputStream in = new DataInputStream(Files.newInputStream(file))) {
                     while (true) {
@@ -57,8 +67,8 @@ public final class RaftLog {
                 }
             }
             openAppend();
-            log.info("Loaded Raft log: {} entries (lastIndex={}, lastTerm={})",
-                    entries.size(), lastIndex(), lastTerm());
+            log.info("Loaded Raft log: {} entries (snapshotIndex={}, lastIndex={}, lastTerm={})",
+                    entries.size(), snapshotIndex, lastIndex(), lastTerm());
         } catch (IOException e) {
             throw new IllegalStateException("failed to load raft log " + file, e);
         }
@@ -69,32 +79,54 @@ public final class RaftLog {
         appendStream = new DataOutputStream(new BufferedOutputStream(os));
     }
 
+    // --- snapshot metadata ---
+
+    public synchronized long snapshotIndex() { return snapshotIndex; }
+    public synchronized long snapshotTerm() { return snapshotTerm; }
+
+    /** Returns the first index available in the in-memory log (snapshotIndex + 1, or 1 if no snapshot). */
+    public synchronized long startIndex() {
+        return snapshotIndex + 1;
+    }
+
+    // --- index/term queries ---
+
     public synchronized long lastIndex() {
-        return entries.size();
+        return snapshotIndex + entries.size();
     }
 
     public synchronized long lastTerm() {
-        return entries.isEmpty() ? 0 : entries.get(entries.size() - 1).getTerm();
+        return entries.isEmpty() ? snapshotTerm : entries.get(entries.size() - 1).getTerm();
     }
 
     public synchronized long termAt(long index) {
-        if (index <= 0 || index > entries.size()) {
+        if (index <= 0 || index > lastIndex()) {
             return 0;
         }
-        return entries.get((int) (index - 1)).getTerm();
+        if (index == snapshotIndex) {
+            return snapshotTerm;
+        }
+        if (index < startIndex()) {
+            return 0; // entry was truncated
+        }
+        int arrayIndex = (int) (index - snapshotIndex - 1);
+        return entries.get(arrayIndex).getTerm();
     }
 
     public synchronized RaftLogEntry get(long index) {
-        if (index <= 0 || index > entries.size()) {
+        if (index <= 0 || index > lastIndex() || index < startIndex()) {
             return null;
         }
-        return entries.get((int) (index - 1));
+        int arrayIndex = (int) (index - snapshotIndex - 1);
+        return entries.get(arrayIndex);
     }
 
     public synchronized List<RaftLogEntry> entriesFrom(long fromIndex) {
         List<RaftLogEntry> out = new ArrayList<>();
-        for (long i = fromIndex; i <= entries.size(); i++) {
-            out.add(entries.get((int) (i - 1)));
+        long start = Math.max(fromIndex, startIndex());
+        for (long i = start; i <= lastIndex(); i++) {
+            int arrayIndex = (int) (i - snapshotIndex - 1);
+            out.add(entries.get(arrayIndex));
         }
         return out;
     }
@@ -103,7 +135,7 @@ public final class RaftLog {
     public synchronized RaftLogEntry append(long term, byte[] command) {
         RaftLogEntry entry = RaftLogEntry.newBuilder()
                 .setTerm(term)
-                .setIndex(entries.size() + 1)
+                .setIndex(snapshotIndex + entries.size() + 1)
                 .setCommand(ByteString.copyFrom(command))
                 .build();
         entries.add(entry);
@@ -128,7 +160,7 @@ public final class RaftLog {
                 appended = true;
             } else if (existing.getTerm() != in.getTerm()) {
                 // conflict: drop this and everything after, then append
-                while (entries.size() >= index) {
+                while (lastIndex() >= index) {
                     entries.remove(entries.size() - 1);
                 }
                 entries.add(in);
@@ -146,6 +178,46 @@ public final class RaftLog {
         }
         return lastIndex();
     }
+
+    // --- snapshot truncation ---
+
+    /**
+     * Discards all log entries up to and including {@code lastIncludedIndex}.
+     * Used after a snapshot has been taken at that index.
+     */
+    public synchronized void truncatePrefix(long lastIncludedIndex, long lastIncludedTerm) {
+        if (lastIncludedIndex <= snapshotIndex) {
+            return; // already truncated past this point
+        }
+        int entriesToRemove = (int) (lastIncludedIndex - snapshotIndex);
+        if (entriesToRemove > entries.size()) {
+            entries.clear();
+        } else {
+            entries.subList(0, entriesToRemove).clear();
+        }
+        this.snapshotIndex = lastIncludedIndex;
+        this.snapshotTerm = lastIncludedTerm;
+        rewriteFile();
+        saveSnapshotMeta();
+        log.info("Truncated log prefix: snapshotIndex={}, snapshotTerm={}, remaining entries={}",
+                snapshotIndex, snapshotTerm, entries.size());
+    }
+
+    /**
+     * Called when an InstallSnapshot is received: discard the entire log and
+     * reset to the snapshot point.
+     */
+    public synchronized void installSnapshot(long lastIncludedIndex, long lastIncludedTerm) {
+        entries.clear();
+        this.snapshotIndex = lastIncludedIndex;
+        this.snapshotTerm = lastIncludedTerm;
+        rewriteFile();
+        saveSnapshotMeta();
+        log.info("Installed snapshot: snapshotIndex={}, snapshotTerm={}",
+                snapshotIndex, snapshotTerm);
+    }
+
+    // --- persistence ---
 
     private void persistAppend(RaftLogEntry entry) {
         try {
@@ -176,6 +248,30 @@ public final class RaftLog {
             throw new IllegalStateException("failed to rewrite raft log", e);
         }
     }
+
+    private void saveSnapshotMeta() {
+        try (DataOutputStream out = new DataOutputStream(
+                Files.newOutputStream(snapshotMetaFile, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING))) {
+            out.writeLong(snapshotIndex);
+            out.writeLong(snapshotTerm);
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to save snapshot metadata", e);
+        }
+    }
+
+    private void loadSnapshotMeta() {
+        if (Files.exists(snapshotMetaFile)) {
+            try (DataInputStream in = new DataInputStream(Files.newInputStream(snapshotMetaFile))) {
+                snapshotIndex = in.readLong();
+                snapshotTerm = in.readLong();
+                log.info("Loaded snapshot metadata: snapshotIndex={}, snapshotTerm={}", snapshotIndex, snapshotTerm);
+            } catch (IOException e) {
+                log.warn("Failed to load snapshot metadata, assuming no snapshot: {}", e.toString());
+            }
+        }
+    }
+
+    // --- queries ---
 
     /** @return true if {@code (lastLogIndex,lastLogTerm)} is at least as up-to-date as ours. */
     public synchronized boolean isUpToDate(long candidateLastIndex, long candidateLastTerm) {

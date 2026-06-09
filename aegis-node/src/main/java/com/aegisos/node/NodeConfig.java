@@ -31,6 +31,8 @@ public final class NodeConfig {
     private int membershipLagThreshold = 10;
     private int repairRecommendationMaxAgeSeconds = 180;
     private int repairTaskTimeoutSeconds = 300;
+    private int snapshotEntryThreshold = 1000;
+    private long snapshotSizeThresholdBytes = 64 * 1024 * 1024; // 64 MB
 
     public boolean bootstrap() {
         return bootstrap;
@@ -69,6 +71,24 @@ public final class NodeConfig {
 
     public NodeConfig repairTaskTimeoutSeconds(int sec) {
         this.repairTaskTimeoutSeconds = sec;
+        return this;
+    }
+
+    public int snapshotEntryThreshold() {
+        return snapshotEntryThreshold;
+    }
+
+    public NodeConfig snapshotEntryThreshold(int threshold) {
+        this.snapshotEntryThreshold = threshold;
+        return this;
+    }
+
+    public long snapshotSizeThresholdBytes() {
+        return snapshotSizeThresholdBytes;
+    }
+
+    public NodeConfig snapshotSizeThresholdBytes(long bytes) {
+        this.snapshotSizeThresholdBytes = bytes;
         return this;
     }
 

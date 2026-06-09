@@ -158,17 +158,38 @@ public final class AegisNode implements AutoCloseable {
         processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId());
         aegisOS = new AegisOS(fileSystem, processManager, new ClusterInfo(discovery));
 
-        // 2. Register all state machine appliers BEFORE log replay or Raft start
+        // 2. Configure Snapshots
+        consensus.stateMachine().registerSnapshotParticipant(consensus.clusterConfiguration());
+        consensus.stateMachine().registerSnapshotParticipant(artifactRegistry);
+        consensus.stateMachine().registerSnapshotParticipant(runtimeAgent.registry());
+        consensus.stateMachine().registerSnapshotParticipant(fileSystem.fileIndex());
+        consensus.stateMachine().registerSnapshotParticipant(fileSystem.repairTaskStore());
+
+        consensus.raftNode().configureSnapshots(
+                config.raftDir().resolve("snapshots"),
+                config.snapshotEntryThreshold(),
+                config.snapshotSizeThresholdBytes(),
+                consensus.stateMachine()::takeSnapshot,
+                consensus.stateMachine()::loadSnapshot
+        );
+
+        // 3. Register all state machine appliers BEFORE log replay or Raft start
         artifactRegistry.registerWith(consensus.stateMachine());
         fileSystem.registerAppliers(); // We will add this to AegisFS
         runtimeAgent.registerAppliers(); // We will add this to ProcessRuntimeAgent
         scheduler.registerAppliers();
 
-        // 3. Eagerly replay persisted Raft log through all registered state-machine appliers
+        // 4. Eagerly replay persisted Raft log through all registered state-machine appliers
         // (FileIndex, JobRegistry, ArtifactRegistry) before the node starts accepting work.
         consensus.replayFromLog();
 
-        // 4. Start all background subsystems now that in-memory state is fully populated
+        // 4b. Rehydrate ResourceAllocator from the JobRegistry's active jobs
+        resourceAllocator.clear();
+        for (com.aegisos.proto.JobRecord job : runtimeAgent.registry().activeJobs()) {
+            resourceAllocator.commitHardAllocation(job.getSpec().getJobId(), job.getSpec().getResources());
+        }
+
+        // 5. Start all background subsystems now that in-memory state is fully populated
         fileSystem.start();
         auditScheduler.start();
         runtimeAgent.start();

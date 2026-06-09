@@ -11,6 +11,8 @@ import com.aegisos.proto.RequestVote;
 import com.aegisos.proto.RequestVoteResult;
 import com.aegisos.proto.StateCommand;
 import com.aegisos.proto.CommandType;
+import com.aegisos.proto.InstallSnapshot;
+import com.aegisos.proto.InstallSnapshotResponse;
 import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -88,6 +90,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         network.registerHandler(MessageType.REQUEST_VOTE, this::onRequestVote);
         network.registerHandler(MessageType.APPEND_ENTRIES, this::onAppendEntries);
         network.registerHandler(MessageType.CLIENT_COMMAND, this::onClientCommand);
+        network.registerHandler(MessageType.INSTALL_SNAPSHOT, this::onInstallSnapshot);
         raftNode.start();
         log.info("Consensus module started");
     }
@@ -259,6 +262,16 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         }
     }
 
+    private AegisMessage onInstallSnapshot(AegisMessage msg) {
+        try {
+            InstallSnapshotResponse result = raftNode.handleInstallSnapshot(InstallSnapshot.parseFrom(msg.payload()));
+            return new AegisMessage(null, msg.sender(), MessageType.INSTALL_SNAPSHOT_RESULT, result.toByteArray());
+        } catch (Exception e) {
+            log.warn("Bad InstallSnapshot: {}", e.toString());
+            return null;
+        }
+    }
+
     private AegisMessage onClientCommand(AegisMessage msg) {
         ClientCommandResult.Builder result = ClientCommandResult.newBuilder();
         if (!raftNode.isLeader()) {
@@ -293,6 +306,13 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
     public CompletableFuture<AppendEntriesResult> sendAppendEntries(NodeId peer, AppendEntries request) {
         return network.request(peer, MessageType.APPEND_ENTRIES, request.toByteArray(), 1_000)
                 .thenApply(msg -> parse(msg.payload(), AppendEntriesResult::parseFrom));
+    }
+
+    @Override
+    public CompletableFuture<InstallSnapshotResponse> sendInstallSnapshot(NodeId peer, InstallSnapshot request) {
+        // Snapshot transfer can be large, use a much higher timeout
+        return network.request(peer, MessageType.INSTALL_SNAPSHOT, request.toByteArray(), 30_000)
+                .thenApply(msg -> parse(msg.payload(), InstallSnapshotResponse::parseFrom));
     }
 
     private interface ProtoParser<T> {

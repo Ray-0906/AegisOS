@@ -1,5 +1,7 @@
 package com.aegisos.runtime;
 
+import com.aegisos.consensus.SnapshotException;
+import com.aegisos.consensus.SnapshotParticipant;
 import com.aegisos.consensus.ClusterStateMachine;
 import com.aegisos.proto.CommandType;
 import com.aegisos.proto.JobRecord;
@@ -8,16 +10,19 @@ import com.aegisos.proto.JobUpdate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.*;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * Replicated view of all jobs, built by applying committed ASSIGN_JOB and UPDATE_JOB
  * commands. Lets any node observe job state and results.
  */
-public final class JobRegistry {
+public final class JobRegistry implements SnapshotParticipant {
 
     private static final Logger log = LoggerFactory.getLogger(JobRegistry.class);
 
@@ -94,5 +99,54 @@ public final class JobRegistry {
 
     public Collection<JobRecord> all() {
         return new ArrayList<>(jobs.values());
+    }
+
+    /** Returns jobs not in a terminal state (COMPLETED/FAILED). Used for ResourceAllocator re-hydration. */
+    public List<JobRecord> activeJobs() {
+        return jobs.values().stream()
+                .filter(r -> r.getState() != JobState.COMPLETED && r.getState() != JobState.FAILED)
+                .collect(Collectors.toList());
+    }
+
+    // --- SnapshotParticipant ---
+
+    @Override public String id() { return "job-registry"; }
+
+    @Override
+    public synchronized byte[] snapshot() throws SnapshotException {
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(baos);
+            var values = new ArrayList<>(jobs.values());
+            out.writeInt(values.size());
+            for (JobRecord r : values) {
+                byte[] bytes = r.toByteArray();
+                out.writeInt(bytes.length);
+                out.write(bytes);
+            }
+            out.flush();
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new SnapshotException("Failed to snapshot JobRegistry", e);
+        }
+    }
+
+    @Override
+    public synchronized void restore(byte[] data) throws SnapshotException {
+        try {
+            DataInputStream in = new DataInputStream(new ByteArrayInputStream(data));
+            jobs.clear();
+            int count = in.readInt();
+            for (int i = 0; i < count; i++) {
+                int len = in.readInt();
+                byte[] buf = new byte[len];
+                in.readFully(buf);
+                JobRecord r = JobRecord.parseFrom(buf);
+                jobs.put(r.getSpec().getJobId(), r);
+            }
+            log.info("Restored JobRegistry: {} jobs", jobs.size());
+        } catch (IOException e) {
+            throw new SnapshotException("Failed to restore JobRegistry", e);
+        }
     }
 }

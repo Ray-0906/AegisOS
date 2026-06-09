@@ -6,6 +6,7 @@ import com.aegisos.proto.StateCommand;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.*;
 import java.util.Collections;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Raft-replicated voter/observer set with explicit configuration version.
  * Part of the Raft state machine state.
  */
-public final class ClusterConfiguration {
+public final class ClusterConfiguration implements SnapshotParticipant {
 
     private static final Logger log = LoggerFactory.getLogger(ClusterConfiguration.class);
 
@@ -85,6 +86,57 @@ public final class ClusterConfiguration {
             log.info("REMOVE_VOTER at index {} applied: {} removed from voters (version {})", index, nodeId.shortId(), version);
         } catch (Exception e) {
             log.error("Failed to apply REMOVE_VOTER at index {}: {}", index, e.toString());
+        }
+    }
+
+    // --- SnapshotParticipant ---
+
+    @Override public String id() { return "cluster-config"; }
+
+    @Override
+    public synchronized byte[] snapshot() throws SnapshotException {
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(baos);
+            out.writeLong(version);
+            out.writeInt(voters.size());
+            for (NodeId v : voters) {
+                out.write(v.toBytes());
+            }
+            out.writeInt(observers.size());
+            for (NodeId o : observers) {
+                out.write(o.toBytes());
+            }
+            out.flush();
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new SnapshotException("Failed to snapshot ClusterConfiguration", e);
+        }
+    }
+
+    @Override
+    public synchronized void restore(byte[] data) throws SnapshotException {
+        try {
+            DataInputStream in = new DataInputStream(new ByteArrayInputStream(data));
+            version = in.readLong();
+            voters.clear();
+            int vc = in.readInt();
+            for (int i = 0; i < vc; i++) {
+                byte[] id = new byte[32];
+                in.readFully(id);
+                voters.add(NodeId.of(id));
+            }
+            observers.clear();
+            int oc = in.readInt();
+            for (int i = 0; i < oc; i++) {
+                byte[] id = new byte[32];
+                in.readFully(id);
+                observers.add(NodeId.of(id));
+            }
+            log.info("Restored ClusterConfiguration: {} voters, {} observers, version {}",
+                    voters.size(), observers.size(), version);
+        } catch (IOException e) {
+            throw new SnapshotException("Failed to restore ClusterConfiguration", e);
         }
     }
 }

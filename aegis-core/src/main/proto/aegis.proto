@@ -356,3 +356,32 @@ message ArtifactRecord {
   bytes  owner_id       = 6;  // uploading node ID
   ArtifactStatus status = 7;  // lifecycle state
 }
+
+// ---------------------------------------------------------------------------
+// Snapshots & Log Compaction (Sprint 6)
+// ---------------------------------------------------------------------------
+
+message SnapshotComponent {
+  string id   = 1;  // participant identifier (e.g. "file-index", "job-registry")
+  bytes  data = 2;  // opaque serialized state owned by the participant
+}
+
+message SnapshotFile {
+  int64  last_included_index = 1;
+  int64  last_included_term  = 2;
+  int64  snapshot_created_at = 3;
+  int32  snapshot_version    = 4;  // schema version, starts at 1
+  fixed32 checksum           = 5;  // CRC32 of serialized component data
+  repeated SnapshotComponent components = 6;
+}
+
+message InstallSnapshot {
+  int64 term         = 1;
+  bytes leader_id    = 2;
+  SnapshotFile snapshot = 3;
+}
+
+message InstallSnapshotResponse {
+  int64 term    = 1;
+  bool  success = 2;
+}

@@ -351,13 +351,19 @@ public final class MetricsServer implements AutoCloseable {
                 var raftLog = raftNode.raftLog();
                 String body = String.format("""
                         {
-                          "logEntryCount"        : %d,
-                          "logSizeEstimateBytes" : %d,
-                          "diskSizeBytes"        : %d,
-                          "commitIndex"          : %d,
-                          "lastApplied"          : %d,
-                          "lastLogIndex"         : %d,
-                          "currentTerm"          : %d
+                          "logEntryCount"                : %d,
+                          "logSizeEstimateBytes"         : %d,
+                          "diskSizeBytes"                : %d,
+                          "commitIndex"                  : %d,
+                          "lastApplied"                  : %d,
+                          "lastLogIndex"                 : %d,
+                          "currentTerm"                  : %d,
+                          "snapshotIndex"                : %d,
+                          "snapshotTerm"                 : %d,
+                          "snapshotCreatedCount"         : %d,
+                          "installSnapshotSentCount"     : %d,
+                          "installSnapshotReceivedCount" : %d,
+                          "lastSnapshotDurationMs"       : %d
                         }
                         """,
                         raftLog.entryCount(),
@@ -366,7 +372,13 @@ public final class MetricsServer implements AutoCloseable {
                         raftNode.commitIndex(),
                         raftNode.lastApplied(),
                         raftNode.lastLogIndex(),
-                        raftNode.currentTerm());
+                        raftNode.currentTerm(),
+                        raftLog.snapshotIndex(),
+                        raftLog.snapshotTerm(),
+                        raftNode.snapshotCreatedCount(),
+                        raftNode.installSnapshotSentCount(),
+                        raftNode.installSnapshotReceivedCount(),
+                        raftNode.lastSnapshotDurationMs());
                 byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
                 exchange.sendResponseHeaders(200, bytes.length);

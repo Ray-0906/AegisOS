@@ -1,8 +1,11 @@
 package com.aegisos.fs.audit;
 
+import com.aegisos.consensus.SnapshotException;
+import com.aegisos.consensus.SnapshotParticipant;
 import com.aegisos.proto.RepairChunk;
 import com.aegisos.proto.RepairComplete;
 import com.aegisos.core.util.HexUtil;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -10,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-public final class RepairTaskStore {
+public final class RepairTaskStore implements SnapshotParticipant {
 
     public enum TaskStatus { PENDING, COMPLETE, EXPIRED }
 
@@ -123,5 +126,58 @@ public final class RepairTaskStore {
             return Optional.of(task);
         }
         return Optional.empty();
+    }
+
+    // --- SnapshotParticipant ---
+
+    @Override public String id() { return "repair-task-store"; }
+
+    @Override
+    public synchronized byte[] snapshot() throws SnapshotException {
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(baos);
+            out.writeInt(tasks.size());
+            for (RepairTask task : tasks.values()) {
+                out.writeUTF(task.repairId());
+                out.writeUTF(task.chunkIdHex());
+                List<Long> scans = task.evidenceScans();
+                out.writeInt(scans.size());
+                for (long s : scans) {
+                    out.writeLong(s);
+                }
+                out.writeLong(task.verifiedAt());
+                out.writeLong(task.committedAt());
+                out.writeInt(task.status().ordinal());
+            }
+            out.flush();
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new SnapshotException("Failed to snapshot RepairTaskStore", e);
+        }
+    }
+
+    @Override
+    public synchronized void restore(byte[] data) throws SnapshotException {
+        try {
+            DataInputStream in = new DataInputStream(new ByteArrayInputStream(data));
+            tasks.clear();
+            int count = in.readInt();
+            for (int i = 0; i < count; i++) {
+                String repairId = in.readUTF();
+                String chunkIdHex = in.readUTF();
+                int scanCount = in.readInt();
+                List<Long> scans = new ArrayList<>();
+                for (int j = 0; j < scanCount; j++) {
+                    scans.add(in.readLong());
+                }
+                long verifiedAt = in.readLong();
+                long committedAt = in.readLong();
+                TaskStatus status = TaskStatus.values()[in.readInt()];
+                tasks.put(repairId, new RepairTask(repairId, chunkIdHex, scans, verifiedAt, committedAt, status));
+            }
+        } catch (IOException e) {
+            throw new SnapshotException("Failed to restore RepairTaskStore", e);
+        }
     }
 }

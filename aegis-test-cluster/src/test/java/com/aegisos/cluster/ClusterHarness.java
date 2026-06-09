@@ -21,6 +21,16 @@ public final class ClusterHarness implements AutoCloseable {
     private final List<AegisNode> nodes = new ArrayList<>();
     private final List<Path> tempDirs = new ArrayList<>();
     private Endpoint seedEndpoint;
+    private int replicationFactor = 3;
+    private int snapshotEntryThreshold = 1000;
+
+    public void setSnapshotEntryThreshold(int threshold) {
+        this.snapshotEntryThreshold = threshold;
+    }
+
+    public void setReplicationFactor(int rf) {
+        this.replicationFactor = rf;
+    }
 
     /** Starts {@code n} nodes and returns them. The first node is the seed. */
     public List<AegisNode> start(int n) throws IOException {
@@ -48,7 +58,9 @@ public final class ClusterHarness implements AutoCloseable {
                 .port(0)
                 .advertiseHost("127.0.0.1")
                 .reaperIntervalMs(2_000)
-                .checkpointIntervalMs(1_000);
+                .checkpointIntervalMs(1_000)
+                .replicationFactor(replicationFactor)
+                .snapshotEntryThreshold(snapshotEntryThreshold);
 
         boolean isBootstrap = nodes.isEmpty() && seedEndpoint == null;
         config.bootstrap(isBootstrap);
@@ -138,6 +150,36 @@ public final class ClusterHarness implements AutoCloseable {
 
     public AegisNode node(int i) {
         return nodes.get(i);
+    }
+
+    public AegisNode restartNode(AegisNode oldNode) throws IOException {
+        com.aegisos.node.NodeConfig oldConfig = oldNode.config();
+        AegisNode newNode = new AegisNode(new com.aegisos.node.NodeConfig()
+                .homeDir(oldConfig.homeDir())
+                .port(0)
+                .advertiseHost(oldConfig.advertiseHost())
+                .reaperIntervalMs(oldConfig.reaperIntervalMs())
+                .checkpointIntervalMs(oldConfig.checkpointIntervalMs())
+                .replicationFactor(oldConfig.replicationFactor())
+                .snapshotEntryThreshold(oldConfig.snapshotEntryThreshold())
+                .bootstrap(oldConfig.bootstrap()));
+        
+        if (!newNode.config().bootstrap()) {
+            if (!nodes.isEmpty()) {
+                newNode.config().addSeed(new Endpoint("127.0.0.1", nodes.get(0).network().boundPort()));
+            } else if (seedEndpoint != null) {
+                newNode.config().addSeed(seedEndpoint);
+            }
+        }
+        
+        newNode.start();
+        
+        if (newNode.config().bootstrap()) {
+            seedEndpoint = new Endpoint("127.0.0.1", newNode.network().boundPort());
+        }
+        
+        nodes.add(newNode);
+        return newNode;
     }
 
     private boolean autoRemoveVoters = false;

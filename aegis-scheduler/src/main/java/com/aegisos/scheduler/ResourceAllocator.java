@@ -139,6 +139,16 @@ public class ResourceAllocator implements AutoCloseable {
         return sb.toString();
     }
 
+    public synchronized void clear() {
+        softReservations.clear();
+        hardAllocations.clear();
+        softReservedCpu = 0;
+        softReservedMem = 0;
+        hardAllocatedCpu = 0;
+        hardAllocatedMem = 0;
+        log.info("Cleared all soft reservations and hard allocations");
+    }
+
     public synchronized int hardAllocatedCpu() { return hardAllocatedCpu; }
     public synchronized long hardAllocatedMem() { return hardAllocatedMem; }
     public synchronized int softReservedCpu() { return softReservedCpu; }

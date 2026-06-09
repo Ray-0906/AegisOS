@@ -12,6 +12,10 @@ import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -20,6 +24,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
@@ -57,6 +62,29 @@ public final class RaftNode {
     private final LogReplicator replicator;
     private final Map<Long, CompletableFuture<Long>> pending = new ConcurrentHashMap<>();
 
+    // --- snapshot support ---
+    private final AtomicInteger snapshotCreatedCount = new AtomicInteger(0);
+    private final AtomicInteger installSnapshotSentCount = new AtomicInteger(0);
+    private final AtomicInteger installSnapshotReceivedCount = new AtomicInteger(0);
+    private final AtomicLong lastSnapshotDurationMs = new AtomicLong(0);
+
+    private Path snapshotDir;
+    private int snapshotEntryThreshold = 1000;
+    private long snapshotSizeThresholdBytes = 64 * 1024 * 1024;
+
+    /** Functional interface for taking a snapshot from the state machine. */
+    public interface SnapshotTaker {
+        byte[] take(long lastIncludedIndex, long lastIncludedTerm) throws SnapshotException;
+    }
+
+    /** Functional interface for loading a snapshot into the state machine. */
+    public interface SnapshotLoader {
+        void load(byte[] data) throws SnapshotException;
+    }
+
+    private SnapshotTaker snapshotTaker;
+    private SnapshotLoader snapshotLoader;
+
     public RaftNode(NodeId self, RaftLog raftLog, RaftMetadataStore metadata,
                     RaftTransport transport, RaftStateMachine stateMachine,
                     Supplier<List<NodeId>> votingPeers,
@@ -78,7 +106,18 @@ public final class RaftNode {
     public void start() {
         electionTimer.reset();
         scheduler.scheduleAtFixedRate(this::heartbeatTick, HEARTBEAT_MS, HEARTBEAT_MS, TimeUnit.MILLISECONDS);
-        log.info("Raft node {} started as FOLLOWER (term {})", self.shortId(), metadata.currentTerm());
+        log.info("Raft node {} started as FOLLOWER (term {}, snapshotIndex={})",
+                self.shortId(), metadata.currentTerm(), raftLog.snapshotIndex());
+    }
+
+    /** Configure snapshot support. Must be called before start(). */
+    public void configureSnapshots(Path snapshotDir, int entryThreshold, long sizeThresholdBytes,
+                                    SnapshotTaker taker, SnapshotLoader loader) {
+        this.snapshotDir = snapshotDir;
+        this.snapshotEntryThreshold = entryThreshold;
+        this.snapshotSizeThresholdBytes = sizeThresholdBytes;
+        this.snapshotTaker = taker;
+        this.snapshotLoader = loader;
     }
 
     /**
@@ -95,12 +134,36 @@ public final class RaftNode {
     public void replayCommitted() {
         lock.lock();
         try {
+            // Load snapshot if present
+            if (snapshotDir != null) {
+                Path snapshotFile = snapshotDir.resolve("snapshot.bin");
+                if (Files.exists(snapshotFile) && snapshotLoader != null) {
+                    try {
+                        byte[] snapshotData = Files.readAllBytes(snapshotFile);
+                        snapshotLoader.load(snapshotData);
+                        lastApplied = raftLog.snapshotIndex();
+                        commitIndex = raftLog.snapshotIndex();
+                        log.info("Loaded snapshot on startup: lastApplied={}, commitIndex={}",
+                                lastApplied, commitIndex);
+                    } catch (Exception e) {
+                        log.warn("Failed to load snapshot, falling back to full log replay: {}", e.toString());
+                        lastApplied = 0;
+                        commitIndex = 0;
+                        raftLog.installSnapshot(0, 0);
+                    }
+                }
+            }
+
+            // Replay remaining log entries after the snapshot
             long lastOnDisk = raftLog.lastIndex();
-            if (lastOnDisk == 0) {
+            if (lastOnDisk == 0 && lastApplied == 0) {
                 return; // fresh node, nothing to replay
             }
-            log.info("Raft node {} replaying {} log entries from disk on startup",
-                    self.shortId(), lastOnDisk - lastApplied);
+            long toReplay = lastOnDisk - lastApplied;
+            if (toReplay > 0) {
+                log.info("Raft node {} replaying {} log entries from disk on startup (from {} to {})",
+                        self.shortId(), toReplay, lastApplied + 1, lastOnDisk);
+            }
             while (lastApplied < lastOnDisk) {
                 lastApplied++;
                 RaftLogEntry entry = raftLog.get(lastApplied);
@@ -315,6 +378,41 @@ public final class RaftNode {
     private void replicateTo(NodeId peer, long term, long leaderCommit) {
         long nextIndex = replicator.nextIndex(peer);
         long prevLogIndex = nextIndex - 1;
+
+        if (nextIndex <= raftLog.snapshotIndex()) {
+            // Follower is too far behind, need to send a snapshot
+            if (snapshotDir == null) {
+                log.warn("Cannot send snapshot to {}: snapshotDir not configured", peer.shortId());
+                return;
+            }
+            Path snapshotFile = snapshotDir.resolve("snapshot.bin");
+            if (!Files.exists(snapshotFile)) {
+                log.warn("Cannot send snapshot to {}: snapshot file missing", peer.shortId());
+                return;
+            }
+            try {
+                byte[] data = Files.readAllBytes(snapshotFile);
+                com.aegisos.proto.SnapshotFile snapshot = com.aegisos.proto.SnapshotFile.parseFrom(data);
+                com.aegisos.proto.InstallSnapshot req = com.aegisos.proto.InstallSnapshot.newBuilder()
+                        .setTerm(metadata.currentTerm())
+                        .setLeaderId(com.google.protobuf.ByteString.copyFrom(self.toBytes()))
+                        .setSnapshot(snapshot)
+                        .build();
+
+                installSnapshotSentCount.incrementAndGet();
+
+                transport.sendInstallSnapshot(peer, req).whenComplete((result, err) -> {
+                    if (err != null || result == null) {
+                        return;
+                    }
+                    handleInstallResponse(peer, snapshot.getLastIncludedIndex(), result);
+                });
+            } catch (Exception e) {
+                log.error("Failed to send InstallSnapshot to {}: {}", peer.shortId(), e.toString());
+            }
+            return;
+        }
+
         long prevLogTerm = raftLog.termAt(prevLogIndex);
         List<RaftLogEntry> entries = raftLog.entriesFrom(nextIndex);
 
@@ -352,6 +450,26 @@ public final class RaftNode {
                 advanceCommit();
             } else {
                 replicator.onFailure(peer, result.getMatchIndex());
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void handleInstallResponse(NodeId peer, long snapshotIndex, com.aegisos.proto.InstallSnapshotResponse result) {
+        lock.lock();
+        try {
+            if (result.getTerm() > metadata.currentTerm()) {
+                stepDown(result.getTerm());
+                return;
+            }
+            if (role != RaftRole.LEADER) {
+                return;
+            }
+            if (result.getSuccess()) {
+                // Update matchIndex to the snapshot's lastIncludedIndex
+                replicator.onSuccess(peer, snapshotIndex);
+                advanceCommit();
             }
         } finally {
             lock.unlock();
@@ -400,6 +518,63 @@ public final class RaftNode {
                     stepDown(metadata.currentTerm());
                 }
             }
+        }
+        // Check snapshot trigger (outside the apply loop for efficiency)
+        maybeSnapshot();
+    }
+
+    /** Checks if a snapshot should be triggered based on configured thresholds. */
+    private void maybeSnapshot() {
+        if (role != RaftRole.LEADER || snapshotTaker == null || snapshotDir == null) {
+            return;
+        }
+        long entriesSinceSnapshot = commitIndex - raftLog.snapshotIndex();
+        if (entriesSinceSnapshot >= snapshotEntryThreshold
+                || raftLog.diskSizeBytes() >= snapshotSizeThresholdBytes) {
+            triggerSnapshot();
+        }
+    }
+
+    /**
+     * Creates a snapshot at the current lastApplied index, writes it atomically
+     * to disk, and truncates the log prefix.
+     */
+    public void triggerSnapshot() {
+        long start = System.currentTimeMillis();
+        lock.lock();
+        try {
+            if (snapshotTaker == null || snapshotDir == null) {
+                log.warn("Snapshot not configured, skipping trigger");
+                return;
+            }
+            long snapIndex = lastApplied;
+            long snapTerm = raftLog.termAt(snapIndex);
+            if (snapIndex <= raftLog.snapshotIndex()) {
+                return; // already have a snapshot at or past this index
+            }
+
+            log.info("Triggering snapshot at index={}, term={}", snapIndex, snapTerm);
+            byte[] snapshotData = snapshotTaker.take(snapIndex, snapTerm);
+
+            // Atomic write: tmp -> rename
+            Files.createDirectories(snapshotDir);
+            Path tmpFile = snapshotDir.resolve("snapshot.tmp");
+            Path binFile = snapshotDir.resolve("snapshot.bin");
+            Files.write(tmpFile, snapshotData);
+            Files.move(tmpFile, binFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+
+            // Truncate log
+            raftLog.truncatePrefix(snapIndex, snapTerm);
+            
+            snapshotCreatedCount.incrementAndGet();
+            lastSnapshotDurationMs.set(System.currentTimeMillis() - start);
+
+            log.info("Snapshot complete: index={}, term={}, size={} bytes, remaining log entries={}",
+                    snapIndex, snapTerm, snapshotData.length, raftLog.entryCount());
+        } catch (Exception e) {
+            log.error("Failed to create snapshot: {}", e.toString(), e);
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -479,6 +654,66 @@ public final class RaftNode {
         }
     }
 
+    public com.aegisos.proto.InstallSnapshotResponse handleInstallSnapshot(com.aegisos.proto.InstallSnapshot req) {
+        installSnapshotReceivedCount.incrementAndGet();
+        lock.lock();
+        try {
+            long term = metadata.currentTerm();
+            if (req.getTerm() < term) {
+                return com.aegisos.proto.InstallSnapshotResponse.newBuilder().setTerm(term).setSuccess(false).build();
+            }
+            if (req.getTerm() > term) {
+                metadata.setCurrentTerm(req.getTerm());
+                term = req.getTerm();
+            }
+            role = RaftRole.FOLLOWER;
+            leaderId = NodeId.of(req.getLeaderId().toByteArray());
+            electionTimer.reset();
+
+            com.aegisos.proto.SnapshotFile snapshot = req.getSnapshot();
+            long snapIndex = snapshot.getLastIncludedIndex();
+            long snapTerm = snapshot.getLastIncludedTerm();
+
+            if (snapIndex <= commitIndex) {
+                // Ignore stale snapshot
+                return com.aegisos.proto.InstallSnapshotResponse.newBuilder().setTerm(term).setSuccess(true).build();
+            }
+
+            // Atomic state machine reset
+            if (snapshotLoader != null) {
+                snapshotLoader.load(snapshot.toByteArray());
+            }
+
+            // Write snapshot file to disk
+            if (snapshotDir != null) {
+                try {
+                    Files.createDirectories(snapshotDir);
+                    Path tmpFile = snapshotDir.resolve("snapshot.tmp");
+                    Path binFile = snapshotDir.resolve("snapshot.bin");
+                    Files.write(tmpFile, snapshot.toByteArray());
+                    Files.move(tmpFile, binFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (IOException e) {
+                    log.error("Failed to persist received snapshot", e);
+                }
+            }
+
+            // Reset log and state
+            raftLog.installSnapshot(snapIndex, snapTerm);
+            lastApplied = snapIndex;
+            commitIndex = snapIndex;
+
+            log.info("Installed snapshot from leader {}: index={}, term={}",
+                    leaderId.shortId(), snapIndex, snapTerm);
+
+            return com.aegisos.proto.InstallSnapshotResponse.newBuilder().setTerm(term).setSuccess(true).build();
+        } catch (Exception e) {
+            log.error("Failed to install snapshot", e);
+            return com.aegisos.proto.InstallSnapshotResponse.newBuilder().setTerm(metadata.currentTerm()).setSuccess(false).build();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private static RequestVoteResult voteResult(long term, boolean granted) {
         return RequestVoteResult.newBuilder().setTerm(term).setVoteGranted(granted).build();
     }
@@ -487,4 +722,9 @@ public final class RaftNode {
         return AppendEntriesResult.newBuilder()
                 .setTerm(term).setSuccess(success).setMatchIndex(matchIndex).build();
     }
+
+    public int snapshotCreatedCount() { return snapshotCreatedCount.get(); }
+    public int installSnapshotSentCount() { return installSnapshotSentCount.get(); }
+    public int installSnapshotReceivedCount() { return installSnapshotReceivedCount.get(); }
+    public long lastSnapshotDurationMs() { return lastSnapshotDurationMs.get(); }
 }
