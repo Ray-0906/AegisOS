@@ -110,11 +110,7 @@ public final class AegisFS implements AutoCloseable {
                         index, complete.getRepairId());
                     return;
                 }
-                if (!isStillUnderReplicated(complete.getChunkId().toByteArray(), complete.getFileId().toByteArray())) {
-                    repairTaskStore.applyRepairComplete(index, complete);
-                    log.info("REPAIR_COMPLETE at {} is no-op: chunk already at RF", index);
-                    return;
-                }
+
                 fileIndex.applyAddReplica(com.aegisos.proto.AddReplica.newBuilder()
                     .setFileId(complete.getFileId())
                     .setChunkId(complete.getChunkId())
@@ -159,6 +155,8 @@ public final class AegisFS implements AutoCloseable {
     public byte[] fetchChunk(NodeId source, byte[] chunkId) {
         return replicator.fetchFrom(source, chunkId);
     }
+
+
 
     /** Returns true if the chunk's replication factor in FileIndex is strictly less than required. */
     public boolean isStillUnderReplicated(byte[] chunkId, byte[] fileId) {

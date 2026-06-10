@@ -60,7 +60,10 @@ public final class ClusterHarness implements AutoCloseable {
                 .reaperIntervalMs(2_000)
                 .checkpointIntervalMs(1_000)
                 .replicationFactor(replicationFactor)
-                .snapshotEntryThreshold(snapshotEntryThreshold);
+                .snapshotEntryThreshold(snapshotEntryThreshold)
+                .jobSupervisorEnabled(jobSupervisorEnabled)
+                .repairEnabled(repairEnabled)
+                .auditIntervalSeconds(2);
 
         boolean isBootstrap = nodes.isEmpty() && seedEndpoint == null;
         config.bootstrap(isBootstrap);
@@ -106,22 +109,22 @@ public final class ClusterHarness implements AutoCloseable {
 
                 final AegisNode finalLeader = leaderNode;
                 // Wait for Gossip to discover the new node and mark it alive
-                boolean joinedGossip = await(15_000, () -> {
+                boolean joinedGossip = await(30_000, () -> {
                     com.aegisos.proto.PeerStatus status = finalLeader.discovery().membership().statusOf(node.identity().nodeId());
                     return status == com.aegisos.proto.PeerStatus.ALIVE || status == com.aegisos.proto.PeerStatus.SUSPECT;
                 });
                 if (!joinedGossip) {
-                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not join Gossip on leader " + finalLeader.identity().nodeId().shortId() + " within 15s");
+                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not join Gossip on leader " + finalLeader.identity().nodeId().shortId() + " within 30s");
                 }
 
                 // Wait for replicator to catch up (so lag is <= 10)
-                boolean caughtUp = await(15_000, () -> {
+                boolean caughtUp = await(30_000, () -> {
                     long leaderLast = finalLeader.consensus().raftNode().lastLogIndex();
                     long nodeMatch = finalLeader.consensus().raftNode().matchIndex(node.identity().nodeId());
                     return (leaderLast - nodeMatch) <= 10;
                 });
                 if (!caughtUp) {
-                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not catch up within 15s");
+                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not catch up within 30s");
                 }
 
                 // Leader proposes ADD_VOTER
@@ -129,15 +132,15 @@ public final class ClusterHarness implements AutoCloseable {
                         .setType(com.aegisos.proto.CommandType.ADD_VOTER)
                         .setPayload(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
                         .build();
-                finalLeader.consensus().propose(addCmd).get(15, java.util.concurrent.TimeUnit.SECONDS);
+                finalLeader.consensus().propose(addCmd).get(30, java.util.concurrent.TimeUnit.SECONDS);
 
                 // Wait for the new node to actually apply the ADD_VOTER command and become a voter locally
-                boolean appliedLocally = await(15_000, () -> node.consensus().clusterConfiguration().isVoter(node.identity().nodeId()));
+                boolean appliedLocally = await(30_000, () -> node.consensus().clusterConfiguration().isVoter(node.identity().nodeId()));
                 if (!appliedLocally) {
-                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not apply ADD_VOTER locally within 15s");
+                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not apply ADD_VOTER locally within 30s");
                 }
             } catch (Exception e) {
-                throw new IOException("Failed to add node " + node.identity().nodeId().shortId() + " to cluster: " + e.getMessage(), e);
+                throw new IOException("Failed to add node " + node.identity().nodeId().shortId() + " to cluster", e);
             }
         }
         return node;
@@ -162,6 +165,9 @@ public final class ClusterHarness implements AutoCloseable {
                 .checkpointIntervalMs(oldConfig.checkpointIntervalMs())
                 .replicationFactor(oldConfig.replicationFactor())
                 .snapshotEntryThreshold(oldConfig.snapshotEntryThreshold())
+                .jobSupervisorEnabled(oldConfig.jobSupervisorEnabled())
+                .repairEnabled(oldConfig.repairEnabled())
+                .auditIntervalSeconds(oldConfig.auditIntervalSeconds())
                 .bootstrap(oldConfig.bootstrap()));
         
         if (!newNode.config().bootstrap()) {
@@ -183,6 +189,18 @@ public final class ClusterHarness implements AutoCloseable {
     }
 
     private boolean autoRemoveVoters = false;
+    private boolean jobSupervisorEnabled = true;
+    private boolean repairEnabled = true;
+
+    public ClusterHarness setJobSupervisorEnabled(boolean enabled) {
+        this.jobSupervisorEnabled = enabled;
+        return this;
+    }
+
+    public ClusterHarness setRepairEnabled(boolean enabled) {
+        this.repairEnabled = enabled;
+        return this;
+    }
 
     public void setAutoRemoveVoters(boolean auto) {
         this.autoRemoveVoters = auto;

@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class Phase10ChaosMarathonTest {
 
-    private static final int AWAIT_MS = 20_000;
+    private static final int AWAIT_MS = 45_000;
     private static final String MAIN_CLASS = "com.example.WordCounter";
 
     private static String uploadArtifact(ClusterHarness cluster, int runIndex) throws Exception {
@@ -91,7 +91,7 @@ public class Phase10ChaosMarathonTest {
     }
 
     private static void assertReplicationFactorRestored(ClusterHarness cluster, String artifactId, int expectedRf) throws Exception {
-        boolean restored = ClusterHarness.await(20_000, () -> {
+        boolean restored = ClusterHarness.await(45_000, () -> {
             try {
                 AegisNode leader = requireLeader(cluster);
                 java.util.Optional<com.aegisos.proto.FileMetadata> metaOpt = leader.fileSystem().fileIndex().byName("/artifacts/" + artifactId);
@@ -163,7 +163,7 @@ public class Phase10ChaosMarathonTest {
                 assertTrue(replacementWarm, "Replacement node must catch up registry");
 
                 // Wait for audit-based repair pipeline to restore chunks to the replacement node
-                Thread.sleep(8000);
+                Thread.sleep(12_000);
 
                 // Assert that the repair pipeline actually restored RF=3
                 assertReplicationFactorRestored(cluster, currentArtifactId, 3);

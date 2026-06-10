@@ -33,6 +33,12 @@ public final class NodeConfig {
     private int repairTaskTimeoutSeconds = 300;
     private int snapshotEntryThreshold = 1000;
     private long snapshotSizeThresholdBytes = 64 * 1024 * 1024; // 64 MB
+    /** When false, the JobSupervisor (execution lease monitor) is not started.
+     * Use this for storage-only test clusters that must not produce execution Raft entries. */
+    private boolean jobSupervisorEnabled = true;
+    /** When false, RepairProposer is not started, so divergences are audited but not automatically repaired. */
+    private boolean repairEnabled = true;
+    private long auditIntervalSeconds = 60;
 
     public boolean bootstrap() {
         return bootstrap;
@@ -89,6 +95,33 @@ public final class NodeConfig {
 
     public NodeConfig snapshotSizeThresholdBytes(long bytes) {
         this.snapshotSizeThresholdBytes = bytes;
+        return this;
+    }
+
+    public boolean jobSupervisorEnabled() {
+        return jobSupervisorEnabled;
+    }
+
+    public NodeConfig jobSupervisorEnabled(boolean enabled) {
+        this.jobSupervisorEnabled = enabled;
+        return this;
+    }
+
+    public boolean repairEnabled() {
+        return repairEnabled;
+    }
+
+    public NodeConfig repairEnabled(boolean enabled) {
+        this.repairEnabled = enabled;
+        return this;
+    }
+
+    public long auditIntervalSeconds() {
+        return auditIntervalSeconds;
+    }
+
+    public NodeConfig auditIntervalSeconds(long seconds) {
+        this.auditIntervalSeconds = seconds;
         return this;
     }
 

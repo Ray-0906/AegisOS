@@ -318,6 +318,19 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     @Override
     public void close() {
         handlerExecutor.shutdownNow();
+        try {
+            boolean terminated = handlerExecutor.awaitTermination(3, TimeUnit.SECONDS);
+            // #region agent log
+            java.util.Map<String, Object> data = new java.util.HashMap<>();
+            data.put("terminated", terminated);
+            data.put("isShutdown", handlerExecutor.isShutdown());
+            data.put("isTerminated", handlerExecutor.isTerminated());
+            com.aegisos.core.util.DebugLogger.log("NetworkLayer.java:319", "handlerExecutor shutdown status",
+                data, "D", "pre-fix");
+            // #endregion
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         if (server != null) {
             server.close();
         }

@@ -44,6 +44,8 @@ public class Sprint4SignOffTest {
     @Test
     void testFullVerificationRecommendationPipeline() throws Exception {
         // Boot 3-node cluster
+        harness.setJobSupervisorEnabled(false); // Storage audit test: disable execution subsystem
+        harness.setRepairEnabled(false); // Storage audit test: disable automatic repair (Raft mutations)
         List<AegisNode> nodes = harness.start(3);
         ClusterHarness.await(5000, () ->
                 nodes.stream().allMatch(n -> n.discovery().membership().alivePeerIds().size() == 2));

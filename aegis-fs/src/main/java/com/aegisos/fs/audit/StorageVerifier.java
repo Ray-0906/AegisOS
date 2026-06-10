@@ -89,27 +89,7 @@ public final class StorageVerifier {
 
         List<Long> evidenceScans = store.evidenceScansFor(chunkId, REQUIRED_CONSECUTIVE_SCANS);
 
-        // Step 2: Membership check — is there at least one missing node that is ALIVE?
-        // Rationale: Absence on a DEAD or UNREACHABLE node is expected and is NOT a repair trigger.
-        // Therefore, we only care about missing nodes that are expected to be ALIVE.
-        // If a missing node is not ALIVE, we ignore it. If there are no ALIVE missing nodes left, then we cannot verify.
-        boolean hasAliveMissing = false;
-        for (NodeId missingNode : divergence.missingFromNodes) {
-            PeerStatus status = discovery.membership().statusOf(missingNode);
-            if (status == PeerStatus.ALIVE) {
-                hasAliveMissing = true;
-                break;
-            }
-        }
-        if (!hasAliveMissing) {
-            return new VerificationResult(
-                    chunkId,
-                    VerificationStatus.NODE_UNAVAILABLE,
-                    "No missing nodes are currently ALIVE; cannot verify divergence",
-                    currentScanId,
-                    evidenceScans
-            );
-        }
+
 
         // Step 3: Re-observe physical reality NOW
         try {

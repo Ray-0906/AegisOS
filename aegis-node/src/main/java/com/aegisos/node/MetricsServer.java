@@ -38,6 +38,7 @@ public final class MetricsServer implements AutoCloseable {
     private final AegisNode node;
     private final int port;
     private HttpServer server;
+    private java.util.concurrent.ExecutorService executor;
 
     public MetricsServer(AegisNode node, int port) {
         this.node = node;
@@ -341,6 +342,48 @@ public final class MetricsServer implements AutoCloseable {
             }
         });
 
+        server.createContext("/metrics/jobs", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            try {
+                var agent = node.runtimeAgent();
+                var supervisor = node.jobSupervisor();
+                long jobsLost = supervisor != null ? supervisor.jobsLost.get() : 0;
+                long jobsRequeued = supervisor != null ? supervisor.jobsRequeued.get() : 0;
+                
+                String json = String.format("""
+                        {
+                          "jobsStarted": %d,
+                          "jobsCompleted": %d,
+                          "jobsFailed": %d,
+                          "jobsCancelled": %d,
+                          "jobsLost": %d,
+                          "jobsRequeued": %d,
+                          "jobsSuperseded": %d,
+                          "fencingDrops": %d,
+                          "logUploadsSucceeded": %d,
+                          "logUploadsFailed": %d
+                        }
+                        """,
+                        agent.jobsStarted.get(), agent.jobsCompleted.get(), agent.jobsFailed.get(),
+                        agent.jobsCancelled.get(), jobsLost, jobsRequeued,
+                        agent.jobsSuperseded.get(), agent.fencingDrops.get(),
+                        agent.logUploadsSucceeded.get(), agent.logUploadsFailed.get());
+                        
+                byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to generate jobs metrics", e);
+                exchange.sendResponseHeaders(500, -1);
+            }
+        });
+
         server.createContext("/raft/metrics", exchange -> {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
@@ -391,7 +434,8 @@ public final class MetricsServer implements AutoCloseable {
             }
         });
 
-        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        executor = Executors.newVirtualThreadPerTaskExecutor();
+        server.setExecutor(executor);
         server.start();
         log.info("Metrics server listening on http://0.0.0.0:{}/ (endpoints: /metrics, /health)", port);
     }
@@ -534,6 +578,17 @@ public final class MetricsServer implements AutoCloseable {
         if (server != null) {
             server.stop(1); // Use 1-second timeout to prevent shutdown hanging
             log.info("Metrics server stopped");
+        }
+        if (executor != null) {
+            executor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    log.warn("MetricsServer executor did not terminate within 5 seconds");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Interrupted while waiting for MetricsServer executor termination");
+            }
         }
     }
 

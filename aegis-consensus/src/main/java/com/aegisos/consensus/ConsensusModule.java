@@ -213,16 +213,9 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         byte[] bytes = command.toByteArray();
         NodeId leader = raftNode.leaderId();
         if (leader == null) {
-            // #region agent log
-            dbg("H2", "ConsensusModule.java:propose", "no known leader at propose time",
-                    "isLeader=" + raftNode.isLeader());
-            // #endregion
             return CompletableFuture.failedFuture(new NotLeaderException(null));
         }
-        // #region agent log
-        dbg("H3", "ConsensusModule.java:propose", "forwarding to leader",
-                "leader=" + leader.shortId());
-        // #endregion
+
         return network.request(leader, MessageType.CLIENT_COMMAND, bytes, COMMIT_TIMEOUT_MS + 5_000)
                 .thenApply(reply -> {
                     try {
@@ -332,17 +325,4 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         raftNode.stop();
     }
 
-    // #region agent log
-    private static void dbg(String hyp, String loc, String msg, String data) {
-        try {
-            String line = "{\"sessionId\":\"e9aa02\",\"hypothesisId\":\"" + hyp + "\",\"location\":\"" + loc
-                    + "\",\"message\":\"" + msg + "\",\"data\":{\"info\":\"" + data + "\"},\"timestamp\":"
-                    + System.currentTimeMillis() + "}\n";
-            java.nio.file.Files.writeString(
-                    java.nio.file.Path.of("C:\\Users\\astra\\Desktop\\projects\\AgeisOS\\debug-e9aa02.log"),
-                    line, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
-        } catch (Exception ignored) {
-        }
-    }
-    // #endregion
 }

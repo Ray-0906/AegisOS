@@ -47,8 +47,8 @@ public class DivergenceReportGenerator {
                 }
             }
 
-            // Apply the two conditions
-            if (!missingFrom.isEmpty() && globalPhysicalCount < expected.requiredReplicationFactor()) {
+            // Apply the global physical count condition
+            if (globalPhysicalCount < expected.requiredReplicationFactor()) {
                 divergences.add(new UnderReplicatedChunk(
                         expected.chunkIdHex(),
                         expected.requiredReplicationFactor(),

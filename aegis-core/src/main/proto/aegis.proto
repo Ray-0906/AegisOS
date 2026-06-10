@@ -242,13 +242,14 @@ enum JobState {
   JOB_UNKNOWN = 0;
   QUEUED      = 1;
   RUNNING     = 2;
-  SUCCESS     = 3;
+  SUCCESS     = 3;  // deprecated: use COMPLETED
   COMPLETED   = 4;
   FAILED      = 5;
-  MIGRATING   = 6;
+  MIGRATING   = 6;  // deprecated: unused
   LOST        = 7;
-  ASSIGNED    = 8;
+  ASSIGNED    = 8;  // deprecated: use QUEUED
   PENDING     = 9;
+  CANCELLED   = 10;
 }
 
 message ResourceRequest {
@@ -276,6 +277,8 @@ message JobRecord {
   bytes   result          = 7;
   string  error           = 8;
   uint64  execution_id    = 9;
+  string  stdout_path     = 11;
+  string  stderr_path     = 12;
 }
 
 message ProbeRequest {

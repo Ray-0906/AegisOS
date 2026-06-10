@@ -396,6 +396,104 @@ final class ClientCommands {
         }
     }
 
+    static int runJobsList(List<String> seeds) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis jobs list: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    Thread.sleep(500); // allow raft catch-up
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                System.out.printf("%-36s %-12s %-14s %-6s %s%n", "JOB ID", "STATE", "NODE", "EXEC", "ERROR");
+                for (com.aegisos.proto.JobRecord r : node.runtimeAgent().registry().all()) {
+                    String nodeShort = r.getAssignedNodeId().isEmpty() ? "-"
+                            : com.aegisos.core.identity.NodeId.of(r.getAssignedNodeId().toByteArray()).shortId();
+                    String error = r.getError().isEmpty() ? "" : r.getError();
+                    System.out.printf("%-36s %-12s %-14s %-6d %s%n",
+                            r.getSpec().getJobId(), r.getState(), nodeShort, r.getExecutionId(), error);
+                }
+                return 0;
+            });
+        } catch (Exception e) {
+            System.err.println("aegis jobs list failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    static int runJobsCancel(List<String> seeds, String jobId) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis jobs cancel: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    node.runtimeAgent().cancelJob(jobId);
+                    System.out.println("Cancel requested for job " + jobId);
+                    return 0;
+                } catch (Exception e) {
+                    System.err.println("cancel failed: " + e.getMessage());
+                    return 1;
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("aegis jobs cancel failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    static int runJobsLogs(List<String> seeds, String jobId, Long executionId) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis jobs logs: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    // Wait for job registry to replicate
+                    for (int i = 0; i < 60 && node.runtimeAgent().registry().get(jobId).isEmpty(); i++) {
+                        Thread.sleep(100);
+                    }
+                    com.aegisos.proto.JobRecord record = node.runtimeAgent().registry().get(jobId)
+                            .orElseThrow(() -> new IllegalStateException("Unknown job: " + jobId));
+
+                    long execId = executionId != null ? executionId : record.getExecutionId();
+                    String stdoutPath = "/jobs/" + jobId + "/" + execId + "/stdout";
+                    String stderrPath = "/jobs/" + jobId + "/" + execId + "/stderr";
+
+                    System.out.println("=== STDOUT (execution " + execId + ") ===");
+                    try {
+                        byte[] stdout = node.fileSystem().read(stdoutPath);
+                        System.out.println(new String(stdout, java.nio.charset.StandardCharsets.UTF_8));
+                    } catch (Exception e) {
+                        System.out.println("(no stdout available)");
+                    }
+
+                    System.out.println("=== STDERR (execution " + execId + ") ===");
+                    try {
+                        byte[] stderr = node.fileSystem().read(stderrPath);
+                        System.out.println(new String(stderr, java.nio.charset.StandardCharsets.UTF_8));
+                    } catch (Exception e) {
+                        System.out.println("(no stderr available)");
+                    }
+                    return 0;
+                } catch (Exception e) {
+                    System.err.println("logs failed: " + e.getMessage());
+                    return 1;
+                }
+            });
+        } catch (Exception e) {
+            System.err.println("aegis jobs logs failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+
+
     private static int notReady(String cmd) {
         System.err.println("aegis " + cmd + ": not available in this build");
         return 2;

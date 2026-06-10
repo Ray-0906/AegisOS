@@ -77,6 +77,7 @@ public class OvernightSoakTest {
         int peakThreadCount = 0;
 
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));
@@ -91,6 +92,63 @@ public class OvernightSoakTest {
 
             List<String> allArtifacts = new ArrayList<>();
             allArtifacts.add(artifactId);
+
+            // Background job traffic thread
+            final java.util.concurrent.atomic.AtomicInteger submittedJobs = new java.util.concurrent.atomic.AtomicInteger(0);
+            final java.util.concurrent.atomic.AtomicInteger completedJobs = new java.util.concurrent.atomic.AtomicInteger(0);
+            final java.util.concurrent.atomic.AtomicInteger failedOrLostJobs = new java.util.concurrent.atomic.AtomicInteger(0);
+            
+            Thread trafficThread = new Thread(() -> {
+                while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() < endTime) {
+                    try {
+                        Thread.sleep(15_000);
+                        AegisNode curLeader = findLeader(cluster);
+                        if (curLeader != null) {
+                            try {
+                                com.aegisos.api.JobHandle handle = curLeader.api().getProcessManager().submit(new com.aegisos.cluster.jobs.SleepJob(4_000), 1, 128);
+                                submittedJobs.incrementAndGet();
+                                System.out.printf("  [Traffic] Submitted job %s%n", handle.jobId());
+                                
+                                // Spin a virtual thread to wait for it to complete/fail
+                                Thread.ofVirtual().start(() -> {
+                                    String jId = handle.jobId();
+                                    long waitStart = System.currentTimeMillis();
+                                    while (System.currentTimeMillis() - waitStart < 45_000) {
+                                        try {
+                                            AegisNode l = findLeader(cluster);
+                                            if (l != null) {
+                                                com.aegisos.proto.JobState st = l.api().getProcessManager().status(jId);
+                                                if (st == com.aegisos.proto.JobState.COMPLETED) {
+                                                    completedJobs.incrementAndGet();
+                                                    System.out.printf("  [Traffic] Job %s completed%n", jId);
+                                                    return;
+                                                } else if (st == com.aegisos.proto.JobState.FAILED || st == com.aegisos.proto.JobState.CANCELLED) {
+                                                    failedOrLostJobs.incrementAndGet();
+                                                    System.out.printf("  [Traffic] Job %s failed/cancelled: %s%n", jId, st);
+                                                    return;
+                                                }
+                                            }
+                                            Thread.sleep(500);
+                                        } catch (InterruptedException e) {
+                                            Thread.currentThread().interrupt();
+                                            return;
+                                        } catch (Exception ignored) {}
+                                    }
+                                    failedOrLostJobs.incrementAndGet();
+                                    System.out.printf("  [Traffic] Job %s timed out waiting for completion%n", jId);
+                                });
+                            } catch (Exception e) {
+                                System.out.printf("  [Traffic] Failed to submit job: %s%n", e.getMessage());
+                            }
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            });
+            trafficThread.setDaemon(true);
+            trafficThread.start();
 
             while (System.currentTimeMillis() < endTime) {
                 totalCycles++;
@@ -211,6 +269,26 @@ public class OvernightSoakTest {
                 Thread.sleep(CYCLE_INTERVAL_MS);
             }
 
+            trafficThread.interrupt();
+            try {
+                trafficThread.join(5000);
+            } catch (InterruptedException ignored) {}
+
+            // Wait up to 15 seconds for any in-flight traffic jobs to finish
+            long waitTrafficStart = System.currentTimeMillis();
+            while (completedJobs.get() + failedOrLostJobs.get() < submittedJobs.get() 
+                   && System.currentTimeMillis() - waitTrafficStart < 15_000) {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+
+            int totalTrafficSubmitted = submittedJobs.get();
+            int totalTrafficCompleted = completedJobs.get();
+
             // --- Final report ---
             System.out.println("\n========================================");
             System.out.println("=== OVERNIGHT SOAK TEST FINAL REPORT ===");
@@ -244,6 +322,13 @@ public class OvernightSoakTest {
                         .filter(t -> System.currentTimeMillis() - t.committedAt() > 600_000)
                         .count();
                 assertEquals(0, stuckPending, "No PENDING repair tasks should be stuck at end of soak");
+            }
+
+            System.out.printf("Traffic Stats: Submitted=%d, Completed=%d%n", totalTrafficSubmitted, totalTrafficCompleted);
+            if (SOAK_DURATION_MINUTES >= 5 && totalTrafficSubmitted > 0) {
+                double completionRate = (double) totalTrafficCompleted / totalTrafficSubmitted;
+                System.out.printf("Traffic completion rate: %.2f%%%n", completionRate * 100);
+                assertTrue(completionRate >= 0.90, "Expected >= 90% completion rate for traffic, was " + (completionRate * 100) + "%");
             }
 
             System.out.println("=== OVERNIGHT SOAK TEST PASSED ===");

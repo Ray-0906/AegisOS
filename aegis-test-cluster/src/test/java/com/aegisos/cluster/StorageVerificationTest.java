@@ -29,6 +29,8 @@ public class StorageVerificationTest {
 
     @Test
     void testInsufficientHistoryOnFirstScan() throws Exception {
+        harness.setJobSupervisorEnabled(false);
+        harness.setRepairEnabled(false);
         List<AegisNode> nodes = harness.start(3);
         ClusterHarness.await(5000, () ->
                 nodes.stream().allMatch(n -> n.discovery().membership().alivePeerIds().size() == 2));
@@ -65,6 +67,8 @@ public class StorageVerificationTest {
 
     @Test
     void testVerifiedWithCorrectEvidence() throws Exception {
+        harness.setJobSupervisorEnabled(false);
+        harness.setRepairEnabled(false);
         List<AegisNode> nodes = harness.start(3);
         ClusterHarness.await(5000, () ->
                 nodes.stream().allMatch(n -> n.discovery().membership().alivePeerIds().size() == 2));
@@ -109,6 +113,8 @@ public class StorageVerificationTest {
 
     @Test
     void testNoLongerDivergentAfterHeal() throws Exception {
+        harness.setJobSupervisorEnabled(false);
+        harness.setRepairEnabled(false);
         List<AegisNode> nodes = harness.start(3);
         ClusterHarness.await(5000, () ->
                 nodes.stream().allMatch(n -> n.discovery().membership().alivePeerIds().size() == 2));
@@ -156,6 +162,8 @@ public class StorageVerificationTest {
 
     @Test
     void testPersistentRecommendationAcrossMultipleScans() throws Exception {
+        harness.setJobSupervisorEnabled(false);
+        harness.setRepairEnabled(false);
         List<AegisNode> nodes = harness.start(3);
         ClusterHarness.await(5000, () ->
                 nodes.stream().allMatch(n -> n.discovery().membership().alivePeerIds().size() == 2));
@@ -176,37 +184,45 @@ public class StorageVerificationTest {
 
         // Scan 1
         scheduler.runOnce();
+        assertFalse(scheduler.getVerifications().isEmpty(), "Scan 1: verifications must be non-empty");
         assertEquals(VerificationStatus.INSUFFICIENT_HISTORY,
                 scheduler.getVerifications().get(0).status());
         assertTrue(scheduler.getRecommendations().isEmpty());
 
         // Scan 2
         scheduler.runOnce();
+        assertFalse(scheduler.getVerifications().isEmpty(), "Scan 2: verifications must be non-empty");
         assertEquals(VerificationStatus.VERIFIED,
                 scheduler.getVerifications().get(0).status());
         assertEquals(1, scheduler.getRecommendations().size());
-        assertEquals(List.of(1L, 2L), scheduler.getRecommendations().get(0).evidenceScans());
+        List<Long> scan2Ids = scheduler.getVerifications().get(0).evidenceScans();
+        assertEquals(2, scan2Ids.size(), "Scan 2: evidence chain should have 2 entries");
+        final long baseScan = scan2Ids.get(0);
+        assertEquals(List.of(baseScan, baseScan + 1), scheduler.getRecommendations().get(0).evidenceScans());
 
         // Scan 3
         scheduler.runOnce();
+        assertFalse(scheduler.getVerifications().isEmpty(), "Scan 3: verifications must be non-empty");
         assertEquals(VerificationStatus.VERIFIED,
                 scheduler.getVerifications().get(0).status());
         assertEquals(1, scheduler.getRecommendations().size());
-        assertEquals(List.of(2L, 3L), scheduler.getRecommendations().get(0).evidenceScans());
+        assertEquals(List.of(baseScan + 1, baseScan + 2), scheduler.getRecommendations().get(0).evidenceScans());
 
         // Scan 4
         scheduler.runOnce();
+        assertFalse(scheduler.getVerifications().isEmpty(), "Scan 4: verifications must be non-empty");
         assertEquals(VerificationStatus.VERIFIED,
                 scheduler.getVerifications().get(0).status());
         assertEquals(1, scheduler.getRecommendations().size());
-        assertEquals(List.of(3L, 4L), scheduler.getRecommendations().get(0).evidenceScans());
+        assertEquals(List.of(baseScan + 2, baseScan + 3), scheduler.getRecommendations().get(0).evidenceScans());
 
         // Scan 5
         scheduler.runOnce();
+        assertFalse(scheduler.getVerifications().isEmpty(), "Scan 5: verifications must be non-empty");
         assertEquals(VerificationStatus.VERIFIED,
                 scheduler.getVerifications().get(0).status());
         assertEquals(1, scheduler.getRecommendations().size());
-        assertEquals(List.of(4L, 5L), scheduler.getRecommendations().get(0).evidenceScans());
+        assertEquals(List.of(baseScan + 3, baseScan + 4), scheduler.getRecommendations().get(0).evidenceScans());
 
         // Assert only one recommendation is generated for this chunk
         assertEquals(1, scheduler.getRecommendations().size());

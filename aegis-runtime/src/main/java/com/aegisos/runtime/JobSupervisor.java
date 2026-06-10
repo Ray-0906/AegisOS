@@ -25,13 +25,24 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Only the Raft leader performs migration, avoiding duplicate reassignments. A short
  * cooldown debounces repeated migrations of the same job.
+ *
+ * <p><b>Sprint 7 — Execution Leases:</b> The supervisor uses a lease-based model to decide
+ * when a worker has failed. A worker must send heartbeats every 5 seconds. If no heartbeat
+ * is received within {@code LEASE_DURATION_MS} (15 seconds), the lease is considered
+ * expired and the job is eligible for requeue. Gossip status is used as a secondary signal
+ * only. This drastically reduces false migrations during transient network issues.
  */
 public final class JobSupervisor implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(JobSupervisor.class);
     private static final long SCAN_INTERVAL_MS = 3_000;
     private static final long MIGRATION_COOLDOWN_MS = 10_000;
-    private static final long HEARTBEAT_STALE_MS = 30_000;
+
+    /** Execution lease duration. Worker must heartbeat within this window or be considered dead. */
+    private static final long LEASE_DURATION_MS = Long.getLong("aegis.lease.duration.ms", 15_000);
+
+    /** If a QUEUED job has had no heartbeat for this long, re-dispatch it. */
+    private static final long QUEUED_STALE_THRESHOLD_MS = Long.getLong("aegis.queued.stale.ms", 20_000);
 
     private final DiscoveryService discovery;
     private final ConsensusModule consensus;
@@ -41,8 +52,15 @@ public final class JobSupervisor implements AutoCloseable {
     private final ProcessRuntimeAgent agent;
     private final Map<String, Long> recentlyMigrated = new ConcurrentHashMap<>();
     private final Map<String, Long> lastHeartbeat = new ConcurrentHashMap<>();
+    private final Map<String, Long> firstSeenQueued = new ConcurrentHashMap<>();
     private final ScheduledExecutorService executor =
             Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+
+    /** Tracks whether we were leader on the previous scan, to detect leadership transitions. */
+    private volatile boolean wasLeader = false;
+    private volatile long leadershipAcquiredTime = 0;
+    public final java.util.concurrent.atomic.AtomicLong jobsLost = new java.util.concurrent.atomic.AtomicLong(0);
+    public final java.util.concurrent.atomic.AtomicLong jobsRequeued = new java.util.concurrent.atomic.AtomicLong(0);
 
     public JobSupervisor(DiscoveryService discovery, ConsensusModule consensus,
                                 Scheduler scheduler, NetworkLayer network, NodeId self,
@@ -58,7 +76,7 @@ public final class JobSupervisor implements AutoCloseable {
     public void start() {
         network.registerHandler(MessageType.JOB_HEARTBEAT, this::onHeartbeat);
         executor.scheduleAtFixedRate(this::scanSafe, SCAN_INTERVAL_MS, SCAN_INTERVAL_MS, TimeUnit.MILLISECONDS);
-        log.info("Job supervisor started");
+        log.info("Job supervisor started (lease={}ms)", LEASE_DURATION_MS);
     }
 
     private com.aegisos.core.message.AegisMessage onHeartbeat(com.aegisos.core.message.AegisMessage msg) {
@@ -82,18 +100,32 @@ public final class JobSupervisor implements AutoCloseable {
     }
 
     private void scan() {
-        if (!consensus.isLeader()) {
+        boolean isLeader = consensus.isLeader();
+        if (!isLeader) {
+            wasLeader = false;
             return;
         }
+
+        // Detect leadership transition: clear stale state from previous leader
+        if (!wasLeader) {
+            log.info("Became leader — clearing migration cooldowns and heartbeat state");
+            recentlyMigrated.clear();
+            lastHeartbeat.clear();
+            firstSeenQueued.clear();
+            wasLeader = true;
+            leadershipAcquiredTime = System.currentTimeMillis();
+        }
+
         long now = System.currentTimeMillis();
         for (JobRecord record : agent.registry().all()) {
-            if (record.getState() != JobState.RUNNING && record.getState() != JobState.QUEUED && record.getState() != JobState.LOST && record.getState() != JobState.PENDING) {
+            if (record.getState() != JobState.RUNNING && record.getState() != JobState.QUEUED
+                    && record.getState() != JobState.LOST && record.getState() != JobState.PENDING) {
                 continue;
             }
 
             String jobId = record.getSpec().getJobId();
             
-            // Handle PENDING jobs
+            // Handle PENDING jobs — schedule them
             if (record.getState() == JobState.PENDING) {
                 try {
                     NodeId target = scheduler.schedule(record.getSpec(), 1L);
@@ -127,25 +159,44 @@ public final class JobSupervisor implements AutoCloseable {
                 continue;
             }
 
-            // Normal processing for RUNNING / QUEUED
+            // --- Normal processing for RUNNING / QUEUED ---
+
             NodeId assigned = NodeId.of(record.getAssignedNodeId().toByteArray());
             if (assigned.equals(self)) {
                 continue;
             }
 
-            boolean isDeadOrUnknown = discovery.membership().statusOf(assigned) == PeerStatus.DEAD ||
-                                      discovery.membership().statusOf(assigned) == PeerStatus.PEER_UNKNOWN;
-            boolean staleHeartbeat = false;
-
+            // Lease-based failure detection (primary signal)
+            boolean leaseExpired = false;
             if (record.getState() == JobState.RUNNING) {
-                long last = lastHeartbeat.getOrDefault(record.getSpec().getJobId(), 0L);
-                if (last == 0 || now - last > HEARTBEAT_STALE_MS) {
-                    staleHeartbeat = true;
+                long last = lastHeartbeat.getOrDefault(jobId, 0L);
+                if (now - leadershipAcquiredTime > LEASE_DURATION_MS) {
+                    if (last == 0 || now - last > LEASE_DURATION_MS) {
+                        leaseExpired = true;
+                    }
                 }
             }
 
-            if (isDeadOrUnknown && (record.getState() == JobState.QUEUED || staleHeartbeat)) {
-                log.info("Job {} on failed node {}. Emitting LOST state.", jobId, assigned.shortId());
+            // For QUEUED jobs: detect stale dispatch (RUN_JOB message may have been lost)
+            if (record.getState() == JobState.QUEUED) {
+                long firstSeen = firstSeenQueued.computeIfAbsent(jobId, k -> now);
+                if (now - firstSeen > QUEUED_STALE_THRESHOLD_MS) {
+                    // Check gossip as secondary signal — only act if node appears dead
+                    PeerStatus status = discovery.membership().statusOf(assigned);
+                    if (status == PeerStatus.DEAD || status == PeerStatus.PEER_UNKNOWN) {
+                        log.info("Job {} QUEUED on unreachable node {} for {}ms. Emitting LOST.",
+                                jobId, assigned.shortId(), now - firstSeen);
+                        emitLostState(jobId, record);
+                        firstSeenQueued.remove(jobId);
+                    }
+                }
+                continue;
+            }
+
+            // RUNNING + lease expired → emit LOST
+            if (leaseExpired) {
+                log.info("Job {} on node {}: execution lease expired ({}ms since last heartbeat). Emitting LOST.",
+                        jobId, assigned.shortId(), now - lastHeartbeat.getOrDefault(jobId, 0L));
                 emitLostState(jobId, record);
             }
         }
@@ -162,6 +213,7 @@ public final class JobSupervisor implements AutoCloseable {
                     .setType(com.aegisos.proto.CommandType.UPDATE_JOB)
                     .setPayload(lostUpdate.toByteString())
                     .build()).get(5, TimeUnit.SECONDS);
+            jobsLost.incrementAndGet();
 
             // Test hook for Test Q (Race Condition)
             if (System.getProperty("aegis.test.delay_after_lost") != null) {
@@ -176,7 +228,19 @@ public final class JobSupervisor implements AutoCloseable {
     private void requeueJob(String jobId, JobRecord record) {
         try {
             long nextExecutionId = record.getExecutionId() + 1;
+
             NodeId newNode = scheduler.schedule(record.getSpec(), nextExecutionId);
+
+            // Send cancel to old node — even if it appears dead, it might come back.
+            // MUST be done AFTER schedule() commits the new executionId, so if the old node
+            // is killed, its failure report is fenced.
+            NodeId oldNode = NodeId.of(record.getAssignedNodeId().toByteArray());
+            if (!oldNode.equals(self)) {
+                log.info("Sending CANCEL_JOB to old node {} for job {} (superseded by executionId={})",
+                        oldNode.shortId(), jobId, nextExecutionId);
+                network.sendAsync(oldNode, MessageType.CANCEL_JOB,
+                        jobId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
 
             JobRecord resumed = record.toBuilder()
                     .setAssignedNodeId(ByteString.copyFrom(newNode.toBytes()))
@@ -192,13 +256,10 @@ public final class JobSupervisor implements AutoCloseable {
             }
             log.info("Job {} requeued to {} (executionId={}, checkpoint='{}')", jobId, newNode.shortId(),
                     nextExecutionId, record.getCheckpointFileId());
+            jobsRequeued.incrementAndGet();
         } catch (Exception e) {
             log.warn("Failed to requeue lost job {}: {}", jobId, e.toString());
         }
-    }
-
-    private boolean isAlive(NodeId id) {
-        return discovery.membership().statusOf(id) == PeerStatus.ALIVE;
     }
 
     @Override

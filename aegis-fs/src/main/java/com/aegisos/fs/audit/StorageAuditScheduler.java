@@ -35,8 +35,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class StorageAuditScheduler implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(StorageAuditScheduler.class);
-    private static final long INTERVAL_SECONDS = 60;
 
+    private final long intervalSeconds;
     private final AegisFS fileSystem;
     private final DiscoveryService discovery;
     private final NetworkLayer network;
@@ -61,21 +61,23 @@ public final class StorageAuditScheduler implements AutoCloseable {
 
     public StorageAuditScheduler(AegisFS fileSystem, DiscoveryService discovery,
                                  NetworkLayer network, NodeId self,
-                                 java.util.function.BooleanSupplier isLeader) {
+                                 java.util.function.BooleanSupplier isLeader,
+                                 long intervalSeconds) {
         this.fileSystem = fileSystem;
         this.discovery = discovery;
         this.network = network;
         this.self = self;
         this.isLeader = isLeader;
+        this.intervalSeconds = intervalSeconds;
         this.store = new AuditReportStore();
     }
 
     /**
-     * Starts periodic audit scanning every 60 seconds.
+     * Starts periodic audit scanning.
      */
     public void start() {
-        scheduler.scheduleWithFixedDelay(this::runOnceSafe, INTERVAL_SECONDS, INTERVAL_SECONDS, TimeUnit.SECONDS);
-        log.info("Storage audit scheduler started (interval {}s)", INTERVAL_SECONDS);
+        scheduler.scheduleWithFixedDelay(this::runOnceSafe, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+        log.info("Storage audit scheduler started (interval {}s)", intervalSeconds);
     }
 
     private void runOnceSafe() {

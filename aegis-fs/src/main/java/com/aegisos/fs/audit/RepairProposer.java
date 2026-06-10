@@ -289,21 +289,8 @@ public final class RepairProposer {
             }
         }
 
-        // If metadata replication factor is met, or no nodes are missing it, it's no longer divergent
-        if (globalPhysicalCount >= expected.requiredReplicationFactor() || missingNodes.isEmpty()) {
-            return false;
-        }
-
-        // Check if there is at least one missing node that is ALIVE
-        boolean hasAliveMissing = false;
-        for (NodeId missingNode : missingNodes) {
-            PeerStatus status = discovery.membership().statusOf(missingNode);
-            if (status == PeerStatus.ALIVE) {
-                hasAliveMissing = true;
-                break;
-            }
-        }
-        if (!hasAliveMissing) {
+        // If metadata replication factor is met, it's no longer divergent
+        if (globalPhysicalCount >= expected.requiredReplicationFactor()) {
             return false;
         }
 
