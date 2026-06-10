@@ -10,6 +10,9 @@ import com.aegisos.proto.ChunkRef;
 import com.aegisos.proto.CommandType;
 import com.aegisos.proto.FileMetadata;
 import com.aegisos.proto.StateCommand;
+import com.aegisos.proto.RepairChunk;
+import com.aegisos.proto.RepairComplete;
+import com.aegisos.fs.audit.RepairTaskStore;
 import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +46,7 @@ public final class AegisFS implements AutoCloseable {
     private final ChunkReplicator replicator;
     private final ChunkPlacement placement;
     private final FileIndex fileIndex = new FileIndex();
+    private final RepairTaskStore repairTaskStore = new RepairTaskStore();
 
     private final LocalHealthStore localHealth;
     private final ChunkScrubber scrubber;
@@ -86,6 +90,37 @@ public final class AegisFS implements AutoCloseable {
                 log.warn("bad REMOVE_REPLICA at {}", index);
             }
         });
+        consensus.stateMachine().register(CommandType.REPAIR_CHUNK, (index, cmd) -> {
+            try {
+                RepairChunk repair = RepairChunk.parseFrom(cmd.getPayload());
+                repairTaskStore.applyRepairChunk(index, repair);
+                log.info("REPAIR_CHUNK at {}: task {} created for chunk {}",
+                    index, repair.getRepairId(), HexUtil.encode(repair.getChunkId().toByteArray()));
+            } catch (Exception e) {
+                log.warn("bad REPAIR_CHUNK at {}", index);
+            }
+        });
+        consensus.stateMachine().register(CommandType.REPAIR_COMPLETE, (index, cmd) -> {
+            try {
+                RepairComplete complete = RepairComplete.parseFrom(cmd.getPayload());
+                Optional<RepairTaskStore.RepairTask> task =
+                    repairTaskStore.pendingByRepairId(complete.getRepairId());
+                if (task.isEmpty()) {
+                    log.info("REPAIR_COMPLETE at {} ignored: no PENDING task for {}",
+                        index, complete.getRepairId());
+                    return;
+                }
+
+                fileIndex.applyAddReplica(com.aegisos.proto.AddReplica.newBuilder()
+                    .setFileId(complete.getFileId())
+                    .setChunkId(complete.getChunkId())
+                    .setNodeId(complete.getTargetNodeId())
+                    .build());
+                repairTaskStore.applyRepairComplete(index, complete);
+            } catch (Exception e) {
+                log.warn("bad REPAIR_COMPLETE at {}", index);
+            }
+        });
     }
 
     public void start() {
@@ -103,6 +138,10 @@ public final class AegisFS implements AutoCloseable {
         return fileIndex;
     }
 
+    public RepairTaskStore repairTaskStore() {
+        return repairTaskStore;
+    }
+
     public LocalHealthStore localHealth() {
         return localHealth;
     }
@@ -110,6 +149,29 @@ public final class AegisFS implements AutoCloseable {
     /** Stores an already-encrypted chunk on a target node (used by self-healing). */
     public boolean replicateChunk(NodeId target, byte[] chunkId, byte[] data) {
         return replicator.storeOn(target, chunkId, data);
+    }
+
+    /** Fetches an encrypted chunk from a source node. */
+    public byte[] fetchChunk(NodeId source, byte[] chunkId) {
+        return replicator.fetchFrom(source, chunkId);
+    }
+
+
+
+    /** Returns true if the chunk's replication factor in FileIndex is strictly less than required. */
+    public boolean isStillUnderReplicated(byte[] chunkId, byte[] fileId) {
+        String fileIdHex = HexUtil.encode(fileId);
+        Optional<FileMetadata> metaOpt = fileIndex.byFileId(fileIdHex);
+        if (metaOpt.isEmpty()) {
+            return false;
+        }
+        FileMetadata meta = metaOpt.get();
+        for (ChunkRef ref : meta.getChunksList()) {
+            if (java.util.Arrays.equals(ref.getChunkId().toByteArray(), chunkId)) {
+                return ref.getNodeIdsCount() < meta.getReplication();
+            }
+        }
+        return false;
     }
 
     /** Writes a file into the cluster and returns its file id. */

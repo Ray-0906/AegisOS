@@ -130,17 +130,11 @@ public final class ProcessManager {
                 return scheduler.schedule(spec, 1L);
             } catch (Exception e) {
                 if (isNotLeaderException(e)) {
-                    // #region agent log
-                    dbg("H1", "ProcessManager.java:scheduleWithRetry", "caught NotLeaderException (possibly wrapped)", e, e.getCause());
-                    // #endregion
                     if (System.currentTimeMillis() >= deadline) {
                         throw e;
                     }
                     Thread.sleep(SCHEDULE_RETRY_SLEEP_MS);
                 } else {
-                    // #region agent log
-                    dbg("H1", "ProcessManager.java:scheduleWithRetry", "caught OTHER exception (not retried)", e, e.getCause());
-                    // #endregion
                     throw e;
                 }
             }
@@ -157,20 +151,6 @@ public final class ProcessManager {
         return false;
     }
 
-    // #region agent log
-    private static void dbg(String hyp, String loc, String msg, Throwable t, Throwable cause) {
-        try {
-            String line = "{\"sessionId\":\"e9aa02\",\"hypothesisId\":\"" + hyp + "\",\"location\":\"" + loc
-                    + "\",\"message\":\"" + msg + "\",\"data\":{\"ex\":\"" + (t == null ? "null" : t.getClass().getName())
-                    + "\",\"cause\":\"" + (cause == null ? "null" : cause.getClass().getName())
-                    + "\"},\"timestamp\":" + System.currentTimeMillis() + "}\n";
-            java.nio.file.Files.writeString(
-                    java.nio.file.Path.of("C:\\Users\\astra\\Desktop\\projects\\AgeisOS\\debug-e9aa02.log"),
-                    line, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
-        } catch (Exception ignored) {
-        }
-    }
-    // #endregion
 
     public JobState status(String jobId) {
         return agent.registry().get(jobId).map(JobRecord::getState).orElse(JobState.JOB_UNKNOWN);
@@ -195,6 +175,9 @@ public final class ProcessManager {
                 }
                 if (r.getState() == JobState.FAILED) {
                     throw new RuntimeException("job failed: " + r.getError());
+                }
+                if (r.getState() == JobState.CANCELLED) {
+                    throw new RuntimeException("job cancelled: " + r.getError());
                 }
             }
             Thread.sleep(50);

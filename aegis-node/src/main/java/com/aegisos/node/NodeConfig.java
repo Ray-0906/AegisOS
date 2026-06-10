@@ -27,9 +27,102 @@ public final class NodeConfig {
     private com.aegisos.proto.NodeRole role = com.aegisos.proto.NodeRole.CLUSTER_MEMBER;
     // v0.1: a shared cluster secret wraps per-chunk keys. Override in production.
     private String clusterSecret = "aegis-dev-cluster-secret";
+    private boolean bootstrap = false;
+    private int membershipLagThreshold = 10;
+    private int repairRecommendationMaxAgeSeconds = 180;
+    private int repairTaskTimeoutSeconds = 300;
+    private int snapshotEntryThreshold = 1000;
+    private long snapshotSizeThresholdBytes = 64 * 1024 * 1024; // 64 MB
+    /** When false, the JobSupervisor (execution lease monitor) is not started.
+     * Use this for storage-only test clusters that must not produce execution Raft entries. */
+    private boolean jobSupervisorEnabled = true;
+    /** When false, RepairProposer is not started, so divergences are audited but not automatically repaired. */
+    private boolean repairEnabled = true;
+    private long auditIntervalSeconds = 60;
+
+    public boolean bootstrap() {
+        return bootstrap;
+    }
+
+    public NodeConfig bootstrap(boolean b) {
+        this.bootstrap = b;
+        return this;
+    }
 
     public Path homeDir() {
         return homeDir;
+    }
+
+    public int membershipLagThreshold() {
+        return membershipLagThreshold;
+    }
+
+    public NodeConfig membershipLagThreshold(int threshold) {
+        this.membershipLagThreshold = threshold;
+        return this;
+    }
+
+    public int repairRecommendationMaxAgeSeconds() {
+        return repairRecommendationMaxAgeSeconds;
+    }
+
+    public NodeConfig repairRecommendationMaxAgeSeconds(int sec) {
+        this.repairRecommendationMaxAgeSeconds = sec;
+        return this;
+    }
+
+    public int repairTaskTimeoutSeconds() {
+        return repairTaskTimeoutSeconds;
+    }
+
+    public NodeConfig repairTaskTimeoutSeconds(int sec) {
+        this.repairTaskTimeoutSeconds = sec;
+        return this;
+    }
+
+    public int snapshotEntryThreshold() {
+        return snapshotEntryThreshold;
+    }
+
+    public NodeConfig snapshotEntryThreshold(int threshold) {
+        this.snapshotEntryThreshold = threshold;
+        return this;
+    }
+
+    public long snapshotSizeThresholdBytes() {
+        return snapshotSizeThresholdBytes;
+    }
+
+    public NodeConfig snapshotSizeThresholdBytes(long bytes) {
+        this.snapshotSizeThresholdBytes = bytes;
+        return this;
+    }
+
+    public boolean jobSupervisorEnabled() {
+        return jobSupervisorEnabled;
+    }
+
+    public NodeConfig jobSupervisorEnabled(boolean enabled) {
+        this.jobSupervisorEnabled = enabled;
+        return this;
+    }
+
+    public boolean repairEnabled() {
+        return repairEnabled;
+    }
+
+    public NodeConfig repairEnabled(boolean enabled) {
+        this.repairEnabled = enabled;
+        return this;
+    }
+
+    public long auditIntervalSeconds() {
+        return auditIntervalSeconds;
+    }
+
+    public NodeConfig auditIntervalSeconds(long seconds) {
+        this.auditIntervalSeconds = seconds;
+        return this;
     }
 
     public NodeConfig homeDir(Path dir) {

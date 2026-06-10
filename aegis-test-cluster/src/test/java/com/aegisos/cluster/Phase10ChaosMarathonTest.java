@@ -21,12 +21,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 
  * Simulates an aggressive evening of abuse: 10 cycles of random node kills,
  * restarts, artifact uploads, and job executions on a cluster that is 
- * constantly churning. Proves that SelfHealingReaper successfully restores
- * the replication factor (RF=3) for artifacts after node deaths.
+ * constantly churning. Proves that the two-phase repair pipeline successfully
+ * restores the replication factor (RF=3) for artifacts after node deaths.
  */
 public class Phase10ChaosMarathonTest {
 
-    private static final int AWAIT_MS = 20_000;
+    private static final int AWAIT_MS = 45_000;
     private static final String MAIN_CLASS = "com.example.WordCounter";
 
     private static String uploadArtifact(ClusterHarness cluster, int runIndex) throws Exception {
@@ -91,7 +91,7 @@ public class Phase10ChaosMarathonTest {
     }
 
     private static void assertReplicationFactorRestored(ClusterHarness cluster, String artifactId, int expectedRf) throws Exception {
-        boolean restored = ClusterHarness.await(20_000, () -> {
+        boolean restored = ClusterHarness.await(45_000, () -> {
             try {
                 AegisNode leader = requireLeader(cluster);
                 java.util.Optional<com.aegisos.proto.FileMetadata> metaOpt = leader.fileSystem().fileIndex().byName("/artifacts/" + artifactId);
@@ -122,6 +122,7 @@ public class Phase10ChaosMarathonTest {
         Random rand = new Random(); // Fully random seed for repeated testing
 
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));
@@ -161,10 +162,10 @@ public class Phase10ChaosMarathonTest {
                         () -> replacement.artifactRegistry().bySha256(currentArtifactId).isPresent());
                 assertTrue(replacementWarm, "Replacement node must catch up registry");
 
-                // Wait for SelfHealingReaper to restore chunks to the replacement node
-                Thread.sleep(8000);
+                // Wait for audit-based repair pipeline to restore chunks to the replacement node
+                Thread.sleep(12_000);
 
-                // Assert that the SelfHealingReaper actually restored RF=3
+                // Assert that the repair pipeline actually restored RF=3
                 assertReplicationFactorRestored(cluster, currentArtifactId, 3);
 
                 // 4. Periodically upload a new artifact to test write availability

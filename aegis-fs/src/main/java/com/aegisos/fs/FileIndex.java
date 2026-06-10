@@ -1,10 +1,13 @@
 package com.aegisos.fs;
 
+import com.aegisos.consensus.SnapshotException;
+import com.aegisos.consensus.SnapshotParticipant;
 import com.aegisos.core.util.HexUtil;
 import com.aegisos.proto.FileMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -15,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * commands from the Raft log. A metadata entry with negative size acts as a tombstone
  * (delete).
  */
-public final class FileIndex {
+public final class FileIndex implements SnapshotParticipant {
 
     private static final Logger log = LoggerFactory.getLogger(FileIndex.class);
 
@@ -121,5 +124,50 @@ public final class FileIndex {
 
     public List<FileMetadata> all() {
         return new ArrayList<>(byFileId.values());
+    }
+
+    // --- SnapshotParticipant ---
+
+    @Override public String id() { return "file-index"; }
+
+    @Override
+    public synchronized byte[] snapshot() throws SnapshotException {
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(baos);
+            var values = new ArrayList<>(byFileId.values());
+            out.writeInt(values.size());
+            for (FileMetadata m : values) {
+                byte[] bytes = m.toByteArray();
+                out.writeInt(bytes.length);
+                out.write(bytes);
+            }
+            out.flush();
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new SnapshotException("Failed to snapshot FileIndex", e);
+        }
+    }
+
+    @Override
+    public synchronized void restore(byte[] data) throws SnapshotException {
+        try {
+            DataInputStream in = new DataInputStream(new ByteArrayInputStream(data));
+            byFileId.clear();
+            nameToFileId.clear();
+            int count = in.readInt();
+            for (int i = 0; i < count; i++) {
+                int len = in.readInt();
+                byte[] buf = new byte[len];
+                in.readFully(buf);
+                FileMetadata m = FileMetadata.parseFrom(buf);
+                String fileId = HexUtil.encode(m.getFileId().toByteArray());
+                byFileId.put(fileId, m);
+                nameToFileId.put(m.getName(), fileId);
+            }
+            log.info("Restored FileIndex: {} files", byFileId.size());
+        } catch (IOException e) {
+            throw new SnapshotException("Failed to restore FileIndex", e);
+        }
     }
 }

@@ -119,6 +119,7 @@ public class Phase9Test {
     @Test
     void newNodeCatchesUpArtifactRegistryFromLog() throws Exception {
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));
@@ -162,6 +163,7 @@ public class Phase9Test {
     @Test
     void leaderDeathTriggersReelectionWithTwoSurvivors() throws Exception {
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));
@@ -214,6 +216,7 @@ public class Phase9Test {
     @Test
     void repeatedNodeChurnDoesNotBreakArtifactRuntime() throws Exception {
         try (ClusterHarness cluster = new ClusterHarness()) {
+            cluster.setAutoRemoveVoters(true);
             cluster.start(3);
             boolean elected = ClusterHarness.await(AWAIT_MS,
                     () -> cluster.nodes().stream().allMatch(n -> n.consensus().leaderId() != null));
@@ -252,15 +255,15 @@ public class Phase9Test {
             // -- Round 3: submit via leader; any node (including replacement) can execute.
             // We do NOT force the replacement as executor here because:
             //   (a) A fresh node always wins scheduling (0 load) but can't yet download
-            //       artifact chunks — the SelfHealingReaper (2s interval) hasn't had time
+            //       artifact chunks — the repair pipeline hasn't had time
             //       to re-replicate the killed node's chunks to it yet.
             //   (b) The registry warm-up assertion above already validates that the
             //       replacement has correctly integrated into the cluster.
             assertJobRuns(requireLeader(cluster), artifactId, "round-3-cluster-healthy");
 
-            // Wait for the SelfHealingReaper to re-replicate the killed node's chunks to
-            // the replacement (reaper runs every reaperIntervalMs=2_000ms; two cycles
-            // ensure the chunk is physically on the replacement's chunk store).
+            // Wait for the repair pipeline to re-replicate the killed node's chunks to
+            // the replacement (audit scheduler runs every 60s in production; tests use
+            // manual runOnce() calls; here we wait for the background pipeline).
             Thread.sleep(5_000);
 
             // -- Round 4: replacement is now fully provisioned; submit directly via it.

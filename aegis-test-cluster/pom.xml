@@ -50,6 +50,11 @@
             <artifactId>aegis-node</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.aegisos</groupId>
+            <artifactId>aegis-cli</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
             <scope>test</scope>

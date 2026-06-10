@@ -1,5 +1,6 @@
 package com.aegisos.runtime;
 
+import com.aegisos.core.identity.NodeId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,16 +25,17 @@ public class ProcessSupervisor {
     private final Path workDir;
     private final int memoryMb;
     private Process process;
+    private final AtomicBoolean killed = new AtomicBoolean(false);
     private ServerSocket serverSocket;
     private Socket clientSocket;
     private PrintWriter out;
     private Scanner in;
 
-    public ProcessSupervisor(String jobId, int memoryMb) {
+    public ProcessSupervisor(NodeId nodeId, String jobId, int memoryMb) {
         this.jobId = jobId;
         this.memoryMb = memoryMb;
-        // Temporary isolated working directory
-        this.workDir = Paths.get(System.getProperty("java.io.tmpdir"), "aegis", "jobs", jobId);
+        // Temporary isolated working directory, separated by node ID for local cluster testing
+        this.workDir = Paths.get(System.getProperty("java.io.tmpdir"), "aegis", nodeId.shortId(), "jobs", jobId);
     }
 
     public byte[] runWorker(Object[] jobArgs) throws Exception {
@@ -171,7 +173,15 @@ public class ProcessSupervisor {
     }
 
     public void kill() {
+        if (!killed.compareAndSet(false, true)) {
+            return;
+        }
         log.info("ProcessSupervisor.kill() called for job {}", jobId);
+        // #region agent log
+        boolean wasAlive = process != null && process.isAlive();
+        com.aegisos.core.util.DebugLogger.log("ProcessSupervisor.java:174", "kill() invoked",
+            java.util.Map.of("jobId", jobId, "processNull", process == null, "processAlive", wasAlive), "A", "pre-fix");
+        // #endregion
         if (process == null) {
             log.warn("Cannot kill process for job {} because process is null", jobId);
         } else if (!process.isAlive()) {
@@ -180,6 +190,18 @@ public class ProcessSupervisor {
             log.info("Killing process tree for job {}", jobId);
             process.descendants().forEach(ProcessHandle::destroyForcibly);
             process.destroyForcibly();
+            try {
+                boolean exited = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS);
+                // #region agent log
+                com.aegisos.core.util.DebugLogger.log("ProcessSupervisor.java:184", "destroyForcibly result",
+                    java.util.Map.of("jobId", jobId, "exited", exited, "exitCode", process.isAlive() ? "still-alive" : String.valueOf(process.exitValue())), "A", "pre-fix");
+                // #endregion
+                if (!exited) {
+                    log.warn("Process for job {} did not exit within 2 seconds after destroyForcibly", jobId);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
         closeSockets();
     }

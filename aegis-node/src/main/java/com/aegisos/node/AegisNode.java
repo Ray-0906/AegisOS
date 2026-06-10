@@ -9,7 +9,8 @@ import com.aegisos.core.identity.KeyStore;
 import com.aegisos.core.message.MessageType;
 import com.aegisos.discovery.DiscoveryService;
 import com.aegisos.fs.AegisFS;
-import com.aegisos.fs.SelfHealingReaper;
+import com.aegisos.fs.audit.StorageAuditScheduler;
+import com.aegisos.fs.audit.RepairProposer;
 import com.aegisos.network.NetworkLayer;
 import com.aegisos.proto.CommandType;
 import com.aegisos.proto.JobState;
@@ -49,7 +50,7 @@ public final class AegisNode implements AutoCloseable {
     private ArtifactRegistry artifactRegistry;
     private ArtifactCache artifactCache;
     private ArtifactClassLoader artifactClassLoader;
-    private SelfHealingReaper reaper;
+    private StorageAuditScheduler auditScheduler;
     private ResourceReporter resourceReporter;
     private Scheduler scheduler;
     private ResourceAllocator resourceAllocator;
@@ -87,25 +88,25 @@ public final class AegisNode implements AutoCloseable {
                         .toList();
 
         java.util.function.Supplier<java.util.List<com.aegisos.core.identity.NodeId>> votingPeers = () -> {
-            java.util.List<com.aegisos.core.identity.NodeId> voters = discovery.membership().allPeers().stream()
-                    .filter(peer -> peer.getRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER)
-                    // Exclude DEAD peers: they cannot vote and should not inflate quorum size.
-                    // SUSPECT peers are still potentially alive (just slow) so they remain in the set.
-                    .filter(peer -> peer.getStatus() != com.aegisos.proto.PeerStatus.DEAD)
-                    .map(peer -> com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray()))
+            if (consensus == null || consensus.clusterConfiguration() == null) {
+                return java.util.List.of();
+            }
+            return consensus.clusterConfiguration().voters().stream()
                     .filter(peerId -> !peerId.equals(identity.nodeId()))
                     .toList();
-            java.util.List<com.aegisos.core.identity.NodeId> all = allPeers.get();
-            if (voters.size() != all.size()) {
-                log.info("Quorum calculation ignores non-voting/dead peers. Voting members: {}, All peers: {}",
-                        voters.size() + 1, all.size() + 1);
-            }
-            return voters;
         };
 
-        boolean isVotingMember = config.role() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER;
+        java.util.function.BooleanSupplier isVotingMember = () -> {
+            if (consensus == null || consensus.clusterConfiguration() == null) {
+                return false;
+            }
+            return consensus.clusterConfiguration().isVoter(identity.nodeId());
+        };
+
         consensus = new ConsensusModule(network, identity.nodeId(), config.raftDir(),
-                votingPeers, allPeers, isVotingMember);
+                votingPeers, allPeers, isVotingMember, config.bootstrap(),
+                config.membershipLagThreshold(),
+                nodeId -> discovery.membership().statusOf(nodeId));
 
         // 1. Construct all subsystems and wire dependencies
         artifactRegistry = new ArtifactRegistry();
@@ -116,8 +117,24 @@ public final class AegisNode implements AutoCloseable {
         artifactCache = new ArtifactCache(config.artifactCacheDir(), fileSystem);
         artifactClassLoader = new ArtifactClassLoader(artifactCache);
 
-        reaper = new SelfHealingReaper(fileSystem, consensus, discovery, identity.nodeId(),
-                config.replicationFactor(), config.reaperIntervalMs());
+
+
+        auditScheduler = new StorageAuditScheduler(fileSystem, discovery, network, identity.nodeId(), consensus::isLeader, config.auditIntervalSeconds());
+
+        if (config.repairEnabled()) {
+            RepairProposer proposer = new RepairProposer(
+                auditScheduler,
+                consensus,
+                fileSystem,
+                discovery,
+                network,
+                identity.nodeId(),
+                fileSystem.repairTaskStore(),
+                config.repairRecommendationMaxAgeSeconds() * 1000L,
+                config.repairTaskTimeoutSeconds() * 1000L
+            );
+            auditScheduler.setRepairProposer(proposer);
+        }
 
         NodeResourcesView resourcesView = new NodeResourcesView();
         runtimeAgent = new ProcessRuntimeAgent(consensus, network, identity.nodeId(), fileSystem,
@@ -137,33 +154,61 @@ public final class AegisNode implements AutoCloseable {
         checkpointManager = new CheckpointManager(identity.nodeId(), fileSystem, this::recordCheckpoint, config.checkpointIntervalMs());
         runtimeAgent.setCheckpointManager(checkpointManager);
 
-        jobSupervisor = new JobSupervisor(discovery, consensus, scheduler,
-                network, identity.nodeId(), runtimeAgent);
+        if (config.jobSupervisorEnabled()) {
+            jobSupervisor = new JobSupervisor(discovery, consensus, scheduler,
+                    network, identity.nodeId(), runtimeAgent);
+        }
 
         processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId());
         aegisOS = new AegisOS(fileSystem, processManager, new ClusterInfo(discovery));
 
-        // 2. Register all state machine appliers BEFORE log replay or Raft start
+        // 2. Configure Snapshots
+        consensus.stateMachine().registerSnapshotParticipant(consensus.clusterConfiguration());
+        consensus.stateMachine().registerSnapshotParticipant(artifactRegistry);
+        consensus.stateMachine().registerSnapshotParticipant(runtimeAgent.registry());
+        consensus.stateMachine().registerSnapshotParticipant(fileSystem.fileIndex());
+        consensus.stateMachine().registerSnapshotParticipant(fileSystem.repairTaskStore());
+
+        consensus.raftNode().configureSnapshots(
+                config.raftDir().resolve("snapshots"),
+                config.snapshotEntryThreshold(),
+                config.snapshotSizeThresholdBytes(),
+                consensus.stateMachine()::takeSnapshot,
+                consensus.stateMachine()::loadSnapshot
+        );
+
+        // 3. Register all state machine appliers BEFORE log replay or Raft start
         artifactRegistry.registerWith(consensus.stateMachine());
         fileSystem.registerAppliers(); // We will add this to AegisFS
         runtimeAgent.registerAppliers(); // We will add this to ProcessRuntimeAgent
         scheduler.registerAppliers();
 
-        // 3. Eagerly replay persisted Raft log through all registered state-machine appliers
+        // 4. Eagerly replay persisted Raft log through all registered state-machine appliers
         // (FileIndex, JobRegistry, ArtifactRegistry) before the node starts accepting work.
         consensus.replayFromLog();
 
-        // 4. Start all background subsystems now that in-memory state is fully populated
+        // 4b. Rehydrate ResourceAllocator from the JobRegistry's active jobs
+        resourceAllocator.clear();
+        for (com.aegisos.proto.JobRecord job : runtimeAgent.registry().activeJobs()) {
+            resourceAllocator.commitHardAllocation(job.getSpec().getJobId(), job.getSpec().getResources());
+        }
+
+        // 5. Start all background subsystems now that in-memory state is fully populated
         fileSystem.start();
-        reaper.start();
+        auditScheduler.start();
         runtimeAgent.start();
         network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
+        
+        QueryHandler queryHandler = new QueryHandler(discovery, fileSystem);
+        network.registerHandler(MessageType.CLIENT_QUERY, queryHandler::handle);
         scheduler.start();
         resourceReporter.start();
-        jobSupervisor.start();
+        if (jobSupervisor != null) {
+            jobSupervisor.start();
+        }
         consensus.start(); // Start Raft last to avoid heartbeat races triggering applyCommitted early
 
-        if (config.apiPort() > 0) {
+        if (config.apiPort() >= 0) {
             metricsServer = new MetricsServer(this, config.apiPort());
             metricsServer.start();
         }
@@ -178,6 +223,10 @@ public final class AegisNode implements AutoCloseable {
 
     public NetworkLayer network() {
         return network;
+    }
+
+    public MetricsServer metrics() {
+        return metricsServer;
     }
 
     public DiscoveryService discovery() {
@@ -200,6 +249,10 @@ public final class AegisNode implements AutoCloseable {
         return artifactCache;
     }
 
+    public JobSupervisor jobSupervisor() {
+        return jobSupervisor;
+    }
+
     public ArtifactClassLoader artifactClassLoader() {
         return artifactClassLoader;
     }
@@ -214,6 +267,10 @@ public final class AegisNode implements AutoCloseable {
 
     public Scheduler scheduler() {
         return scheduler;
+    }
+
+    public StorageAuditScheduler auditScheduler() {
+        return auditScheduler;
     }
 
     public ResourceAllocator resourceAllocator() {
@@ -251,42 +308,82 @@ public final class AegisNode implements AutoCloseable {
             return;
         }
         log.info("Shutting down node {}", identity.nodeId().shortId());
+        // #region agent log
+        com.aegisos.core.util.DebugLogger.log("AegisNode.java:306", "AegisNode.close() start",
+            java.util.Map.of("nodeId", identity.nodeId().shortId(), "started", started), "C", "pre-fix");
+        // #endregion
         if (metricsServer != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:312", "Closing metricsServer", java.util.Map.of(), "B", "pre-fix");
+            // #endregion
             metricsServer.close();
         }
         if (jobSupervisor != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:315", "Closing jobSupervisor", java.util.Map.of(), "C", "pre-fix");
+            // #endregion
             jobSupervisor.close();
         }
         if (checkpointManager != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:318", "Stopping checkpointManager", java.util.Map.of(), "C", "pre-fix");
+            // #endregion
             checkpointManager.stop();
         }
         if (runtimeAgent != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:321", "Closing runtimeAgent", java.util.Map.of(), "A", "pre-fix");
+            // #endregion
             runtimeAgent.close();
         }
         if (resourceReporter != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:324", "Closing resourceReporter", java.util.Map.of(), "C", "pre-fix");
+            // #endregion
             resourceReporter.close();
         }
         if (resourceAllocator != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:327", "Closing resourceAllocator", java.util.Map.of(), "C", "pre-fix");
+            // #endregion
             resourceAllocator.close();
         }
-        if (reaper != null) {
-            reaper.close();
+        if (auditScheduler != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:330", "Closing auditScheduler", java.util.Map.of(), "C", "pre-fix");
+            // #endregion
+            auditScheduler.close();
         }
+
         if (fileSystem != null) {
             try {
+                // #region agent log
+                com.aegisos.core.util.DebugLogger.log("AegisNode.java:335", "Closing fileSystem", java.util.Map.of(), "C", "pre-fix");
+                // #endregion
                 fileSystem.close();
             } catch (Exception e) {
                 log.warn("Error closing fileSystem: {}", e.toString());
             }
         }
         if (consensus != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:341", "Closing consensus", java.util.Map.of(), "C", "pre-fix");
+            // #endregion
             consensus.close();
         }
         if (discovery != null) {
+            // #region agent log
+            com.aegisos.core.util.DebugLogger.log("AegisNode.java:344", "Closing discovery", java.util.Map.of(), "C", "pre-fix");
+            // #endregion
             discovery.close();
         }
+        // #region agent log
+        com.aegisos.core.util.DebugLogger.log("AegisNode.java:346", "Closing network", java.util.Map.of(), "D", "pre-fix");
+        // #endregion
         network.close();
-        
+        // #region agent log
+        com.aegisos.core.util.DebugLogger.log("AegisNode.java:348", "AegisNode.close() end", java.util.Map.of("nodeId", identity.nodeId().shortId()), "C", "pre-fix");
+        // #endregion
         started = false;
     }
 }

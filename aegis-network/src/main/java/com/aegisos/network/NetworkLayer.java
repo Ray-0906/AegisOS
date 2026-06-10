@@ -52,6 +52,16 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     private final Map<Long, CompletableFuture<AegisMessage>> pending = new ConcurrentHashMap<>();
     private final AtomicLong correlationCounter = new AtomicLong(1);
 
+    private static volatile java.util.function.BiPredicate<NodeId, NodeId> messageFilter = (from, to) -> true;
+
+    public static void setMessageFilter(java.util.function.BiPredicate<NodeId, NodeId> filter) {
+        messageFilter = filter != null ? filter : (from, to) -> true;
+    }
+
+    public static void clearMessageFilter() {
+        messageFilter = (from, to) -> true;
+    }
+
     /**
      * Message types that MUST be processed inline on the PeerConnection.receiveLoop() thread.
      *
@@ -185,6 +195,9 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     /** Fire-and-forget send. Returns false if the peer is unreachable. */
     public boolean sendAsync(NodeId nodeId, MessageType type, byte[] payload) {
+        if (!messageFilter.test(localNodeId(), nodeId)) {
+            return false;
+        }
         Optional<PeerConnection> conn = ensureConnected(nodeId);
         if (conn.isEmpty()) {
             return false;
@@ -206,6 +219,9 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     public CompletableFuture<AegisMessage> request(NodeId nodeId, MessageType type,
                                                    byte[] payload, long timeoutMs) {
+        if (!messageFilter.test(localNodeId(), nodeId)) {
+            return CompletableFuture.failedFuture(new IOException("partitioned from " + nodeId.shortId()));
+        }
         Optional<PeerConnection> conn = ensureConnected(nodeId);
         if (conn.isEmpty()) {
             return CompletableFuture.failedFuture(new IOException("not connected to " + nodeId.shortId()));
@@ -226,6 +242,10 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     @Override
     public void onMessage(PeerConnection connection, AegisMessage message, long correlation) {
+        if (!messageFilter.test(message.sender(), localNodeId())) {
+            log.debug("Partition dropped inbound message from {} to {}", message.sender().shortId(), localNodeId().shortId());
+            return;
+        }
         // ----------------------------------------------------------------
         // Tier 0: correlation replies (e.g. AppendEntriesResult sent back to
         // the LogReplicator that made a request() call).
@@ -298,6 +318,19 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     @Override
     public void close() {
         handlerExecutor.shutdownNow();
+        try {
+            boolean terminated = handlerExecutor.awaitTermination(3, TimeUnit.SECONDS);
+            // #region agent log
+            java.util.Map<String, Object> data = new java.util.HashMap<>();
+            data.put("terminated", terminated);
+            data.put("isShutdown", handlerExecutor.isShutdown());
+            data.put("isTerminated", handlerExecutor.isTerminated());
+            com.aegisos.core.util.DebugLogger.log("NetworkLayer.java:319", "handlerExecutor shutdown status",
+                data, "D", "pre-fix");
+            // #endregion
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         if (server != null) {
             server.close();
         }

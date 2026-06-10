@@ -28,13 +28,17 @@ public final class StartCommand implements Callable<Integer> {
             description = "HTTP metrics port (default: P2P port + 10000, 0 = disabled).")
     int metricsPort = -1;  // -1 signals "use default"
 
+    @CommandLine.Option(names = "--bootstrap", description = "Bootstrap a brand new cluster.")
+    boolean bootstrap = false;
+
     @Override
     public Integer call() throws Exception {
         int resolvedMetricsPort = (metricsPort == -1) ? (port + 10000) : metricsPort;
         NodeConfig config = new NodeConfig()
                 .port(port)
                 .advertiseHost(advertise)
-                .apiPort(resolvedMetricsPort);
+                .apiPort(resolvedMetricsPort)
+                .bootstrap(bootstrap);
         if (home != null) {
             config.homeDir(home);
         }
