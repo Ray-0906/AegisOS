@@ -2,7 +2,7 @@ package com.example;
 
 import com.aegisos.runtime.AegisJob;
 import com.aegisos.runtime.JobContext;
-import java.io.Serializable;
+
 
 public class CrashJob implements AegisJob<String> {
     public CrashJob() {}
@@ -14,8 +14,6 @@ public class CrashJob implements AegisJob<String> {
         throw new RuntimeException("Intentional E8 Crash");
     }
 
-    @Override
-    public Serializable captureState() { return null; }
-    @Override
-    public void restoreState(Serializable state) {}
+    
+    
 }

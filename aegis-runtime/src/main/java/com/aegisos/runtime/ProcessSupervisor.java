@@ -29,13 +29,19 @@ public class ProcessSupervisor {
     private ServerSocket serverSocket;
     private Socket clientSocket;
     private PrintWriter out;
-    private Scanner in;
+    private java.io.DataInputStream in;
+
+    private java.util.function.Consumer<byte[]> checkpointListener;
 
     public ProcessSupervisor(NodeId nodeId, String jobId, int memoryMb) {
         this.jobId = jobId;
         this.memoryMb = memoryMb;
         // Temporary isolated working directory, separated by node ID for local cluster testing
         this.workDir = Paths.get(System.getProperty("java.io.tmpdir"), "aegis", nodeId.shortId(), "jobs", jobId);
+    }
+
+    public void setCheckpointListener(java.util.function.Consumer<byte[]> checkpointListener) {
+        this.checkpointListener = checkpointListener;
     }
 
     public byte[] runWorker(Object[] jobArgs) throws Exception {
@@ -91,7 +97,8 @@ public class ProcessSupervisor {
                 // Do NOT set a read timeout on the client socket.
                 // Scanner treats SocketTimeoutException as end-of-input,
                 // which silently kills the acceptor loop.
-                in = new Scanner(clientSocket.getInputStream());
+                // Use DataInputStream to avoid buffering ahead into the binary payload
+                in = new java.io.DataInputStream(clientSocket.getInputStream());
                 out = new PrintWriter(clientSocket.getOutputStream(), true);
 
                 // Start ping thread
@@ -111,8 +118,9 @@ public class ProcessSupervisor {
                 pinger.setDaemon(true);
                 pinger.start();
 
-                while (in.hasNextLine() && !completed.get()) {
-                    String line = in.nextLine();
+                @SuppressWarnings("deprecation")
+                String line;
+                while (!completed.get() && (line = in.readLine()) != null) {
                     log.debug("[{}] Acceptor read: {}", jobId, line);
                     if (line.contains("\"type\":\"COMPLETE\"")) {
                         completed.set(true);
@@ -123,9 +131,21 @@ public class ProcessSupervisor {
                         completed.set(true);
                         latch.countDown();
                         break;
+                    } else if (line.contains("\"type\":\"CHECKPOINT\"")) {
+                        // Extract size
+                        int sizeIdx = line.indexOf("\"size\":");
+                        if (sizeIdx != -1) {
+                            int endIdx = line.indexOf('}', sizeIdx);
+                            int size = Integer.parseInt(line.substring(sizeIdx + 7, endIdx).trim());
+                            byte[] payload = new byte[size];
+                            in.readFully(payload);
+                            if (checkpointListener != null) {
+                                checkpointListener.accept(payload);
+                            }
+                        }
                     }
                 }
-                log.info("[{}] Acceptor loop exited: completed={} hasNextLine={}", jobId, completed.get(), false);
+                log.info("[{}] Acceptor loop exited: completed={}", jobId, completed.get());
             } catch (Exception e) {
                 log.info("[{}] Acceptor exception: {}", jobId, e.getMessage());
                 if (!completed.get()) {
@@ -177,11 +197,7 @@ public class ProcessSupervisor {
             return;
         }
         log.info("ProcessSupervisor.kill() called for job {}", jobId);
-        // #region agent log
         boolean wasAlive = process != null && process.isAlive();
-        com.aegisos.core.util.DebugLogger.log("ProcessSupervisor.java:174", "kill() invoked",
-            java.util.Map.of("jobId", jobId, "processNull", process == null, "processAlive", wasAlive), "A", "pre-fix");
-        // #endregion
         if (process == null) {
             log.warn("Cannot kill process for job {} because process is null", jobId);
         } else if (!process.isAlive()) {
@@ -192,10 +208,6 @@ public class ProcessSupervisor {
             process.destroyForcibly();
             try {
                 boolean exited = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS);
-                // #region agent log
-                com.aegisos.core.util.DebugLogger.log("ProcessSupervisor.java:184", "destroyForcibly result",
-                    java.util.Map.of("jobId", jobId, "exited", exited, "exitCode", process.isAlive() ? "still-alive" : String.valueOf(process.exitValue())), "A", "pre-fix");
-                // #endregion
                 if (!exited) {
                     log.warn("Process for job {} did not exit within 2 seconds after destroyForcibly", jobId);
                 }

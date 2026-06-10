@@ -19,7 +19,6 @@ import com.aegisos.proto.StateCommand;
 import com.aegisos.runtime.ArtifactCache;
 import com.aegisos.runtime.ArtifactClassLoader;
 import com.aegisos.runtime.ArtifactRegistry;
-import com.aegisos.runtime.CheckpointManager;
 import com.aegisos.runtime.JobSupervisor;
 import com.aegisos.runtime.ProcessRuntimeAgent;
 import com.aegisos.scheduler.NodeResourcesView;
@@ -55,7 +54,6 @@ public final class AegisNode implements AutoCloseable {
     private Scheduler scheduler;
     private ResourceAllocator resourceAllocator;
     private ProcessRuntimeAgent runtimeAgent;
-    private CheckpointManager checkpointManager;
     private JobSupervisor jobSupervisor;
     private ProcessManager processManager;
     private AegisOS aegisOS;
@@ -151,8 +149,8 @@ public final class AegisNode implements AutoCloseable {
                 config.chunkDir(), resourcesView, runtimeAgent::runningJobs,
                 ResourceReporter.DEFAULT_INTERVAL_MS);
 
-        checkpointManager = new CheckpointManager(identity.nodeId(), fileSystem, this::recordCheckpoint, config.checkpointIntervalMs());
-        runtimeAgent.setCheckpointManager(checkpointManager);
+        // Note: CheckpointManager removed in Sprint 8 in favor of manual ctx.checkpoint()
+        // Note: CheckpointManager removed in Sprint 8 in favor of manual ctx.checkpoint()
 
         if (config.jobSupervisorEnabled()) {
             jobSupervisor = new JobSupervisor(discovery, consensus, scheduler,
@@ -324,12 +322,7 @@ public final class AegisNode implements AutoCloseable {
             // #endregion
             jobSupervisor.close();
         }
-        if (checkpointManager != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:318", "Stopping checkpointManager", java.util.Map.of(), "C", "pre-fix");
-            // #endregion
-            checkpointManager.stop();
-        }
+
         if (runtimeAgent != null) {
             // #region agent log
             com.aegisos.core.util.DebugLogger.log("AegisNode.java:321", "Closing runtimeAgent", java.util.Map.of(), "A", "pre-fix");

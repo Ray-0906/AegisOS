@@ -15,12 +15,12 @@ public interface AegisJob<T extends Serializable> extends Serializable {
 
     T execute(JobContext ctx) throws Exception;
 
-    /** Optional checkpoint hook (Phase 6). Return null if the job is not checkpointable. */
-    default Serializable captureState() {
+    /** Optional checkpoint hook. Return null if the job is not checkpointable. */
+    default byte[] captureState() {
         return null;
     }
 
-    /** Optional restore hook (Phase 6), called before {@link #execute} on a resumed job. */
-    default void restoreState(Serializable state) {
+    /** Optional restore hook, called before {@link #execute} on a resumed job. */
+    default void restoreState(byte[] state) {
     }
 }

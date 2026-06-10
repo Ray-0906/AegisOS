@@ -77,13 +77,46 @@ public class WorkerMain {
             byte[] restoreState = (byte[]) jobArgs[5];
             byte[] artifactArgsBytes = (byte[]) jobArgs[6];
             String artifactFsPath = (String) jobArgs[7];
+            long executionId = (long) jobArgs[8];
 
             out.println("{\"type\":\"START\"}");
             
-            JobContext ctx = new JobContext(jobId, executingNode, null);
-            AegisJob<?> job;
+            long[] currentSequence = {0};
+            @SuppressWarnings("rawtypes")
+            AegisJob[] jobHolder = new AegisJob[1];
+
+            JobContext.CheckpointEmitter emitter = () -> {
+                try {
+                    AegisJob<?> currentJob = jobHolder[0];
+                    if (currentJob == null) return;
+                    byte[] payload = currentJob.captureState();
+                    if (payload == null) return;
+                    
+                    currentSequence[0]++;
+                    CheckpointEnvelope env = new CheckpointEnvelope(
+                        CheckpointEnvelope.CURRENT_VERSION,
+                        executionId,
+                        currentSequence[0],
+                        payload
+                    );
+                    byte[] envBytes = env.toByteArray();
+                    String header = "{\"type\":\"CHECKPOINT\",\"size\":" + envBytes.length + "}";
+                    out.println(header);
+                    out.flush();
+                    socket.getOutputStream().write(envBytes);
+                    socket.getOutputStream().flush();
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to emit checkpoint", e);
+                }
+            };
+            
+            AegisJob<?> job = null;
             Serializable result;
             
+            // Set job reference into emitter
+            jobHolder[0] = job;
+            JobContext ctx = new JobContext(jobId, executingNode, null, emitter);
+
             if (artifactId != null && !artifactId.isEmpty()) {
                 // Artifact job
                 java.net.URL jarUrl = new java.io.File(artifactFsPath).toURI().toURL();
@@ -95,19 +128,21 @@ public class WorkerMain {
                     } catch (NoSuchMethodException e) {
                         job = (AegisJob<?>) clazz.getDeclaredConstructor().newInstance();
                     }
+                    jobHolder[0] = job; // Update with instantiated artifact job
                     if (restoreState != null && restoreState.length > 0) {
                         Thread.currentThread().setContextClassLoader(cl);
-                        Serializable state = Serialization.deserialize(restoreState);
-                        job.restoreState(state);
+                        CheckpointEnvelope env = CheckpointEnvelope.fromByteArray(restoreState);
+                        job.restoreState(env.payload());
                     }
                     result = job.execute(ctx);
                 }
             } else {
                 // Non-artifact job
                 job = Serialization.deserialize(jobBytes);
+                jobHolder[0] = job; // Update with deserialized job
                 if (restoreState != null && restoreState.length > 0) {
-                    Serializable state = Serialization.deserialize(restoreState);
-                    job.restoreState(state);
+                    CheckpointEnvelope env = CheckpointEnvelope.fromByteArray(restoreState);
+                    job.restoreState(env.payload());
                 }
                 result = job.execute(ctx);
             }

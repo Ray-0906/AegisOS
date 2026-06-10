@@ -47,7 +47,7 @@ public final class ProcessRuntimeAgent {
     public final java.util.concurrent.atomic.AtomicLong fencingDrops = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong logUploadsSucceeded = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong logUploadsFailed = new java.util.concurrent.atomic.AtomicLong(0);
-    private CheckpointManager checkpointManager; // set by Phase 6 wiring
+
     private volatile boolean shuttingDown = false;
 
     public ProcessRuntimeAgent(ConsensusModule consensus, NetworkLayer network, NodeId self, AegisFS fileSystem,
@@ -127,9 +127,6 @@ public final class ProcessRuntimeAgent {
         executor.cancelJob(jobId);
     }
 
-    public void setCheckpointManager(CheckpointManager checkpointManager) {
-        this.checkpointManager = checkpointManager;
-    }
 
     public JobRegistry registry() {
         return registry;
@@ -181,37 +178,86 @@ public final class ProcessRuntimeAgent {
         }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
 
         try {
+            byte[] restoreState = null;
+            if (!record.getCheckpointFileId().isEmpty()) {
+                update(jobId, executionId, JobState.RESTORING, null, null);
+                try {
+                    restoreState = fileSystem.read(record.getCheckpointFileId());
+                } catch (Exception e) {
+                    log.error("Failed to load checkpoint for job {}, marking FAILED", jobId, e);
+                    update(jobId, executionId, JobState.FAILED, null, "Failed to load checkpoint: " + e.getMessage());
+                    return;
+                }
+            }
+
             update(jobId, executionId, JobState.RUNNING, null, null);
             jobsStarted.incrementAndGet();
-
-            byte[] restoreState = null;
-            if (checkpointManager != null && !record.getCheckpointFileId().isEmpty()) {
-                restoreState = checkpointManager.loadCheckpoint(record.getCheckpointFileId());
-            }
 
             byte[] result;
             int memoryMb = (int) record.getSpec().getResources().getMemoryMb();
             String artifactId = record.getSpec().getCodeFileId();
+            
+            // Phase 3, 4, 7 Checkpoint Listener
+            java.util.function.Consumer<byte[]> checkpointListener = payload -> {
+                try {
+                    CheckpointEnvelope env = CheckpointEnvelope.fromByteArray(payload);
+                    if (env.executionId() != record.getExecutionId()) {
+                        log.warn("Dropped stale checkpoint for job {} (env execution {} != current {})", jobId, env.executionId(), record.getExecutionId());
+                        return;
+                    }
+                    
+                    String checkpointPath = "/jobs/" + jobId + "/checkpoints/chk-" + env.sequence();
+                    fileSystem.write(checkpointPath, payload);
+                    
+                    // Phase 3: aegis.checkpoint.retention limit cleanup
+                    try {
+                        int retentionLimit = 5; // default retention
+                        java.util.List<com.aegisos.proto.FileMetadata> existingCheckpoints = fileSystem.list("/jobs/" + jobId + "/checkpoints/chk-");
+                        if (existingCheckpoints.size() > retentionLimit) {
+                            existingCheckpoints.sort(java.util.Comparator.comparingLong(com.aegisos.proto.FileMetadata::getCreatedAt));
+                            for (int i = 0; i < existingCheckpoints.size() - retentionLimit; i++) {
+                                fileSystem.delete(existingCheckpoints.get(i).getName());
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("Failed to apply checkpoint retention for {}", jobId, e);
+                    }
+                    
+                    com.aegisos.proto.CheckpointMetadata meta = com.aegisos.proto.CheckpointMetadata.newBuilder()
+                            .setSequence(env.sequence())
+                            .setArtifactId(artifactId != null ? artifactId : "")
+                            .setTimestamp(System.currentTimeMillis())
+                            .setSizeBytes(payload.length)
+                            .build();
+                            
+                    com.aegisos.proto.UpdateJobCheckpoint cmdPayload = com.aegisos.proto.UpdateJobCheckpoint.newBuilder()
+                            .setJobId(jobId)
+                            .setExecutionId(env.executionId())
+                            .setCheckpointFileId(checkpointPath)
+                            .setMetadata(meta)
+                            .build();
+                            
+                    com.aegisos.proto.StateCommand cmd = com.aegisos.proto.StateCommand.newBuilder()
+                            .setType(com.aegisos.proto.CommandType.UPDATE_JOB_CHECKPOINT)
+                            .setPayload(cmdPayload.toByteString())
+                            .build();
+                            
+                    consensus.propose(cmd);
+                    log.info("Saved checkpoint sequence {} for job {} ({} bytes)", env.sequence(), jobId, payload.length);
+                } catch (Exception e) {
+                    log.error("Failed to process checkpoint for job {}", jobId, e);
+                }
+            };
+
             if (!artifactId.isEmpty()) {
                 com.aegisos.proto.ArtifactRecord artifact = artifactRegistry.bySha256(artifactId)
                         .orElseThrow(() -> new IllegalStateException("unknown artifact: " + artifactId));
                 String className = record.getSpec().getClassName();
                 String[] args = Serialization.deserialize(record.getSpec().getArgs().toByteArray());
-                
-                if (checkpointManager != null) {
-                    result = checkpointManager.runArtifactWithCheckpointing(jobId, executionId, artifactId,
-                            artifact.getFsPath(), className, args, restoreState, executor, memoryMb);
-                } else {
-                    result = executor.runFromArtifact(jobId, artifactId, artifact.getFsPath(),
-                            className, args, restoreState, memoryMb);
-                }
+                result = executor.runFromArtifact(jobId, record.getExecutionId(), artifactId, artifact.getFsPath(),
+                        className, args, restoreState, memoryMb, checkpointListener);
             } else {
-                if (checkpointManager != null) {
-                    result = checkpointManager.runWithCheckpointing(jobId, executionId,
-                            record.getSpec().getArgs().toByteArray(), restoreState, executor, memoryMb);
-                } else {
-                    result = executor.run(jobId, record.getSpec().getArgs().toByteArray(), restoreState, memoryMb);
-                }
+                result = executor.run(jobId, record.getExecutionId(), record.getSpec().getArgs().toByteArray(), restoreState, memoryMb, checkpointListener);
             }
 
             // Gate A: check fencing before publishing state

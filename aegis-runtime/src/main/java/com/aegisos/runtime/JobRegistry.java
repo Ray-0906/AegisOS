@@ -36,7 +36,8 @@ public final class JobRegistry implements SnapshotParticipant {
     static {
         Map<JobState, Set<JobState>> m = new EnumMap<>(JobState.class);
         m.put(JobState.PENDING,   EnumSet.of(JobState.QUEUED));
-        m.put(JobState.QUEUED,    EnumSet.of(JobState.RUNNING, JobState.LOST));
+        m.put(JobState.QUEUED,    EnumSet.of(JobState.RESTORING, JobState.RUNNING, JobState.LOST));
+        m.put(JobState.RESTORING, EnumSet.of(JobState.RUNNING, JobState.FAILED, JobState.LOST));
         m.put(JobState.RUNNING,   EnumSet.of(JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.LOST));
         m.put(JobState.LOST,      EnumSet.of(JobState.QUEUED));
         VALID_TRANSITIONS = Map.copyOf(m);
@@ -56,11 +57,16 @@ public final class JobRegistry implements SnapshotParticipant {
     }
 
     private final ConcurrentHashMap<String, JobRecord> jobs = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, JobCheckpointRecord> checkpoints = new ConcurrentHashMap<>();
     private final AtomicInteger invalidTransitionCount = new AtomicInteger();
 
     /** Returns the number of invalid state transitions observed (for test assertions). */
     public int invalidTransitionCount() {
         return invalidTransitionCount.get();
+    }
+
+    public Optional<JobCheckpointRecord> getCheckpoint(String jobId) {
+        return Optional.ofNullable(checkpoints.get(jobId));
     }
 
     public void registerWith(ClusterStateMachine stateMachine) {
@@ -92,6 +98,28 @@ public final class JobRegistry implements SnapshotParticipant {
                 applyUpdate(JobUpdate.parseFrom(cmd.getPayload()));
             } catch (Exception e) {
                 log.warn("bad UPDATE_JOB at {}", index);
+            }
+        });
+        stateMachine.register(CommandType.UPDATE_JOB_CHECKPOINT, (index, cmd) -> {
+            try {
+                com.aegisos.proto.UpdateJobCheckpoint update = com.aegisos.proto.UpdateJobCheckpoint.parseFrom(cmd.getPayload());
+                String jobId = update.getJobId();
+                JobRecord existing = jobs.get(jobId);
+                if (existing != null && existing.getExecutionId() != update.getExecutionId()) {
+                    log.warn("Fencing rejected UPDATE_JOB_CHECKPOINT for {}: current execId {}, update execId {}",
+                            jobId, existing.getExecutionId(), update.getExecutionId());
+                    return;
+                }
+                checkpoints.put(jobId, new JobCheckpointRecord(
+                        jobId, update.getExecutionId(), update.getCheckpointFileId(), update.getMetadata()
+                ));
+                // Update the JobRecord's checkpoint file ID too for legacy compatibility
+                if (existing != null) {
+                    jobs.put(jobId, existing.toBuilder().setCheckpointFileId(update.getCheckpointFileId()).build());
+                }
+                log.info("Registered checkpoint {} for job {}", update.getMetadata().getSequence(), jobId);
+            } catch (Exception e) {
+                log.warn("bad UPDATE_JOB_CHECKPOINT at {}", index);
             }
         });
     }
@@ -169,6 +197,18 @@ public final class JobRegistry implements SnapshotParticipant {
                 out.writeInt(bytes.length);
                 out.write(bytes);
             }
+            
+            var ckptValues = new ArrayList<>(checkpoints.values());
+            out.writeInt(ckptValues.size());
+            for (JobCheckpointRecord r : ckptValues) {
+                out.writeUTF(r.jobId());
+                out.writeLong(r.executionId());
+                out.writeUTF(r.checkpointFileId());
+                byte[] bytes = r.metadata().toByteArray();
+                out.writeInt(bytes.length);
+                out.write(bytes);
+            }
+            
             out.flush();
             return baos.toByteArray();
         } catch (IOException e) {
@@ -188,6 +228,21 @@ public final class JobRegistry implements SnapshotParticipant {
                 in.readFully(buf);
                 JobRecord r = JobRecord.parseFrom(buf);
                 jobs.put(r.getSpec().getJobId(), r);
+            }
+            
+            checkpoints.clear();
+            if (in.available() > 0) {
+                int ckptCount = in.readInt();
+                for (int i = 0; i < ckptCount; i++) {
+                    String jobId = in.readUTF();
+                    long executionId = in.readLong();
+                    String fileId = in.readUTF();
+                    int len = in.readInt();
+                    byte[] buf = new byte[len];
+                    in.readFully(buf);
+                    com.aegisos.proto.CheckpointMetadata metadata = com.aegisos.proto.CheckpointMetadata.parseFrom(buf);
+                    checkpoints.put(jobId, new JobCheckpointRecord(jobId, executionId, fileId, metadata));
+                }
             }
             log.info("Restored JobRegistry: {} jobs", jobs.size());
         } catch (IOException e) {

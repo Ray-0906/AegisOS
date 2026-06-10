@@ -153,6 +153,7 @@ enum CommandType {
   REMOVE_VOTER      = 13;
   REPAIR_CHUNK      = 14;
   REPAIR_COMPLETE   = 15;
+  UPDATE_JOB_CHECKPOINT = 16;
 }
 
 message StateCommand {
@@ -250,6 +251,7 @@ enum JobState {
   ASSIGNED    = 8;  // deprecated: use QUEUED
   PENDING     = 9;
   CANCELLED   = 10;
+  RESTORING   = 11;
 }
 
 message ResourceRequest {
@@ -308,6 +310,20 @@ message JobUpdate {
 message JobHeartbeat {
   string job_id = 1;
   uint64 execution_id = 2;
+}
+
+message CheckpointMetadata {
+  int64  sequence = 1;
+  string artifact_id = 2;
+  int64  timestamp = 3;
+  int64  size_bytes = 4;
+}
+
+message UpdateJobCheckpoint {
+  string job_id = 1;
+  uint64 execution_id = 2;
+  string checkpoint_file_id = 3;
+  CheckpointMetadata metadata = 4;
 }
 
 message ClientCommandResult {
