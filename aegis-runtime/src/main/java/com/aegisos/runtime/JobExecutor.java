@@ -19,23 +19,29 @@ public final class JobExecutor {
     private final NodeId self;
     private final AegisFS fileSystem;
     private final ArtifactClassLoader artifactClassLoader;
+    private final java.nio.file.Path workspaceRoot;
     private final java.util.Map<String, ProcessSupervisor> activeSupervisors = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public JobExecutor(NodeId self, AegisFS fileSystem, ArtifactClassLoader artifactClassLoader) {
+    public JobExecutor(NodeId self, AegisFS fileSystem, ArtifactClassLoader artifactClassLoader, java.nio.file.Path workspaceRoot) {
         this.self = self;
         this.fileSystem = fileSystem;
         this.artifactClassLoader = artifactClassLoader;
+        this.workspaceRoot = workspaceRoot;
     }
 
     /** Deserializes, optionally restores, and runs the job, returning the serialized result. */
-    public byte[] run(String jobId, long executionId, byte[] jobBytes, byte[] restoreState, int memoryMb, java.util.function.Consumer<byte[]> checkpointListener) throws Exception {
+    public byte[] run(String jobId, long executionId, byte[] jobBytes, byte[] restoreState, int memoryMb, 
+                      java.util.Map<String, String> mountPaths, java.util.function.Consumer<byte[]> checkpointListener) throws Exception {
         Object[] args = new Object[] {
             jobId, self.toBytes(), null, null, jobBytes, restoreState, null, null, executionId
         };
-        ProcessSupervisor supervisor = new ProcessSupervisor(self, jobId, memoryMb);
+        java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
+        WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
+        ProcessSupervisor supervisor = new ProcessSupervisor(jobId, memoryMb, workspace);
         supervisor.setCheckpointListener(checkpointListener);
         activeSupervisors.put(jobId, supervisor);
         try {
+            supervisor.mountArtifacts(mountPaths);
             return supervisor.runWorker(args);
         } finally {
             activeSupervisors.remove(jobId);
@@ -45,16 +51,20 @@ public final class JobExecutor {
     /** Artifact-based execution with isolated classloader. */
     public byte[] runFromArtifact(String jobId, long executionId, String artifactId, String fsPath,
                                   String className, String[] artifactArgs,
-                                  byte[] restoreState, int memoryMb, java.util.function.Consumer<byte[]> checkpointListener) throws Exception {
+                                  byte[] restoreState, int memoryMb, 
+                                  java.util.Map<String, String> mountPaths, java.util.function.Consumer<byte[]> checkpointListener) throws Exception {
         byte[] artifactArgsBytes = Serialization.serialize(artifactArgs);
         String localJarPath = artifactClassLoader.getCache().resolve(artifactId, fsPath).toAbsolutePath().toString();
         Object[] args = new Object[] {
             jobId, self.toBytes(), artifactId, className, null, restoreState, artifactArgsBytes, localJarPath, executionId
         };
-        ProcessSupervisor supervisor = new ProcessSupervisor(self, jobId, memoryMb);
+        java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
+        WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
+        ProcessSupervisor supervisor = new ProcessSupervisor(jobId, memoryMb, workspace);
         supervisor.setCheckpointListener(checkpointListener);
         activeSupervisors.put(jobId, supervisor);
         try {
+            supervisor.mountArtifacts(mountPaths);
             return supervisor.runWorker(args);
         } finally {
             activeSupervisors.remove(jobId);

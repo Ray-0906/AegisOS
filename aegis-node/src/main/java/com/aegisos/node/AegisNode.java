@@ -112,7 +112,7 @@ public final class AegisNode implements AutoCloseable {
         fileSystem = new AegisFS(network, consensus, discovery, identity.nodeId(),
                 config.clusterKey(), config.replicationFactor(), config.chunkDir());
                 
-        artifactCache = new ArtifactCache(config.artifactCacheDir(), fileSystem);
+        artifactCache = new ArtifactCache(config.artifactCacheDir(), fileSystem, config.artifactCacheSizeMb() * 1024L * 1024L);
         artifactClassLoader = new ArtifactClassLoader(artifactCache);
 
 
@@ -136,7 +136,7 @@ public final class AegisNode implements AutoCloseable {
 
         NodeResourcesView resourcesView = new NodeResourcesView();
         runtimeAgent = new ProcessRuntimeAgent(consensus, network, identity.nodeId(), fileSystem,
-                artifactRegistry, artifactClassLoader);
+                artifactRegistry, artifactClassLoader, config.workspaceDir(), config.workspaceCleanupDelaySeconds());
 
         long maxMem = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         int cores = Runtime.getRuntime().availableProcessors();
@@ -157,7 +157,7 @@ public final class AegisNode implements AutoCloseable {
                     network, identity.nodeId(), runtimeAgent);
         }
 
-        processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId());
+        processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId(), fileSystem);
         aegisOS = new AegisOS(fileSystem, processManager, new ClusterInfo(discovery));
 
         // 2. Configure Snapshots

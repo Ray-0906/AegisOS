@@ -365,10 +365,11 @@ public class OvernightSoakTest {
                 .build();
 
         leader.fileSystem().write("/artifacts/" + artifactId, mutated);
+        com.aegisos.proto.RegisterArtifact regCmd = com.aegisos.proto.RegisterArtifact.newBuilder().setArtifact(record).build();
         leader.consensus().propose(
                 com.aegisos.proto.StateCommand.newBuilder()
                         .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
-                        .setPayload(record.toByteString())
+                        .setPayload(regCmd.toByteString())
                         .build()
         ).get(5, TimeUnit.SECONDS);
 

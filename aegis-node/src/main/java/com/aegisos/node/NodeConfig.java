@@ -39,6 +39,10 @@ public final class NodeConfig {
     /** When false, RepairProposer is not started, so divergences are audited but not automatically repaired. */
     private boolean repairEnabled = true;
     private long auditIntervalSeconds = 60;
+    
+    // Sprint 9: Workspaces
+    private int workspaceCleanupDelaySeconds = 300; // 5 minutes
+    private long artifactCacheSizeMb = 1024; // 1GB default
 
     public boolean bootstrap() {
         return bootstrap;
@@ -140,6 +144,28 @@ public final class NodeConfig {
 
     public Path artifactCacheDir() {
         return dataDir().resolve("artifacts");
+    }
+
+    public Path workspaceDir() {
+        return dataDir().resolve("workspaces");
+    }
+
+    public int workspaceCleanupDelaySeconds() {
+        return workspaceCleanupDelaySeconds;
+    }
+
+    public NodeConfig workspaceCleanupDelaySeconds(int sec) {
+        this.workspaceCleanupDelaySeconds = sec;
+        return this;
+    }
+
+    public long artifactCacheSizeMb() {
+        return artifactCacheSizeMb;
+    }
+
+    public NodeConfig artifactCacheSizeMb(long mb) {
+        this.artifactCacheSizeMb = mb;
+        return this;
     }
 
     public Path raftDir() {

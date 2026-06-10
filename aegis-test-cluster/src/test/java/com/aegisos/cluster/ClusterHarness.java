@@ -23,6 +23,11 @@ public final class ClusterHarness implements AutoCloseable {
     private Endpoint seedEndpoint;
     private int replicationFactor = 3;
     private int snapshotEntryThreshold = 1000;
+    private int workspaceCleanupDelaySeconds = 300; // default 5m
+
+    public void setWorkspaceCleanupDelaySeconds(int delay) {
+        this.workspaceCleanupDelaySeconds = delay;
+    }
 
     public void setSnapshotEntryThreshold(int threshold) {
         this.snapshotEntryThreshold = threshold;
@@ -53,6 +58,10 @@ public final class ClusterHarness implements AutoCloseable {
     public AegisNode addNode() throws IOException {
         Path home = Files.createTempDirectory("aegis-node-");
         tempDirs.add(home);
+        return addNodeWithHome(home);
+    }
+
+    public AegisNode addNodeWithHome(Path home) throws IOException {
         NodeConfig config = new NodeConfig()
                 .homeDir(home)
                 .port(0)
@@ -63,7 +72,8 @@ public final class ClusterHarness implements AutoCloseable {
                 .snapshotEntryThreshold(snapshotEntryThreshold)
                 .jobSupervisorEnabled(jobSupervisorEnabled)
                 .repairEnabled(repairEnabled)
-                .auditIntervalSeconds(2);
+                .auditIntervalSeconds(2)
+                .workspaceCleanupDelaySeconds(workspaceCleanupDelaySeconds);
 
         boolean isBootstrap = nodes.isEmpty() && seedEndpoint == null;
         config.bootstrap(isBootstrap);

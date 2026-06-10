@@ -22,6 +22,7 @@ public class ProcessSupervisor {
     private static final Logger log = LoggerFactory.getLogger(ProcessSupervisor.class);
 
     private final String jobId;
+    private final WorkspaceInfo workspace;
     private final Path workDir;
     private final int memoryMb;
     private Process process;
@@ -33,21 +34,50 @@ public class ProcessSupervisor {
 
     private java.util.function.Consumer<byte[]> checkpointListener;
 
-    public ProcessSupervisor(NodeId nodeId, String jobId, int memoryMb) {
+    public ProcessSupervisor(String jobId, int memoryMb, WorkspaceInfo workspace) {
         this.jobId = jobId;
         this.memoryMb = memoryMb;
-        // Temporary isolated working directory, separated by node ID for local cluster testing
-        this.workDir = Paths.get(System.getProperty("java.io.tmpdir"), "aegis", nodeId.shortId(), "jobs", jobId);
+        this.workspace = workspace;
+        this.workDir = workspace.root();
     }
 
     public void setCheckpointListener(java.util.function.Consumer<byte[]> checkpointListener) {
         this.checkpointListener = checkpointListener;
     }
 
+    public void mountArtifacts(java.util.Map<String, String> mountPaths) throws IOException {
+        if (mountPaths == null || mountPaths.isEmpty()) return;
+        for (java.util.Map.Entry<String, String> entry : mountPaths.entrySet()) {
+            String mountPath = entry.getKey();
+            String localCachePath = entry.getValue();
+
+            // Validate mount path
+            if (mountPath == null || mountPath.isEmpty() || mountPath.equals(".") || mountPath.equals("..") ||
+                mountPath.startsWith("/") || mountPath.contains("..")) {
+                throw new IllegalArgumentException("Invalid mount path: " + mountPath);
+            }
+
+            java.nio.file.Path targetPath = workspace.artifactsDir().resolve(mountPath).normalize();
+            if (!targetPath.startsWith(workspace.artifactsDir())) {
+                throw new IllegalArgumentException("Mount path escapes artifacts directory: " + mountPath);
+            }
+
+            java.nio.file.Files.createDirectories(targetPath.getParent());
+
+            // Try symlink, fallback to copy
+            try {
+                java.nio.file.Files.createSymbolicLink(targetPath, java.nio.file.Paths.get(localCachePath));
+                log.info("Symlinked artifact {} to {}", localCachePath, targetPath);
+            } catch (Exception e) {
+                log.warn("Failed to create symlink for {}, falling back to copy", mountPath);
+                java.nio.file.Files.copy(java.nio.file.Paths.get(localCachePath), targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                log.info("Copied artifact {} to {}", localCachePath, targetPath);
+            }
+        }
+    }
+
     public byte[] runWorker(Object[] jobArgs) throws Exception {
-        Files.createDirectories(workDir);
-        Files.createDirectories(workDir.resolve("output"));
-        Files.createDirectories(workDir.resolve("checkpoint"));
+        workspace.provision();
 
         File argsFile = workDir.resolve("job_args.bin").toFile();
         Files.write(argsFile.toPath(), Serialization.serialize(jobArgs));
@@ -77,8 +107,8 @@ public class ProcessSupervisor {
         );
         pb.directory(workDir.toFile());
         
-        File stdoutFile = workDir.resolve("stdout.log").toFile();
-        File stderrFile = workDir.resolve("stderr.log").toFile();
+        File stdoutFile = workspace.stdoutLog().toFile();
+        File stderrFile = workspace.stderrLog().toFile();
         pb.redirectOutput(stdoutFile);
         pb.redirectError(stderrFile);
 

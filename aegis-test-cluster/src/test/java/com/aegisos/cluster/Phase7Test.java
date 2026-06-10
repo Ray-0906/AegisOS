@@ -77,10 +77,13 @@ public class Phase7Test {
                 .setStatus(com.aegisos.proto.ArtifactStatus.ARTIFACT_ACTIVE)
                 .build();
 
-        cluster.node(1).consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
-                .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
-                .setPayload(record.toByteString())
-                .build()).get(5, java.util.concurrent.TimeUnit.SECONDS);
+        com.aegisos.proto.RegisterArtifact regCmd = com.aegisos.proto.RegisterArtifact.newBuilder().setArtifact(record).build();
+        cluster.nodes().get(0).consensus().propose(
+                com.aegisos.proto.StateCommand.newBuilder()
+                        .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
+                        .setPayload(regCmd.toByteString())
+                        .build()
+        ).get(5, java.util.concurrent.TimeUnit.SECONDS);
 
         // Wait for replication to node 2
         ClusterHarness.await(5000, () -> cluster.node(2).artifactRegistry().listAll()

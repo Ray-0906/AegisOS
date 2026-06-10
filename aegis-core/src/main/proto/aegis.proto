@@ -259,6 +259,11 @@ message ResourceRequest {
   int64 memory_mb = 2;
 }
 
+message ArtifactReference {
+  string sha256     = 1;
+  string mount_path = 2; // relative to workspace root, e.g. "artifacts/model.bin"
+}
+
 message JobSpec {
   string job_id          = 1; // UUID
   string class_name      = 2;
@@ -267,6 +272,7 @@ message JobSpec {
   bytes  code_chunk_id   = 5; // AegisFS chunk holding the job bytecode jar (optional)
   string code_file_id    = 6; // AegisFS file id for job code
   ResourceRequest resources = 7;
+  repeated ArtifactReference artifacts = 8;
 }
 
 message JobRecord {
@@ -374,6 +380,10 @@ message ArtifactRecord {
   string fs_path        = 5;  // AegisFS path: "/artifacts/<sha256>"
   bytes  owner_id       = 6;  // uploading node ID
   ArtifactStatus status = 7;  // lifecycle state
+}
+
+message RegisterArtifact {
+  ArtifactRecord artifact = 1;
 }
 
 // ---------------------------------------------------------------------------

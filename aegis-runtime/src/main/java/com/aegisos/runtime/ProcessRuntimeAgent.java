@@ -19,6 +19,11 @@ import com.aegisos.network.NetworkLayer;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.io.File;
+import java.nio.file.Files;
+import java.io.IOException;
 
 /**
  * Executes jobs assigned to this node (design section 3.7). Receives RUN_JOB, runs the
@@ -39,6 +44,7 @@ public final class ProcessRuntimeAgent {
     private final ArtifactClassLoader artifactClassLoader;
     private final JobRegistry registry = new JobRegistry();
     private final AtomicInteger running = new AtomicInteger(0);
+    private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
     public final java.util.concurrent.atomic.AtomicLong jobsStarted = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong jobsCompleted = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong jobsFailed = new java.util.concurrent.atomic.AtomicLong(0);
@@ -49,16 +55,34 @@ public final class ProcessRuntimeAgent {
     public final java.util.concurrent.atomic.AtomicLong logUploadsFailed = new java.util.concurrent.atomic.AtomicLong(0);
 
     private volatile boolean shuttingDown = false;
+    private final java.nio.file.Path workspaceRoot;
+    private final int workspaceCleanupDelaySeconds;
 
     public ProcessRuntimeAgent(ConsensusModule consensus, NetworkLayer network, NodeId self, AegisFS fileSystem,
-                               ArtifactRegistry artifactRegistry, ArtifactClassLoader artifactClassLoader) {
+                               ArtifactRegistry artifactRegistry, ArtifactClassLoader artifactClassLoader, java.nio.file.Path workspaceRoot,
+                               int workspaceCleanupDelaySeconds) {
         this.consensus = consensus;
         this.network = network;
         this.self = self;
         this.artifactRegistry = artifactRegistry;
         this.artifactClassLoader = artifactClassLoader;
-        this.executor = new JobExecutor(self, fileSystem, artifactClassLoader);
+        this.workspaceRoot = workspaceRoot;
+        this.workspaceCleanupDelaySeconds = workspaceCleanupDelaySeconds;
+        this.executor = new JobExecutor(self, fileSystem, artifactClassLoader, workspaceRoot);
         this.fileSystem = fileSystem;
+
+        // Startup crash cleanup
+        try {
+            if (Files.exists(workspaceRoot)) {
+                try (java.util.stream.Stream<java.nio.file.Path> stream = Files.walk(workspaceRoot)) {
+                    stream.sorted(java.util.Comparator.reverseOrder())
+                          .map(java.nio.file.Path::toFile)
+                          .forEach(File::delete);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to clean up stale workspaces on startup", e);
+        }
     }
 
     public void registerAppliers() {
@@ -130,6 +154,10 @@ public final class ProcessRuntimeAgent {
 
     public JobRegistry registry() {
         return registry;
+    }
+
+    public ArtifactRegistry artifactRegistry() {
+        return artifactRegistry;
     }
 
     public ConsensusModule consensus() {
@@ -249,15 +277,54 @@ public final class ProcessRuntimeAgent {
                 }
             };
 
-            if (!artifactId.isEmpty()) {
-                com.aegisos.proto.ArtifactRecord artifact = artifactRegistry.bySha256(artifactId)
-                        .orElseThrow(() -> new IllegalStateException("unknown artifact: " + artifactId));
-                String className = record.getSpec().getClassName();
-                String[] args = Serialization.deserialize(record.getSpec().getArgs().toByteArray());
-                result = executor.runFromArtifact(jobId, record.getExecutionId(), artifactId, artifact.getFsPath(),
-                        className, args, restoreState, memoryMb, checkpointListener);
-            } else {
-                result = executor.run(jobId, record.getExecutionId(), record.getSpec().getArgs().toByteArray(), restoreState, memoryMb, checkpointListener);
+            java.util.Map<String, String> mountPaths = new java.util.HashMap<>();
+            java.util.List<String> pinnedArtifacts = new java.util.ArrayList<>();
+            try {
+                for (com.aegisos.proto.ArtifactReference ref : record.getSpec().getArtifactsList()) {
+                    com.aegisos.proto.ArtifactRecord art = null;
+                    for (int i = 0; i < 50; i++) {
+                        java.util.Optional<com.aegisos.proto.ArtifactRecord> opt = artifactRegistry.bySha256(ref.getSha256());
+                        if (opt.isPresent()) {
+                            art = opt.get();
+                            break;
+                        }
+                        Thread.sleep(100);
+                    }
+                    if (art == null) {
+                        throw new IllegalStateException("unknown artifact: " + ref.getSha256());
+                    }
+                    artifactClassLoader.getCache().pin(ref.getSha256());
+                    pinnedArtifacts.add(ref.getSha256());
+                    java.nio.file.Path localPath = artifactClassLoader.getCache().resolve(ref.getSha256(), art.getFsPath());
+                    mountPaths.put(ref.getMountPath(), localPath.toAbsolutePath().toString());
+                }
+
+                if (!artifactId.isEmpty()) {
+                    com.aegisos.proto.ArtifactRecord artifact = null;
+                    for (int i = 0; i < 50; i++) {
+                        java.util.Optional<com.aegisos.proto.ArtifactRecord> opt = artifactRegistry.bySha256(artifactId);
+                        if (opt.isPresent()) {
+                            artifact = opt.get();
+                            break;
+                        }
+                        Thread.sleep(100);
+                    }
+                    if (artifact == null) {
+                        throw new IllegalStateException("unknown artifact: " + artifactId);
+                    }
+                    artifactClassLoader.getCache().pin(artifactId);
+                    pinnedArtifacts.add(artifactId);
+                    String className = record.getSpec().getClassName();
+                    String[] args = Serialization.deserialize(record.getSpec().getArgs().toByteArray());
+                    result = executor.runFromArtifact(jobId, record.getExecutionId(), artifactId, artifact.getFsPath(),
+                            className, args, restoreState, memoryMb, mountPaths, checkpointListener);
+                } else {
+                    result = executor.run(jobId, record.getExecutionId(), record.getSpec().getArgs().toByteArray(), restoreState, memoryMb, mountPaths, checkpointListener);
+                }
+            } finally {
+                for (String pinned : pinnedArtifacts) {
+                    artifactClassLoader.getCache().unpin(pinned);
+                }
             }
 
             // Gate A: check fencing before publishing state
@@ -290,7 +357,7 @@ public final class ProcessRuntimeAgent {
         } finally {
             hbScheduler.shutdownNow();
             running.decrementAndGet();
-            cleanupJobFiles(jobId);
+            cleanupJobFiles(jobId, executionId);
         }
     }
 
@@ -323,10 +390,10 @@ public final class ProcessRuntimeAgent {
             log.warn("Execution {} of job {} superseded, skipping log upload (Gate B)", executionId, jobId);
             return;
         }
-        java.nio.file.Path workDir = java.nio.file.Paths.get(
-                System.getProperty("java.io.tmpdir"), "aegis", self.shortId(), "jobs", jobId);
-        uploadLogFile(workDir.resolve("stdout.log"), jobId, executionId, "stdout");
-        uploadLogFile(workDir.resolve("stderr.log"), jobId, executionId, "stderr");
+        java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
+        WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
+        uploadLogFile(workspace.stdoutLog(), jobId, executionId, "stdout");
+        uploadLogFile(workspace.stderrLog(), jobId, executionId, "stderr");
     }
 
     private void uploadLogFile(java.nio.file.Path localFile, String jobId, long executionId, String name) {
@@ -354,19 +421,41 @@ public final class ProcessRuntimeAgent {
         }
     }
 
-    private void cleanupJobFiles(String jobId) {
-        java.nio.file.Path workDir = java.nio.file.Paths.get(
-                System.getProperty("java.io.tmpdir"), "aegis", self.shortId(), "jobs", jobId);
+    private void cleanupJobFiles(String jobId, long executionId) {
+        long delaySeconds = this.workspaceCleanupDelaySeconds;
+        System.out.println("CLEANUP CALLED WITH DELAY: " + delaySeconds);
+        log.info("CLEANUP CALLED WITH DELAY: " + delaySeconds);
+        if (delaySeconds <= 0) {
+            deleteWorkspace(jobId, executionId);
+        } else {
+            cleanupExecutor.schedule(() -> {
+                System.out.println("EXECUTING SCHEDULED DELETION NOW!");
+                log.info("EXECUTING SCHEDULED DELETION NOW!");
+                deleteWorkspace(jobId, executionId);
+            }, delaySeconds, TimeUnit.SECONDS);
+            System.out.println("SCHEDULED cleanup in " + delaySeconds);
+            log.info("Scheduled workspace cleanup for job {} execution {} in {} seconds", jobId, executionId, delaySeconds);
+        }
+    }
+
+    private void deleteWorkspace(String jobId, long executionId) {
+        java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
         try {
-            if (java.nio.file.Files.exists(workDir)) {
-                try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(workDir)) {
-                    walk.sorted(java.util.Comparator.reverseOrder())
-                        .map(java.nio.file.Path::toFile)
-                        .forEach(java.io.File::delete);
+            if (Files.exists(execRoot)) {
+                try (java.util.stream.Stream<java.nio.file.Path> stream = Files.walk(execRoot)) {
+                    stream.sorted(java.util.Comparator.reverseOrder())
+                          .forEach(p -> {
+                              try {
+                                  Files.delete(p);
+                              } catch (IOException e) {
+                                  log.warn("Failed to delete {}, reason: {}", p, e.getMessage());
+                              }
+                          });
                 }
+                log.info("Cleaned up workspace for job {} execution {}", jobId, executionId);
             }
         } catch (Exception e) {
-            log.debug("Failed to cleanup workdir {}", workDir, e);
+            log.warn("Failed to clean up workspace for job {} execution {}", jobId, executionId, e);
         }
     }
 
@@ -375,5 +464,6 @@ public final class ProcessRuntimeAgent {
         shuttingDown = true;
         // Cancel all active jobs to ensure child processes are killed
         executor.close();
+        cleanupExecutor.shutdownNow();
     }
 }

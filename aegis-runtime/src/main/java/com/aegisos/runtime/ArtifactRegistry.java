@@ -32,6 +32,11 @@ public final class ArtifactRegistry implements SnapshotParticipant {
         return Optional.ofNullable(artifacts.get(sha256));
     }
 
+    /** Check if artifact exists by SHA-256. */
+    public boolean exists(String sha256) {
+        return artifacts.containsKey(sha256);
+    }
+
     /** List all artifacts. */
     public List<ArtifactRecord> listAll() {
         return List.copyOf(artifacts.values());
@@ -41,7 +46,8 @@ public final class ArtifactRegistry implements SnapshotParticipant {
     public void registerWith(ClusterStateMachine sm) {
         sm.register(CommandType.REGISTER_ARTIFACT, (index, cmd) -> {
             try {
-                applyRegister(ArtifactRecord.parseFrom(cmd.getPayload()));
+                com.aegisos.proto.RegisterArtifact regCmd = com.aegisos.proto.RegisterArtifact.parseFrom(cmd.getPayload());
+                applyRegister(regCmd.getArtifact());
             } catch (Exception e) {
                 log.error("Failed to parse ArtifactRecord at index {}", index, e);
             }
