@@ -25,6 +25,7 @@ public class ProcessSupervisor {
     private final Path workDir;
     private final int memoryMb;
     private Process process;
+    private final AtomicBoolean killed = new AtomicBoolean(false);
     private ServerSocket serverSocket;
     private Socket clientSocket;
     private PrintWriter out;
@@ -171,7 +172,10 @@ public class ProcessSupervisor {
         return null;
     }
 
-    public synchronized void kill() {
+    public void kill() {
+        if (!killed.compareAndSet(false, true)) {
+            return;
+        }
         log.info("ProcessSupervisor.kill() called for job {}", jobId);
         // #region agent log
         boolean wasAlive = process != null && process.isAlive();
