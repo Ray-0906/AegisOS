@@ -423,17 +423,14 @@ public final class ProcessRuntimeAgent {
 
     private void cleanupJobFiles(String jobId, long executionId) {
         long delaySeconds = this.workspaceCleanupDelaySeconds;
-        System.out.println("CLEANUP CALLED WITH DELAY: " + delaySeconds);
-        log.info("CLEANUP CALLED WITH DELAY: " + delaySeconds);
         if (delaySeconds <= 0) {
+            log.info("Cleaning up workspace for job {} execution {} immediately", jobId, executionId);
             deleteWorkspace(jobId, executionId);
         } else {
             cleanupExecutor.schedule(() -> {
-                System.out.println("EXECUTING SCHEDULED DELETION NOW!");
-                log.info("EXECUTING SCHEDULED DELETION NOW!");
+                log.info("Executing deferred workspace cleanup for job {} execution {}", jobId, executionId);
                 deleteWorkspace(jobId, executionId);
             }, delaySeconds, TimeUnit.SECONDS);
-            System.out.println("SCHEDULED cleanup in " + delaySeconds);
             log.info("Scheduled workspace cleanup for job {} execution {} in {} seconds", jobId, executionId, delaySeconds);
         }
     }
