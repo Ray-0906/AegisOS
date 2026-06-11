@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Stream;
 
 /**
@@ -21,6 +22,15 @@ import java.util.stream.Stream;
  * Verifies SHA-256 on first download. Subsequent loads from cache
  * use a quick size/mtime check to trust the local copy.
  * Supports LRU eviction, pinning, and configurable max size.
+ *
+ * <p>Thread safety: guarded by {@link ReentrantLock}s rather than {@code synchronized}.
+ * {@link #resolve} blocks on a cluster network read (AegisFS chunk fetch) while holding
+ * the per-artifact lock. In Java 21, blocking inside a {@code synchronized} block — or
+ * blocking on contended monitor entry — pins a virtual thread to its carrier thread.
+ * With many concurrent jobs resolving the same artifact, every carrier thread became
+ * pinned simultaneously, starving the virtual thread scheduler JVM-wide (handshake
+ * "Read timed out" failures, executors unable to terminate). {@code ReentrantLock}
+ * parks without pinning in both cases.
  */
 public final class ArtifactCache {
     private static final Logger log = LoggerFactory.getLogger(ArtifactCache.class);
@@ -29,9 +39,9 @@ public final class ArtifactCache {
     private final AegisFS fileSystem;
     private final long maxSizeBytes;
 
-    private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ReentrantLock> locks = new ConcurrentHashMap<>();
 
-    private final Object lruLock = new Object();
+    private final ReentrantLock lruLock = new ReentrantLock();
     private final Map<String, CacheEntry> index = new LinkedHashMap<>(16, 0.75f, true);
     private long currentSizeBytes = 0;
 
@@ -48,7 +58,8 @@ public final class ArtifactCache {
     }
 
     private void recover() throws IOException {
-        synchronized (lruLock) {
+        lruLock.lock();
+        try {
             try (Stream<Path> stream = Files.list(cacheDir)) {
                 stream.filter(p -> p.toString().endsWith(".meta")).forEach(meta -> {
                     String name = meta.getFileName().toString();
@@ -77,30 +88,39 @@ public final class ArtifactCache {
                     }
                 });
             }
+        } finally {
+            lruLock.unlock();
         }
         log.info("Recovered ArtifactCache: {} items, {} bytes", index.size(), currentSizeBytes);
     }
 
     public void pin(String artifactId) {
-        synchronized (lruLock) {
+        lruLock.lock();
+        try {
             CacheEntry entry = index.get(artifactId);
             if (entry != null) {
                 entry.pinCount++;
             }
+        } finally {
+            lruLock.unlock();
         }
     }
 
     public void unpin(String artifactId) {
-        synchronized (lruLock) {
+        lruLock.lock();
+        try {
             CacheEntry entry = index.get(artifactId);
             if (entry != null && entry.pinCount > 0) {
                 entry.pinCount--;
             }
+        } finally {
+            lruLock.unlock();
         }
     }
 
     private void reserveSpace(long sizeBytes) throws IOException {
-        synchronized (lruLock) {
+        lruLock.lock();
+        try {
             if (sizeBytes > maxSizeBytes) {
                 throw new IOException("Artifact too large for cache: " + sizeBytes + " > " + maxSizeBytes);
             }
@@ -122,12 +142,15 @@ public final class ArtifactCache {
             if (currentSizeBytes + sizeBytes > maxSizeBytes) {
                 throw new IOException("Cache full, cannot reserve " + sizeBytes + " bytes (all remaining artifacts pinned?)");
             }
+        } finally {
+            lruLock.unlock();
         }
     }
 
     public Path resolve(String artifactId, String fsPath) throws IOException {
-        Object lock = locks.computeIfAbsent(artifactId, k -> new Object());
-        synchronized (lock) {
+        ReentrantLock lock = locks.computeIfAbsent(artifactId, k -> new ReentrantLock());
+        lock.lock();
+        try {
             Path local = cacheDir.resolve(artifactId + ".jar");
             Path meta = cacheDir.resolve(artifactId + ".meta");
 
@@ -137,16 +160,22 @@ public final class ArtifactCache {
                 long currentMtime = Files.getLastModifiedTime(local).toMillis();
                 if (cached != null && currentSize == cached.size && currentMtime == cached.mtime) {
                     log.info("CACHE HIT: {}", artifactId);
-                    synchronized (lruLock) {
+                    lruLock.lock();
+                    try {
                         index.get(artifactId); // touch for LRU
+                    } finally {
+                        lruLock.unlock();
                     }
                     return local;
                 }
                 log.warn("Cache integrity mismatch for {}, re-downloading", artifactId);
                 Files.deleteIfExists(local);
-                synchronized (lruLock) {
+                lruLock.lock();
+                try {
                     CacheEntry e = index.remove(artifactId);
                     if (e != null) currentSizeBytes -= e.size;
+                } finally {
+                    lruLock.unlock();
                 }
             }
 
@@ -170,25 +199,36 @@ public final class ArtifactCache {
             long mtime = Files.getLastModifiedTime(local).toMillis();
             writeMeta(meta, data.length, mtime);
 
-            synchronized (lruLock) {
+            lruLock.lock();
+            try {
                 index.put(artifactId, new CacheEntry(data.length, mtime));
                 currentSizeBytes += data.length;
+            } finally {
+                lruLock.unlock();
             }
 
             return local;
+        } finally {
+            lock.unlock();
         }
     }
 
     public boolean isCached(String artifactId) {
-        synchronized (lruLock) {
+        lruLock.lock();
+        try {
             return index.containsKey(artifactId);
+        } finally {
+            lruLock.unlock();
         }
     }
 
     public long getCachedSizeBytes(String artifactId) {
-        synchronized (lruLock) {
+        lruLock.lock();
+        try {
             CacheEntry entry = index.get(artifactId);
             return entry != null ? entry.size : 0L;
+        } finally {
+            lruLock.unlock();
         }
     }
 
