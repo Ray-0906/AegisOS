@@ -55,7 +55,11 @@ public final class JobSupervisor implements AutoCloseable {
     private final Map<String, Long> firstSeenQueued = new ConcurrentHashMap<>();
     private final java.util.Set<String> pendingScheduling = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService executor =
-            Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-job-supervisor");
+                t.setDaemon(true);
+                return t;
+            });
     private final java.util.concurrent.ExecutorService schedulingExecutor =
             Executors.newVirtualThreadPerTaskExecutor();
 

@@ -67,7 +67,10 @@ public final class PeerConnection implements AutoCloseable {
     }
 
     public void startReceiving() {
-        receiveThread = Thread.ofVirtual()
+        // Platform daemon thread: receive loops are few (one per peer) and long-lived,
+        // and message delivery must not depend on the virtual thread scheduler.
+        receiveThread = Thread.ofPlatform()
+                .daemon()
                 .name("aegis-recv-" + remoteNodeId().shortId())
                 .start(this::receiveLoop);
     }

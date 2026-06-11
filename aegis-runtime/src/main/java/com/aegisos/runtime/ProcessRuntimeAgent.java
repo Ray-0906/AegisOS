@@ -44,7 +44,24 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     private final ArtifactClassLoader artifactClassLoader;
     private final JobRegistry registry = new JobRegistry();
     private final AtomicInteger running = new AtomicInteger(0);
-    private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService cleanupExecutor =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-workspace-cleanup");
+                t.setDaemon(true);
+                return t;
+            });
+    /**
+     * Shared scheduler for job heartbeats: one daemon platform thread for the whole agent
+     * instead of one non-daemon platform executor per job. Per-job executors were shut down
+     * only in the job thread's finally block, so any stalled job leaked a non-daemon thread
+     * that prevented JVM exit and re-dialed the leader every 5 seconds forever.
+     */
+    private final ScheduledExecutorService heartbeatScheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-job-heartbeat");
+                t.setDaemon(true);
+                return t;
+            });
     public final java.util.concurrent.atomic.AtomicLong jobsStarted = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong jobsCompleted = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong jobsFailed = new java.util.concurrent.atomic.AtomicLong(0);
@@ -221,9 +238,8 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         String jobId = record.getSpec().getJobId();
         long executionId = record.getExecutionId();
         running.incrementAndGet();
-        
-        java.util.concurrent.ScheduledExecutorService hbScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-        hbScheduler.scheduleAtFixedRate(() -> {
+
+        java.util.concurrent.ScheduledFuture<?> heartbeatTask = heartbeatScheduler.scheduleAtFixedRate(() -> {
             try {
                 com.aegisos.core.identity.NodeId leader = consensus.leaderId();
                 if (leader != null) {
@@ -388,7 +404,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 }
             }
         } finally {
-            hbScheduler.shutdownNow();
+            heartbeatTask.cancel(true);
             running.decrementAndGet();
             cleanupJobFiles(jobId, executionId);
         }
@@ -494,6 +510,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         shuttingDown = true;
         // Cancel all active jobs to ensure child processes are killed
         executor.close();
+        heartbeatScheduler.shutdownNow();
         cleanupExecutor.shutdownNow();
         try {
             cleanupExecutor.awaitTermination(3, TimeUnit.SECONDS);

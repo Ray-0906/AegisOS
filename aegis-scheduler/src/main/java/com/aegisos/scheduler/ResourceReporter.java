@@ -36,7 +36,11 @@ public final class ResourceReporter implements AutoCloseable {
     private final IntSupplier runningJobs;
     private final long intervalMs;
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-resource-reporter");
+                t.setDaemon(true);
+                return t;
+            });
 
     public ResourceReporter(NetworkLayer network, DiscoveryService discovery, NodeId self,
                             Path storageDir, NodeResourcesView view, IntSupplier runningJobs,

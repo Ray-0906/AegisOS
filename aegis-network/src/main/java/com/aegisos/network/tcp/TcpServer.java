@@ -37,7 +37,9 @@ public final class TcpServer implements AutoCloseable {
         serverSocket.setReuseAddress(true);
         serverSocket.bind(new InetSocketAddress(port));
         running = true;
-        acceptThread = Thread.ofVirtual().name("aegis-accept-" + boundPort()).start(this::acceptLoop);
+        // Platform daemon thread: the accept loop must keep running even when the
+        // virtual thread scheduler is starved (pinned carrier threads elsewhere).
+        acceptThread = Thread.ofPlatform().daemon().name("aegis-accept-" + boundPort()).start(this::acceptLoop);
         log.info("TCP server listening on port {}", boundPort());
     }
 
@@ -46,7 +48,9 @@ public final class TcpServer implements AutoCloseable {
             try {
                 Socket socket = serverSocket.accept();
                 socket.setTcpNoDelay(true);
-                Thread.ofVirtual().name("aegis-conn").start(() -> socketConsumer.accept(socket));
+                // Platform daemon thread: handshake handling must not depend on the
+                // virtual thread scheduler, or inbound peers see "Read timed out".
+                Thread.ofPlatform().daemon().name("aegis-conn").start(() -> socketConsumer.accept(socket));
             } catch (IOException e) {
                 if (running) {
                     log.warn("Accept failed: {}", e.getMessage());

@@ -23,7 +23,12 @@ public final class ChunkScrubber implements AutoCloseable {
     private final AegisFS fs;
     private final LocalHealthStore localHealth;
     private final NodeId self;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+    private final ScheduledExecutorService scheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-chunk-scrubber");
+                t.setDaemon(true);
+                return t;
+            });
     
     private int cursor = 0;
     private static final int BATCH_SIZE = 50;

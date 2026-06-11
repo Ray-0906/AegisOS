@@ -33,7 +33,11 @@ public final class GossipProtocol implements AutoCloseable {
     private final int fanout;
     private final long intervalMs;
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-gossip");
+                t.setDaemon(true);
+                return t;
+            });
 
     public GossipProtocol(NetworkLayer network, MembershipList membership, int fanout, long intervalMs) {
         this.network = network;

@@ -37,7 +37,11 @@ public final class DiscoveryService implements AutoCloseable {
     private final RoutingTable routingTable;
     private final KademliaRouter router;
     private final ScheduledExecutorService maintenance =
-            Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-discovery-maint");
+                t.setDaemon(true);
+                return t;
+            });
 
     public DiscoveryService(NetworkLayer network, IdentityService identity, String selfAddress, com.aegisos.proto.NodeRole role) {
         this.network = network;
