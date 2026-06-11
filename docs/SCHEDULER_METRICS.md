@@ -110,15 +110,16 @@ Not currently measured. These should be added as part of Sprint 9.5 implementati
 
 | Metric | Type | Description |
 |--------|------|-------------|
+| `scheduler_download_bytes_saved` | Counter | **[NEW]** Bytes NOT downloaded from AegisFS because the scheduler picked a node with local data |
 | `aegisfs_read_bytes` | Counter | Total bytes read from AegisFS (artifact + checkpoint downloads) |
 | `aegisfs_read_count` | Counter | Number of AegisFS read operations |
 | `aegisfs_read_duration_ms` | Histogram | Per-read latency |
 
 ### Baseline (v0.9)
 
-Every artifact resolution and every checkpoint recovery reads from AegisFS over the network.
+Every artifact resolution and every checkpoint recovery reads from AegisFS over the network. `scheduler_download_bytes_saved` is exactly 0.
 
-**Target after Sprint 9.5:** Significant reduction in `aegisfs_read_bytes` for artifact-heavy workloads.
+**Target after Sprint 9.5:** Significant increase in `scheduler_download_bytes_saved` and proportional reduction in `aegisfs_read_bytes` for artifact-heavy workloads.
 
 ---
 

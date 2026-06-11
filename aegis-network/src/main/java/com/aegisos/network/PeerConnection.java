@@ -72,23 +72,30 @@ public final class PeerConnection implements AutoCloseable {
                 .start(this::receiveLoop);
     }
 
+    private final java.util.concurrent.locks.ReentrantLock sendLock = new java.util.concurrent.locks.ReentrantLock();
+
     /** Sends an encrypted, signed application message to the peer. */
-    public synchronized void send(MessageType type, byte[] payload, long correlation) throws IOException {
-        byte[] nonce = session.cipher().newNonce();
-        MessageHeader header = MessageHeader.newBuilder()
-                .setSenderId(ByteString.copyFrom(identity.nodeId().toBytes()))
-                .setRecipientId(ByteString.copyFrom(remoteNodeId().toBytes()))
-                .setMessageType(type.code())
-                .setTimestamp(Instant.now().toEpochMilli())
-                .setNonce(ByteString.copyFrom(nonce))
-                .setSequence(sequence.getAndIncrement())
-                .setCorrelation(correlation)
-                .setHandshake(false)
-                .build();
-        byte[] aad = header.toByteArray();
-        byte[] cipherText = session.cipher().encrypt(nonce, payload, aad);
-        Envelope env = EnvelopeCodec.build(header, cipherText, identity::sign);
-        Framing.writeFrame(out, env.toByteArray());
+    public void send(MessageType type, byte[] payload, long correlation) throws IOException {
+        sendLock.lock();
+        try {
+            byte[] nonce = session.cipher().newNonce();
+            MessageHeader header = MessageHeader.newBuilder()
+                    .setSenderId(ByteString.copyFrom(identity.nodeId().toBytes()))
+                    .setRecipientId(ByteString.copyFrom(remoteNodeId().toBytes()))
+                    .setMessageType(type.code())
+                    .setTimestamp(Instant.now().toEpochMilli())
+                    .setNonce(ByteString.copyFrom(nonce))
+                    .setSequence(sequence.getAndIncrement())
+                    .setCorrelation(correlation)
+                    .setHandshake(false)
+                    .build();
+            byte[] aad = header.toByteArray();
+            byte[] cipherText = session.cipher().encrypt(nonce, payload, aad);
+            Envelope env = EnvelopeCodec.build(header, cipherText, identity::sign);
+            Framing.writeFrame(out, env.toByteArray());
+        } finally {
+            sendLock.unlock();
+        }
     }
 
     private void receiveLoop() {

@@ -292,12 +292,18 @@ message JobRecord {
 message ProbeRequest {
   string job_id = 1;
   ResourceRequest resources = 2;
+  repeated string artifact_sha256s = 3;
+  string checkpoint_file_id = 4;
 }
 
 message ProbeResult {
   bytes node_id = 1;
   bool  accepted = 2;
-  double score  = 3;
+  double score  = 3; // deprecated: score is computed by the leader now
+  int32 cpu_available = 4;
+  int64 mem_available = 5;
+  int32 running_jobs = 6;
+  int64 download_bytes_saved = 7;
 }
 
 message RunJob {

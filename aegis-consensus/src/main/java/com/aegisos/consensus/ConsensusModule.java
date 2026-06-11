@@ -103,6 +103,10 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         return clusterConfiguration;
     }
 
+    public CompletableFuture<Void> awaitApplied(long index) {
+        return raftNode.awaitApplied(index);
+    }
+
     public ClusterStateMachine stateMachine() {
         return stateMachine;
     }

@@ -43,6 +43,7 @@ public final class NodeConfig {
     // Sprint 9: Workspaces
     private int workspaceCleanupDelaySeconds = 300; // 5 minutes
     private long artifactCacheSizeMb = 1024; // 1GB default
+    private int maxConcurrentReservations = 10; // Default limit
 
     public boolean bootstrap() {
         return bootstrap;
@@ -165,6 +166,15 @@ public final class NodeConfig {
 
     public NodeConfig artifactCacheSizeMb(long mb) {
         this.artifactCacheSizeMb = mb;
+        return this;
+    }
+
+    public int maxConcurrentReservations() {
+        return maxConcurrentReservations;
+    }
+
+    public NodeConfig maxConcurrentReservations(int limit) {
+        this.maxConcurrentReservations = limit;
         return this;
     }
 

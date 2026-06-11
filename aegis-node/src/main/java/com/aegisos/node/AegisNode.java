@@ -140,13 +140,14 @@ public final class AegisNode implements AutoCloseable {
 
         long maxMem = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         int cores = Runtime.getRuntime().availableProcessors();
-        resourceAllocator = new ResourceAllocator(cores, maxMem);
+        resourceAllocator = new ResourceAllocator(cores, maxMem, config.maxConcurrentReservations());
 
         scheduler = new Scheduler(network, discovery, consensus, resourcesView, resourceAllocator, identity.nodeId());
         scheduler.setAcceptProbe(runtimeAgent::canAccept);
+        scheduler.setLocalityProvider(runtimeAgent);
 
         resourceReporter = new ResourceReporter(network, discovery, identity.nodeId(),
-                config.chunkDir(), resourcesView, runtimeAgent::runningJobs,
+                config.chunkDir(), resourcesView, runtimeAgent::getRunningJobs,
                 ResourceReporter.DEFAULT_INTERVAL_MS);
 
         // Note: CheckpointManager removed in Sprint 8 in favor of manual ctx.checkpoint()
@@ -340,6 +341,9 @@ public final class AegisNode implements AutoCloseable {
             com.aegisos.core.util.DebugLogger.log("AegisNode.java:327", "Closing resourceAllocator", java.util.Map.of(), "C", "pre-fix");
             // #endregion
             resourceAllocator.close();
+            if (scheduler != null) {
+                scheduler.close();
+            }
         }
         if (auditScheduler != null) {
             // #region agent log

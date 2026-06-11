@@ -52,12 +52,14 @@ public class CheckpointPersistenceTest {
         assertTrue(checkpoint.get().metadata().getSequence() > 0, "Should have a positive sequence number");
         assertEquals("/jobs/" + handle.jobId() + "/checkpoints/chk-" + checkpoint.get().metadata().getSequence(), checkpoint.get().checkpointFileId());
 
-        // Verify in AegisFS
-        List<FileMetadata> files = node.fileSystem().list("/jobs/" + handle.jobId() + "/checkpoints/");
-        System.out.println("Found checkpoints: " + files.stream().map(FileMetadata::getName).collect(Collectors.toList()));
-        assertFalse(files.isEmpty(), "Checkpoints should exist in AegisFS");
-        
-        // Retention limit is 5. We generated 10 checkpoints. So we should have exactly 5 checkpoints remaining!
-        assertTrue(files.size() <= 5, "Retention policy should cap checkpoints at 5, found " + files.size());
+        // Wait for retention policy to delete old checkpoints (max 5)
+        assertTrue(ClusterHarness.await(5000, () -> {
+            try {
+                List<FileMetadata> files = node.fileSystem().list("/jobs/" + handle.jobId() + "/checkpoints/");
+                return !files.isEmpty() && files.size() <= 5;
+            } catch (Exception e) {
+                return false;
+            }
+        }), "Retention policy should cap checkpoints at 5");
     }
 }

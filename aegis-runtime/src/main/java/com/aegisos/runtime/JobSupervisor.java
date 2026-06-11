@@ -53,8 +53,11 @@ public final class JobSupervisor implements AutoCloseable {
     private final Map<String, Long> recentlyMigrated = new ConcurrentHashMap<>();
     private final Map<String, Long> lastHeartbeat = new ConcurrentHashMap<>();
     private final Map<String, Long> firstSeenQueued = new ConcurrentHashMap<>();
+    private final java.util.Set<String> pendingScheduling = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService executor =
             Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+    private final java.util.concurrent.ExecutorService schedulingExecutor =
+            Executors.newVirtualThreadPerTaskExecutor();
 
     /** Tracks whether we were leader on the previous scan, to detect leadership transitions. */
     private volatile boolean wasLeader = false;
@@ -112,6 +115,7 @@ public final class JobSupervisor implements AutoCloseable {
             recentlyMigrated.clear();
             lastHeartbeat.clear();
             firstSeenQueued.clear();
+            pendingScheduling.clear();
             wasLeader = true;
             leadershipAcquiredTime = System.currentTimeMillis();
         }
@@ -127,24 +131,32 @@ public final class JobSupervisor implements AutoCloseable {
             
             // Handle PENDING jobs — schedule them
             if (record.getState() == JobState.PENDING) {
-                try {
-                    NodeId target = scheduler.schedule(record.getSpec(), 1L);
-                    JobRecord assignedRecord = record.toBuilder()
-                            .setAssignedNodeId(ByteString.copyFrom(target.toBytes()))
-                            .setState(JobState.QUEUED)
-                            .setExecutionId(1L)
-                            .build();
-                    if (target.equals(self)) {
-                        agent.dispatchLocal(assignedRecord);
-                    } else {
-                        network.sendAsync(target, MessageType.RUN_JOB,
-                                RunJob.newBuilder().setRecord(assignedRecord).build().toByteArray());
-                    }
-                    log.info("Scheduled PENDING job {} to {}", jobId, target.shortId());
-                } catch (Exception e) {
-                    // It's normal if no node has capacity, we just leave it PENDING
-                    log.info("Could not schedule PENDING job {}: {}", jobId, e.getMessage());
+                if (!pendingScheduling.add(jobId)) {
+                    // Another virtual thread is already scheduling this job
+                    continue;
                 }
+                schedulingExecutor.submit(() -> {
+                    try {
+                        NodeId target = scheduler.schedule(record.getSpec(), 1L, record.getCheckpointFileId());
+                        JobRecord assignedRecord = record.toBuilder()
+                                .setAssignedNodeId(ByteString.copyFrom(target.toBytes()))
+                                .setState(JobState.QUEUED)
+                                .setExecutionId(1L)
+                                .build();
+                        if (target.equals(self)) {
+                            agent.dispatchLocal(assignedRecord);
+                        } else {
+                            network.sendAsync(target, MessageType.RUN_JOB,
+                                    RunJob.newBuilder().setRecord(assignedRecord).build().toByteArray());
+                        }
+                        log.info("Scheduled PENDING job {} to {}", jobId, target.shortId());
+                    } catch (Exception e) {
+                        // It's normal if no node has capacity, we just leave it PENDING
+                        log.info("Could not schedule PENDING job {}: {}", jobId, e.getMessage());
+                    } finally {
+                        pendingScheduling.remove(jobId);
+                    }
+                });
                 continue;
             }
 
@@ -229,7 +241,7 @@ public final class JobSupervisor implements AutoCloseable {
         try {
             long nextExecutionId = record.getExecutionId() + 1;
 
-            NodeId newNode = scheduler.schedule(record.getSpec(), nextExecutionId);
+            NodeId newNode = scheduler.schedule(record.getSpec(), nextExecutionId, record.getCheckpointFileId());
 
             // Send cancel to old node — even if it appears dead, it might come back.
             // MUST be done AFTER schedule() commits the new executionId, so if the old node
@@ -264,6 +276,16 @@ public final class JobSupervisor implements AutoCloseable {
 
     @Override
     public void close() {
+        log.info("JobSupervisor shutdown starting: pendingSchedulingSize={}", pendingScheduling.size());
         executor.shutdownNow();
+        schedulingExecutor.shutdownNow();
+        try {
+            executor.awaitTermination(2, TimeUnit.SECONDS);
+            schedulingExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        log.info("JobSupervisor shutdown complete: executor.isTerminated={}, schedulingExecutor.isTerminated={}", 
+                 executor.isTerminated(), schedulingExecutor.isTerminated());
     }
 }

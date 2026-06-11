@@ -185,6 +185,13 @@ public final class ArtifactCache {
         }
     }
 
+    public long getCachedSizeBytes(String artifactId) {
+        synchronized (lruLock) {
+            CacheEntry entry = index.get(artifactId);
+            return entry != null ? entry.size : 0L;
+        }
+    }
+
     private CachedMeta readMeta(Path metaFile) {
         try {
             List<String> lines = Files.readAllLines(metaFile);

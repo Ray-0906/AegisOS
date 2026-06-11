@@ -272,7 +272,8 @@ public final class AegisFS implements AutoCloseable {
 
     private void commit(StateCommand command) throws IOException {
         try {
-            consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            long index = consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            consensus.awaitApplied(index).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             throw new IOException("failed to commit file metadata: " + e.getMessage(), e);
         }

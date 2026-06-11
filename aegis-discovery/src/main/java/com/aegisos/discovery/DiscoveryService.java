@@ -64,6 +64,7 @@ public final class DiscoveryService implements AutoCloseable {
     }
 
     private void connectToSeed(Endpoint seed) {
+        log.info("DISCOVERY START: Connecting to seed {}", seed);
         try {
             NodeId peerId = network.connect(seed);
             Optional<byte[]> key = identity.getPublicKey(peerId);
@@ -73,7 +74,7 @@ public final class DiscoveryService implements AutoCloseable {
             });
             log.info("Connected to seed {} ({})", seed, peerId.shortId());
         } catch (IOException e) {
-            log.warn("Could not reach seed {}: {}", seed, e.getMessage());
+            log.warn("DISCOVERY FAIL: Could not reach seed {}: {}", seed, e.getMessage());
         }
     }
 

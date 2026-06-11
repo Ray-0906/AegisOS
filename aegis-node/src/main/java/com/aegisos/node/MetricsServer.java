@@ -541,6 +541,10 @@ public final class MetricsServer implements AutoCloseable {
         // --- Storage ---
         int localChunks = node.fileSystem().chunkStore().listChunkIds().size();
 
+        // --- Scheduler ---
+        long downloadBytesSaved = node.scheduler() != null ? node.scheduler().getTotalDownloadBytesSaved() : 0;
+        int localityWins        = node.scheduler() != null ? node.scheduler().getLocalityWins() : 0;
+
         // Hand-built JSON — no Jackson dependency needed.
         return String.format("""
                 {
@@ -551,7 +555,8 @@ public final class MetricsServer implements AutoCloseable {
                   "commitIndex" : %d,
                   "aliveNodes"  : %d,
                   "jobs"        : { "PENDING": %d, "QUEUED": %d, "RUNNING": %d, "COMPLETED": %d, "FAILED": %d },
-                  "localChunks" : %d
+                  "localChunks" : %d,
+                  "scheduler"   : { "downloadBytesSaved": %d, "localityWins": %d }
                 }
                 """,
                 nodeId,
@@ -561,7 +566,8 @@ public final class MetricsServer implements AutoCloseable {
                 commitIndex,
                 aliveNodes,
                 pending, queued, running, completed, failed,
-                localChunks);
+                localChunks,
+                downloadBytesSaved, localityWins);
     }
 
     private static String escapeJson(String s) {

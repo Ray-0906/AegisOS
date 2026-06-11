@@ -30,7 +30,7 @@ import java.io.IOException;
  * job on a virtual thread, and records state transitions (RUNNING -> COMPLETED/FAILED)
  * in the Raft log so any node can observe progress and results.
  */
-public final class ProcessRuntimeAgent {
+public final class ProcessRuntimeAgent implements com.aegisos.scheduler.LocalityProvider {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessRuntimeAgent.class);
     private static final int MAX_CONCURRENT_JOBS = 100;
@@ -164,8 +164,41 @@ public final class ProcessRuntimeAgent {
         return consensus;
     }
 
-    public int runningJobs() {
+    @Override
+    public int getRunningJobs() {
         return running.get();
+    }
+
+    @Override
+    public long getDownloadBytesSaved(java.util.List<String> artifactSha256s, String checkpointFileId) {
+        long saved = 0;
+        for (String sha : artifactSha256s) {
+            saved += artifactClassLoader.getCache().getCachedSizeBytes(sha);
+        }
+        if (checkpointFileId != null && !checkpointFileId.isEmpty()) {
+            java.util.Optional<com.aegisos.proto.FileMetadata> opt = fileSystem.fileIndex().byName(checkpointFileId);
+            if (opt.isPresent()) {
+                com.aegisos.proto.FileMetadata meta = opt.get();
+                boolean allLocal = true;
+                for (com.aegisos.proto.ChunkRef ref : meta.getChunksList()) {
+                    boolean hasSelf = false;
+                    for (com.google.protobuf.ByteString nodeBytes : ref.getNodeIdsList()) {
+                        if (NodeId.of(nodeBytes.toByteArray()).equals(self)) {
+                            hasSelf = true;
+                            break;
+                        }
+                    }
+                    if (!hasSelf) {
+                        allLocal = false;
+                        break;
+                    }
+                }
+                if (allLocal) {
+                    saved += meta.getSize();
+                }
+            }
+        }
+        return saved;
     }
 
     public boolean canAccept() {
@@ -457,10 +490,16 @@ public final class ProcessRuntimeAgent {
     }
 
     public void close() {
-        log.info("ProcessRuntimeAgent shutting down");
+        log.info("ProcessRuntimeAgent shutting down: runningJobs={}", running.get());
         shuttingDown = true;
         // Cancel all active jobs to ensure child processes are killed
         executor.close();
         cleanupExecutor.shutdownNow();
+        try {
+            cleanupExecutor.awaitTermination(3, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        log.info("ProcessRuntimeAgent shutdown complete: cleanupExecutor.isTerminated={}", cleanupExecutor.isTerminated());
     }
 }

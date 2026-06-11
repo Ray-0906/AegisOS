@@ -136,9 +136,11 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     private void acceptSocket(Socket socket) {
         try {
+            socket.setSoTimeout(CONNECT_TIMEOUT_MS);
             DataInputStream in = new DataInputStream(socket.getInputStream());
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
             EstablishedSession session = handshakeHandler.respond(in, out);
+            socket.setSoTimeout(0);
             registerConnection(socket, in, out, session);
         } catch (IOException e) {
             log.debug("Inbound handshake failed: {}", e.getMessage());
@@ -151,9 +153,11 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         Socket socket = new Socket();
         socket.connect(new InetSocketAddress(endpoint.host(), endpoint.port()), CONNECT_TIMEOUT_MS);
         socket.setTcpNoDelay(true);
+        socket.setSoTimeout(CONNECT_TIMEOUT_MS);
         DataInputStream in = new DataInputStream(socket.getInputStream());
         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
         EstablishedSession session = handshakeHandler.initiate(in, out);
+        socket.setSoTimeout(0);
         PeerConnection conn = registerConnection(socket, in, out, session);
         return conn.remoteNodeId();
     }

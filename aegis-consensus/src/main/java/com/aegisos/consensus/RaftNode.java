@@ -52,7 +52,12 @@ public final class RaftNode {
 
     private final ReentrantLock lock = new ReentrantLock();
     private final ScheduledExecutorService scheduler =
-            Executors.newScheduledThreadPool(2, r -> Thread.ofVirtual().unstarted(r));
+            Executors.newScheduledThreadPool(2, r -> {
+                Thread t = new Thread(r);
+                t.setDaemon(true);
+                t.setName("aegis-raft-sched");
+                return t;
+            });
     private final ElectionTimer electionTimer;
 
     private volatile RaftRole role = RaftRole.FOLLOWER;
@@ -61,6 +66,7 @@ public final class RaftNode {
     private long lastApplied = 0;
     private final LogReplicator replicator;
     private final Map<Long, CompletableFuture<Long>> pending = new ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentSkipListMap<Long, List<CompletableFuture<Void>>> awaitAppliedPending = new java.util.concurrent.ConcurrentSkipListMap<>();
 
     // --- snapshot support ---
     private final AtomicInteger snapshotCreatedCount = new AtomicInteger(0);
@@ -185,6 +191,18 @@ public final class RaftNode {
     public void stop() {
         electionTimer.stop();
         scheduler.shutdownNow();
+        
+        lock.lock();
+        try {
+            for (List<CompletableFuture<Void>> list : awaitAppliedPending.values()) {
+                for (CompletableFuture<Void> f : list) {
+                    f.completeExceptionally(new RuntimeException("RaftNode is shutting down"));
+                }
+            }
+            awaitAppliedPending.clear();
+        } finally {
+            lock.unlock();
+        }
     }
 
     public RaftRole role() {
@@ -221,6 +239,20 @@ public final class RaftNode {
 
     public long matchIndex(NodeId peer) {
         return replicator.matchIndex(peer);
+    }
+
+    public CompletableFuture<Void> awaitApplied(long targetIndex) {
+        lock.lock();
+        try {
+            if (lastApplied >= targetIndex) {
+                return CompletableFuture.completedFuture(null);
+            }
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            awaitAppliedPending.computeIfAbsent(targetIndex, k -> new java.util.ArrayList<>()).add(future);
+            return future;
+        } finally {
+            lock.unlock();
+        }
     }
 
     public RaftLog raftLog() {
@@ -519,6 +551,15 @@ public final class RaftNode {
                 }
             }
         }
+        
+        java.util.Map<Long, List<CompletableFuture<Void>>> ready = awaitAppliedPending.headMap(lastApplied, true);
+        for (List<CompletableFuture<Void>> list : ready.values()) {
+            for (CompletableFuture<Void> f : list) {
+                f.complete(null);
+            }
+        }
+        ready.clear();
+        
         // Check snapshot trigger (outside the apply loop for efficiency)
         maybeSnapshot();
     }
@@ -701,6 +742,14 @@ public final class RaftNode {
             raftLog.installSnapshot(snapIndex, snapTerm);
             lastApplied = snapIndex;
             commitIndex = snapIndex;
+            
+            java.util.Map<Long, List<CompletableFuture<Void>>> ready = awaitAppliedPending.headMap(lastApplied, true);
+            for (List<CompletableFuture<Void>> list : ready.values()) {
+                for (CompletableFuture<Void> f : list) {
+                    f.complete(null);
+                }
+            }
+            ready.clear();
 
             log.info("Installed snapshot from leader {}: index={}, term={}",
                     leaderId.shortId(), snapIndex, snapTerm);

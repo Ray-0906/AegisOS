@@ -60,8 +60,11 @@ public class ArtifactCacheReuseTest {
         JobRecord rec1 = node.runtimeAgent().registry().get(jobId1).orElseThrow();
         assertEquals(com.aegisos.proto.JobState.COMPLETED, rec1.getState(), "Job 1 did not complete");
 
-        // Verify Artifact A is cached locally on node
-        Path cachePathA = node.config().artifactCacheDir().resolve(shaA + ".jar");
+        // Verify Artifact A is cached locally on the assigned node
+        AegisNode assignedNode = harness.nodes().stream()
+                .filter(n -> com.google.protobuf.ByteString.copyFrom(n.identity().nodeId().toBytes()).equals(rec1.getAssignedNodeId()))
+                .findFirst().orElseThrow();
+        Path cachePathA = assignedNode.config().artifactCacheDir().resolve(shaA + ".jar");
         assertTrue(Files.exists(cachePathA), "Artifact A not found in cache after Job 1");
         long mtime1 = Files.getLastModifiedTime(cachePathA).toMillis();
 
@@ -81,5 +84,9 @@ public class ArtifactCacheReuseTest {
 
         // Verify Artifact A is still cached and mtime might be unchanged or updated (touched)
         assertTrue(Files.exists(cachePathA), "Artifact A not found in cache after Job 2");
+
+        // Assert Locality: Job 2 should be scheduled on the SAME node as Job 1 because it has the artifact cached
+        assertEquals(rec1.getAssignedNodeId(), rec2.getAssignedNodeId(), 
+            "Scheduler failed to place Job 2 on the node with cached Artifact A");
     }
 }

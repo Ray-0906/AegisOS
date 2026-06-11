@@ -1,195 +1,100 @@
-# AegisOS v0.7 — Engineering Handoff
+# AegisOS v0.95 — Engineering Handoff
 
-> Handoff for the next engineer. Read this top-to-bottom once before touching code.
-> It captures **what exists, what was verified, what is currently planned, and where to start.**
+> Handoff for the next engineer/agent. Read this top-to-bottom before touching code.
+> It captures **what exists, what was verified, the findings of the latest investigation, and exactly where to start.**
 
 ---
 
 ## 0. TL;DR
 
 - **What it is:** AegisOS — a secure, peer-to-peer, distributed OS runtime in **Java 21**. Nodes authenticate, gossip membership, store files, and execute JAR artifacts as jobs.
-- **Current Phase:** We have just completed the **v0.7 Stabilization Pass**. The system now features a robust Job Execution model, log compaction (snapshots), strict audit frameworks, and decoupled membership. The execution model is proven stable under heavy chaos and node churn.
-- **Milestone Status:** Sprints 1 through 7 are **COMPLETE and SIGNED OFF**. We are ready to begin Sprint 8.
+- **Current Phase:** We are in the **Sprint 9.5 (Locality-Aware Scheduling)** verification and stabilization phase.
+- **Milestone Status:** Sprints 1 through 8 are **COMPLETE and SIGNED OFF**. Sprint 9/9.5 implementation is complete, and the scheduler placement logic has been fixed.
+- **Current Task:** The full integration test suite of 81+ tests is flaky under sequential execution, producing connection timeouts and a checkpoint retention policy failure. We have diagnosed these issues, and they are ready to be fixed.
 
 ---
 
-## 1. Work Completed up to v0.7
+## 1. Work Completed up to Sprint 9.5
 
-### Sprints 1-5 (v0.5 Foundation) ✅ SIGNED OFF
-- **CLI Isolation & Gossip Decoupling:** Strict Client-Server boundary for CLI. Raft membership decoupled from Gossip liveness.
-- **Storage Audit Framework:** Measurement-only verification pipeline running strictly on the leader.
-- **Raft Correctness:** Explicit `ADD_VOTER`/`REMOVE_VOTER` log semantics, dynamically derived from log state.
-- **Two-Phase Repair:** Leader-only repair proposals (`REPAIR_CHUNK` → `REPAIR_COMPLETE`) using physical observation.
+### Sprints 1-7 ✅ SIGNED OFF
+- **Sprints 1-5 (v0.5 Foundation):** Secure transport, Kad DHT routing, gossip membership, replicated file system (AegisFS), leader-driven storage audits, and two-phase chunk repair.
+- **Sprint 6 (Snapshots & Compaction):** Log compaction using state machine snapshots; dynamic snapshot transfer to lagging/new nodes.
+- **Sprint 7 (Job Execution & CLI):** Process-isolated execution of JAR artifacts; strict `JobState` machine lifecycle in `JobRegistry`; stdout/stderr logging persisted to AegisFS; dual-gate execution fencing.
 
-### Sprint 6: Snapshots & Log Compaction ✅ SIGNED OFF
-- **Log Compaction:** Raft node compaction via snapshots. Serializes `ClusterStateMachine` state (Configuration, FileIndex, ArtifactRegistry, RepairTasks, JobRegistry) to disk.
-- **Snapshot Transfer:** Lagging nodes or new nodes install snapshots via RPC instead of replaying the entire Raft log.
-- **Configurable Threshold:** Controlled via `aegis.snapshot.entryThreshold`.
+### Sprint 8 ✅ SIGNED OFF
+- Advanced execution lease-based failure detection, job cancellation, storage audit reality testing, and cluster stability under network partitions.
 
-### Sprint 7: Job Execution & CLI Management ✅ SIGNED OFF
-- **Job Execution Model:** Submit, monitor, and cancel jobs. Executes arbitrary JAR artifacts in isolated `Process` instances.
-- **Job Lifecycle & State Machine:** Enforces strict state transitions (`PENDING` → `QUEUED` → `RUNNING` → `COMPLETED`/`FAILED`/`CANCELLED`/`LOST`) in the `JobRegistry`.
-- **Fencing (Dual Gates):** Duplicate execution prevention. Superseded worker processes are fenced off from committing duplicate `COMPLETED` states to the Raft log.
-- **Log Persistence:** Job stdout/stderr captured by `ProcessSupervisor` and uploaded back into the replicated AegisFS.
-- **CLI Management:** `aegis jobs list`, `aegis jobs cancel <id>`, `aegis jobs logs <id>` commands added.
-- **Observability:** Job execution metrics (`jobsStarted`, `jobsCompleted`, `jobsLost`, `jobsSuperseded`, etc.) exposed via `GET /metrics/jobs`.
+### Sprint 9 / 9.5: Locality-Aware Scheduling 🔄 IN PROGRESS / IMPLEMENTATION COMPLETE
+- **Locality Scheduling:** Implemented scheduler scoring that accounts for both artifact cached bytes and checkpoint locality, preferring nodes that already hold local copies.
+- **Scheduler Bug Fix:** Fixed a major bug in [Scheduler.java](file:///C:/Users/astra/Desktop/projects/AgeisOS/aegis-scheduler/src/main/java/com/aegisos/scheduler/Scheduler.java) where `ASSIGN_JOB` proposals had an empty `assignedNodeId` and state `PENDING` (corrected to copy `bestNode` and state `QUEUED`).
+- **Isolation Verification:** Verified that targeted tests like `WorkerFailureResumeTest` and `LocalityMetricsValidationTest` pass when run in isolation.
 
 ---
 
-## 2. Active Investigation: Surefire Fork VM Hang (2026-06-10)
+## 2. Active Investigation: Test Suite Stabilization (June 11, 2026)
 
-> **Status:** DEBUG IN PROGRESS. Temporary instrumentation has been added across the codebase to diagnose why the Surefire forked JVM occasionally fails to exit after the full test suite completes.
+The full test suite execution runs ~81 tests sequentially in a single JVM and consistently fails with build failures due to test errors. Below is the current state of the investigation into the dominant failures.
 
-### Symptoms
-- The full `mvn clean install` or `mvn test -pl aegis-test-cluster` suite passes all tests.
-- After `OvernightSoakTest` (or the full suite), Surefire reports:
+### Issue A: "Read timed out" during Discovery / Seed Handshake
+- **Symptom:** Multi-node cluster tests frequently fail with:
   ```
-  The forked VM terminated without properly saying goodbye.
+  Could not reach seed 127.0.0.1:60437: Read timed out
+  New node ... did not join Gossip on leader ... within 30s
   ```
-- This is a **Surefire process failure**, not a test assertion failure. All individual tests have `Failures: 0, Errors: 0`.
-- No `.dump` or `.dumpstream` files are produced.
-- Short soak tests (2 minutes) pass cleanly with no hang. The hang likely requires a longer run (15-30+ minutes) or cumulative load across the full suite.
+- **Context:** The timeout happens exactly 5 seconds after the node starts, which matches `CONNECT_TIMEOUT_MS = 5000` in `NetworkLayer.java`. In isolation, tests like `VoterPromotionTest` pass cleanly.
+- **Evidence:** We also see `JobSupervisor shutdown complete: executor.isTerminated=false` repeatedly in the logs, indicating that virtual threads inside scheduled executors are failing to terminate or are getting starved.
+- **Leading Theory (Virtual Thread Carrier Pinning):**
+  AegisOS heavily utilizes Java 21 Virtual Threads for networking. Virtual threads share a small pool of OS carrier threads (ForkJoinPool). In Java 21, executing a `synchronized` block pins the virtual thread to its carrier thread.
+  - `RaftLog.java` and `RaftMetadataStore.java` use `synchronized` methods extensively.
+  - `RaftLog.append()` performs blocking file I/O (`FileOutputStream.write()`) inside a `synchronized` block.
+  - Under heavy test load (hundreds of nodes doing Raft elections/appends simultaneously), the synchronous disk I/O inside `synchronized` blocks pins all available carrier threads.
+  - This completely starves the virtual thread scheduler. When a new node attempts a discovery handshake, the `aegis-conn` virtual thread cannot be scheduled, causing the initiator to wait >5 seconds for the `HELLO` response, resulting in a `SocketTimeoutException`.
+- **Current Actions Taken:**
+  - We have added detailed `log.info` instrumentation to `HandshakeHandler.java` (`HANDSHAKE START`, `HELLO SENT`, `HELLO RECEIVED`) and `DiscoveryService.java` to trace exactly where the handshake stalls.
 
-### Hypotheses Being Investigated
+### Issue B: Checkpoint Retention Policy Test Failure
+- **Symptom:** `CheckpointPersistenceTest.testCheckpointsAreWrittenAndRetained` occasionally fails with:
+  ```
+  Retention policy should cap checkpoints at 5 ==> expected: <true> but was: <false>
+  ```
+- **Proposed Fix:** Implement read-your-own-writes consistency. Modifying the `commit` method in `AegisFS.java` to block until the local node's `lastApplied` index catches up to the committed Raft index returned by `propose().get()` has been confirmed as the correct approach for this issue.
 
-| ID | Hypothesis | Threads/Components | Evidence Direction |
-|----|------------|-------------------|--------------------|
-| **A** | **Orphaned `WorkerMain` child JVMs survive `ProcessSupervisor.kill()`.** The acceptor thread in `ProcessSupervisor` is not interrupted, and the child `WorkerMain` process may not die if it is blocked in a socket read that never hits EOF. | `ProcessSupervisor.acceptor`, `WorkerMain` | `destroyForcibly()` and `waitFor(2s)` added in `ProcessSupervisor.kill()` to log whether child exits. Logs show `processAlive=false` after `destroyForcibly()` in short tests. Needs validation in long test. |
-| **B** | **`MetricsServer` virtual-thread executor threads are non-daemon and trap the JVM.** `HttpServer` with `Executors.newVirtualThreadPerTaskExecutor()` creates a platform thread per task carrier. Those carrier threads may be non-daemon, blocking JVM exit even after `HttpServer.stop(1)`. | `MetricsServer`, JDK `HttpServer`, `VirtualThreadPerTaskExecutor` | `MetricsServer.close()` calls `server.stop(1)`. Need to verify if carrier threads are non-daemon on this JDK (confirmed: virtual thread carriers on JDK 21 are non-daemon by default). **Most promising fix candidate.** |
-| **C** | **A `ScheduledExecutorService` thread somewhere (`RaftNode`, `GossipProtocol`, `ResourceReporter`, `ResourceAllocator`, etc.) does not exit promptly.** `shutdownNow()` interrupts tasks but does not wait for termination. Individual scheduled threads may survive if a task is stuck and ignores `InterruptedException`. | `RaftNode.scheduler`, `GossipProtocol.scheduler`, `JobSupervisor.executor`, `ResourceReporter.scheduler`, `ResourceAllocator.reaper`, `CheckpointManager.scheduler`, `StorageAuditScheduler` | Shutdown log instrumentation added in `AegisNode.close()` to track each subsystem. Short tests show all subsystems close cleanly sequentially. Need to capture thread dump after long test. |
-| **D** | **`NetworkLayer.handlerExecutor` (virtual thread per task executor) threads are stuck in blocking I/O and ignore shutdown.** `shutdownNow()` interrupts submitted tasks but virtual threads in blocking socket I/O may not respond immediately. Carrier threads wait for those tasks. | `NetworkLayer.handlerExecutor` | Log added in `NetworkLayer.close()` tracking `isShutdown`, `isTerminated`, result of `awaitTermination(3s)`. |
-| **E** | **`TcpServer.acceptLoop` virtual thread blocks on `accept()` after `serverSocket.close()`.** Java `ServerSocket.close()` on Windows is asynchronous; `accept()` may remain blocked. The carrier thread is left waiting. | `TcpServer.acceptThread` | Also logged via `NetworkLayer.close()`. |
-|
-| **F** | **Multiple `ResourceAllocator.reaper` threads accumulate because `shutdownNow()` is called but not awaited.** If a test creates many nodes over time and `reaper.scheduleAtFixedRate(...)` survives, the number of reaper threads may grow. | `ResourceAllocator` | Currently no awaitTermination in `ResourceAllocator.close()`. Potential fix candidate. |
+---
 
-### Instrumentation Added (will be removed after fix)
-- **`aegis-core/src/main/java/com/aegisos/core/util/DebugLogger.java`** — new utility for writing NDJSON debug logs to `debug-cc5e8f.log`.
-- **`ProcessSupervisor.java`** — logs `kill()` invocation + `waitFor(2s)` result to verify child process death.
-- **`JobExecutor.java`** — logs `close()` call with count of active supervisors before/after.
-- **`AegisNode.java`** — logs every subsystem close call (metricsServer, jobSupervisor, checkpointManager, runtimeAgent, resourceReporter, resourceAllocator, auditScheduler, fileSystem, consensus, discovery, network).
-- **`NetworkLayer.java`** — logs `handlerExecutor` shutdown status with `awaitTermination(3s)` result.
+## 3. Where to Start for the Next Agent / Engineer
 
-### Most Likely Root Cause (Current Best Guess)
+To complete Sprint 9.5 and fully stabilize the project, follow these steps:
 
-**Hypothesis B — `MetricsServer` virtual thread executor blocks JVM exit.**
+### Step 1: Prove or Disprove the Carrier Pinning Theory
+1. We have instrumented `HandshakeHandler` and `DiscoveryService`. Run the full test suite (`mvn clean package` or `mvn test -pl aegis-test-cluster -am`) and grep the output for `HANDSHAKE START` and `Could not reach seed`.
+2. Determine exactly which handshake step (HELLO or VERIFY) is failing to send/receive.
+3. If the handshake is simply starving, proceed to fix the locking.
 
-`MetricsServer.start()` uses:
+### Step 2: Fix Virtual Thread Pinning in Consensus Storage
+If carrier pinning is confirmed as the root cause:
+1. Modify `RaftLog.java`: Replace all `synchronized` method signatures with a `java.util.concurrent.locks.ReentrantLock`. Reentrant locks do not pin carrier threads in Java 21.
+2. Modify `RaftMetadataStore.java`: Replace its `synchronized` methods with a `ReentrantLock`.
+
+### Step 3: Implement Read-Your-Own-Writes in AegisFS
+Modify `AegisFS.java`'s `commit` method to block until the local node's state machine has applied the entry:
 ```java
-server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+    private void commit(StateCommand command) throws IOException {
+        try {
+            long index = consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            long deadline = System.currentTimeMillis() + COMMIT_TIMEOUT_MS;
+            while (consensus.raftNode().lastApplied() < index) {
+                if (System.currentTimeMillis() > deadline) {
+                    throw new java.util.concurrent.TimeoutException(
+                        "Timeout waiting for local state machine to apply index " + index);
+                }
+                Thread.sleep(10);
+            }
+        } catch (Exception e) {
+            throw new IOException("failed to commit file metadata: " + e.getMessage(), e);
+        }
+    }
 ```
 
-On JDK 21, virtual thread executors create a platform carrier thread for each task. These carrier threads are **non-daemon**. `HttpServer.stop(1)` stops accepting new requests but does not forcibly interrupt in-flight handler threads. If any handler thread/carrier is currently processing a request when `stop()` is called, that thread may not exit until the request completes. Since the handler code contacts other subsystems (`node.discovery()`, `node.consensus()`, etc.), and those subsystems may be shutting down concurrently, the handler may block on a lock, sleep, or I/O that never resolves because the subsystem it depends on is now partially torn down.
-
-**Proposed Fix (NOT YET APPLIED — needs verification logs):**
-In `MetricsServer.close()`, wrap the executor shutdown in a sequence that:
-1. Calls `server.stop(1)`.
-2. Casts the executor to `ExecutorService`.
-3. Calls `shutdownNow()`.
-4. Calls `awaitTermination(5, TimeUnit.SECONDS)`.
-5. Logs a warning if any threads remain alive.
-
-OR: replace `newVirtualThreadPerTaskExecutor()` with a custom executor that creates daemon carrier threads, or use `ThreadPoolExecutor` with daemon threads.
-
-**Alternative Fix (if B is ruled out):**
-Add `awaitTermination(...)` with a timeout after every `shutdownNow()` across all subsystems that use `ScheduledExecutorService` or `ExecutorService`.
-
-### Files Modified with Temporary Instrumentation
-- `aegis-core/src/main/java/com/aegisos/core/util/DebugLogger.java` — NEW
-- `aegis-runtime/src/main/java/com/aegisos/runtime/ProcessSupervisor.java` — modified
-- `aegis-runtime/src/main/java/com/aegisos/runtime/JobExecutor.java` — modified
-- `aegis-node/src/main/java/com/aegisos/node/AegisNode.java` — modified
-- `aegis-network/src/main/java/com/aegisos/network/NetworkLayer.java` — modified
-
-### Steps for Next Agent / Engineer
-1. **Run a long soak test** (15-30 minutes) or the full suite:
-   ```bash
-   mvn clean test -pl aegis-test-cluster
-   ```
-   Or specifically:
-   ```bash
-   mvn test -pl aegis-test-cluster -Dtest=OvernightSoakTest -Dgroups=overnight
-   ```
-   (Default soak duration is 360 minutes; override with `-Dsoak.minutes=15` or similar.)
-2. **Collect evidence:**
-   - Read `debug-cc5e8f.log` after the hang.
-   - Check Surefire output for `terminated without properly saying goodbye`.
-3. **Analyze which subsystem close() call is missing or incomplete** using the log timestamps.
-4. **Apply the fix** and verify with a second run.
-5. **Clean up** by removing `DebugLogger.java` and all `#region agent log` / `#endregion` blocks from the files above.
-6. **Commit** the fix (not the instrumentation).
-
-### Known Ignored / Test-Only `System.exit` Calls
-The following locations call `System.exit(...)` but they are inside test-only classes or CLI entry points and are NOT the cause of the hang:
-- `aegis-cli/src/main/java/com/aegisos/cli/AegisCLI.java:48` — CLI main entry point
-- `aegis-runtime/src/main/java/com/aegisos/runtime/WorkerMain.java` — child process entry point
-- `aegis-scheduler/src/main/java/com/aegisos/scheduler/Scheduler.java:102` — test hook (`aegis.test.kill_after_probe`)
-- Several `aegis-cli/src/test/java/com/aegisos/test/*.java` files — test harnesses
-
----
-
-## 3. Core Architecture Decision Records (ADRs)
-
-Before writing code, understand the key foundational rules:
-
-| ADR | Decision |
-|-----|----------|
-| **ADR-016** | **Source of Truth Policy.** Raft Log is authoritative. Views (`FileIndex`, `JobRegistry`) are materialized. |
-| **ADR-017** | **Verification Contract.** Repairs require *two consecutive audit scans* + *membership validation*. |
-| **ADR-018** | **Client Transport Strategy.** Clients use `CLIENT_COMMAND`/`CLIENT_QUERY` via `NetworkLayer`. |
-| **ADR-019** | **Repair Execution Contract.** Leader-only repair proposals via `REPAIR_CHUNK`. |
-
----
-
-## 4. Current Project State
-
-| Area | Status |
-|------|--------|
-| Storage durability | ✅ Proven |
-| Corruption detection | ✅ Proven |
-| Membership visibility | ✅ Proven |
-| Storage audit & repair | ✅ Proven |
-| Raft snapshots & compaction | ✅ Proven |
-| Job Execution & Logging | ✅ Proven |
-| Execution Failover & Recovery | ✅ Proven |
-| Test suite exits cleanly | 🔄 Under investigation (Surefire fork hang) |
-
-> [!NOTE]
-> The system has been validated via a rigorous 30-minute `OvernightSoakTest` with a 100% completion rate under constant random node deaths, leader changes, and data churn, while adhering to strict memory (< 2048MB) and thread (< 500) invariants. The only remaining issue is ensuring the Surefire forked JVM exits cleanly after test completion.
-
----
-
-## 5. Sprint Roadmap
-
-```text
-Sprint 1-5 ✅  v0.5 Foundation (Auth, Gossip, Storage, Audit)
-Sprint 6   ✅  Snapshots & Log Compaction
-Sprint 7   ✅  Job Execution, Fencing, Logs & CLI
-Sprint 8   ←   Pending Next Phase (e.g. advanced scheduling, networking, or security)
-```
-
----
-
-## 6. Where to Start (Next Sprint)
-
-1. **First priority:** Resolve Surefire fork VM hang (active investigation above).
-2. Review the `walkthrough.md` index in the artifact workspace for full historical context of all sprints.
-3. The core execution engine is in `JobSupervisor.java` and `ProcessRuntimeAgent.java`.
-4. The cluster harness used for local chaos testing is `ClusterHarness.java`.
-
-### Build and Test
-
-```bash
-# Full build
-mvn clean install
-
-# Run all integration tests (includes full chaos and soak suites)
-mvn test -pl aegis-test-cluster
-
-# Run only the core execution safety tests
-mvn test -pl aegis-test-cluster -Dtest="JobLifecycleTest,DuplicateExecutionPreventionTest,LeaderFailoverJobRecoveryTest"
-
-# Run a 3-node cluster locally
-java -jar aegis-cli/target/aegis-cli-*.jar start --bootstrap --port 7001 --home node1
-java -jar aegis-cli/target/aegis-cli-*.jar start --seed 127.0.0.1:7001 --port 7002 --home node2
-java -jar aegis-cli/target/aegis-cli-*.jar start --seed 127.0.0.1:7001 --port 7003 --home node3
-```
+### Step 4: Verify the Fixes
+1. Run `mvn clean package` and verify that the `Read timed out` failures are eliminated and the 81+ integration tests pass sequentially.
+2. Verify Sprint 9.5 metrics (`scheduler_download_bytes_saved`, `locality_wins`) as defined in the verification plan.
