@@ -110,6 +110,14 @@ public final class JobRegistry implements SnapshotParticipant {
                             jobId, existing.getExecutionId(), update.getExecutionId());
                     return;
                 }
+                JobCheckpointRecord currentCheckpoint = checkpoints.get(jobId);
+                if (currentCheckpoint != null
+                        && currentCheckpoint.executionId() == update.getExecutionId()
+                        && currentCheckpoint.metadata().getSequence() > update.getMetadata().getSequence()) {
+                    log.warn("Ignoring stale checkpoint update for {}: current seq {}, update seq {}",
+                            jobId, currentCheckpoint.metadata().getSequence(), update.getMetadata().getSequence());
+                    return;
+                }
                 checkpoints.put(jobId, new JobCheckpointRecord(
                         jobId, update.getExecutionId(), update.getCheckpointFileId(), update.getMetadata()
                 ));
@@ -131,15 +139,23 @@ public final class JobRegistry implements SnapshotParticipant {
                         id, existing.getExecutionId(), update.getExecutionId());
                 return existing;
             }
+
             JobRecord.Builder b = existing == null ? JobRecord.newBuilder() : existing.toBuilder();
             JobState oldState = existing == null ? JobState.JOB_UNKNOWN : existing.getState();
-            if (!isValidTransition(oldState, update.getState())) {
-                log.warn("Invalid job state transition for {}: {} -> {} (applying anyway – entry is Raft-committed)",
-                        id, oldState, update.getState());
+            JobState newState = update.getState();
+            if (!isValidTransition(oldState, newState)) {
                 invalidTransitionCount.incrementAndGet();
+                if (isTerminalState(oldState) && oldState != newState) {
+                    log.warn("Ignoring invalid terminal job state transition for {}: {} -> {}",
+                            id, oldState, newState);
+                    return existing;
+                }
+                log.warn("Invalid job state transition for {}: {} -> {} (applying anyway - entry is Raft-committed)",
+                        id, oldState, newState);
             }
-            b.setState(update.getState());
-            log.info("JobRegistry update for {}: {} -> {}", id, oldState, update.getState());
+
+            b.setState(newState);
+            log.info("JobRegistry update for {}: {} -> {}", id, oldState, newState);
             if (!update.getCheckpointFileId().isEmpty()) {
                 b.setCheckpointFileId(update.getCheckpointFileId());
             }
@@ -149,8 +165,7 @@ public final class JobRegistry implements SnapshotParticipant {
             if (!update.getError().isEmpty()) {
                 b.setError(update.getError());
             }
-            if (update.getState() == JobState.COMPLETED || update.getState() == JobState.FAILED
-                    || update.getState() == JobState.CANCELLED) {
+            if (isTerminalState(newState)) {
                 b.setCompletedAt(System.currentTimeMillis());
             }
             return b.build();
@@ -163,9 +178,11 @@ public final class JobRegistry implements SnapshotParticipant {
 
     public boolean isTerminal(String jobId) {
         JobRecord r = jobs.get(jobId);
-        return r != null && (r.getState() == JobState.COMPLETED
-                || r.getState() == JobState.FAILED
-                || r.getState() == JobState.CANCELLED);
+        return r != null && isTerminalState(r.getState());
+    }
+
+    private static boolean isTerminalState(JobState state) {
+        return state == JobState.COMPLETED || state == JobState.FAILED || state == JobState.CANCELLED;
     }
 
     public Collection<JobRecord> all() {

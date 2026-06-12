@@ -225,8 +225,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                     try {
                         ClientCommandResult result = ClientCommandResult.parseFrom(reply.payload());
                         if (!result.getSuccess()) {
-                            throw new NotLeaderException(result.getLeaderId().isEmpty() ? null
-                                     : NodeId.of(result.getLeaderId().toByteArray()));
+                            throw new NotLeaderException(parseLeaderId(result.getLeaderId()));
                         }
                         return result.getIndex();
                     } catch (CompletionException ce) {
@@ -235,6 +234,17 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                         throw new CompletionException(e);
                     }
                 });
+    }
+
+    private NodeId parseLeaderId(ByteString leaderId) {
+        if (leaderId.isEmpty()) {
+            return null;
+        }
+        if (leaderId.size() != 32) {
+            log.debug("Ignoring malformed leader id in client command result: {} bytes", leaderId.size());
+            return null;
+        }
+        return NodeId.of(leaderId.toByteArray());
     }
 
     // --- inbound handlers ------------------------------------------------

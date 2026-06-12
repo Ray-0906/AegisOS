@@ -118,7 +118,7 @@ public class ResourceAllocator implements AutoCloseable {
                 SoftReservation res = entry.getValue();
                 softReservedCpu -= res.request().getCpuCores();
                 softReservedMem -= res.request().getMemoryMb();
-                log.warn("Reservation expired: job={} resId={}", res.jobId(), res.reservationId());
+                log.debug("Reservation expired: job={} resId={}", res.jobId(), res.reservationId());
                 it.remove();
             }
         }

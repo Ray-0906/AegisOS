@@ -131,6 +131,7 @@ public final class ChunkReplicator {
             String normalized = message.toLowerCase(java.util.Locale.ROOT);
             if (normalized.contains("partitioned from")
                     || normalized.contains("not connected to")
+                    || normalized.contains("network closed")
                     || normalized.contains("connection is closed")
                     || normalized.contains("timed out")) {
                 return true;

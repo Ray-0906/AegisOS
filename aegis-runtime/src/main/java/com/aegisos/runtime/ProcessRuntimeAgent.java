@@ -152,8 +152,9 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     public void cancelJob(String jobId) {
         registry.get(jobId).ifPresentOrElse(job -> {
             if (!registry.isTerminal(jobId)) {
-                update(jobId, job.getExecutionId(), JobState.CANCELLED, null, "user-cancelled");
-                jobsCancelled.incrementAndGet();
+                if (update(jobId, job.getExecutionId(), JobState.CANCELLED, null, "user-cancelled")) {
+                    jobsCancelled.incrementAndGet();
+                }
             }
             NodeId assignedNode = NodeId.of(job.getAssignedNodeId().toByteArray());
             if (self.equals(assignedNode)) {
@@ -239,25 +240,48 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 .orElse(false);
     }
 
+    private boolean isCurrentState(String jobId, long executionId, JobState state) {
+        return registry.get(jobId)
+                .map(r -> r.getExecutionId() == executionId && r.getState() == state)
+                .orElse(false);
+    }
+
     private void executeJob(JobRecord record) {
         String jobId = record.getSpec().getJobId();
         long executionId = record.getExecutionId();
+        if (shuttingDown) {
+            log.debug("Skipping job {} execution {} because runtime is shutting down", jobId, executionId);
+            return;
+        }
         running.incrementAndGet();
 
-        java.util.concurrent.ScheduledFuture<?> heartbeatTask = heartbeatScheduler.scheduleAtFixedRate(() -> {
-            try {
-                com.aegisos.core.identity.NodeId leader = consensus.leaderId();
-                if (leader != null) {
-                    com.aegisos.proto.JobHeartbeat hb = com.aegisos.proto.JobHeartbeat.newBuilder()
-                            .setJobId(jobId)
-                            .setExecutionId(executionId)
-                            .build();
-                    network.sendAsync(leader, com.aegisos.core.message.MessageType.JOB_HEARTBEAT, hb.toByteArray());
+        java.util.concurrent.ScheduledFuture<?> heartbeatTask;
+        try {
+            heartbeatTask = heartbeatScheduler.scheduleAtFixedRate(() -> {
+                try {
+                    com.aegisos.core.identity.NodeId leader = consensus.leaderId();
+                    if (leader != null) {
+                        com.aegisos.proto.JobHeartbeat hb = com.aegisos.proto.JobHeartbeat.newBuilder()
+                                .setJobId(jobId)
+                                .setExecutionId(executionId)
+                                .build();
+                        network.sendAsync(leader, com.aegisos.core.message.MessageType.JOB_HEARTBEAT, hb.toByteArray());
+                    }
+                } catch (Exception e) {
+                    log.debug("Failed to send heartbeat for job {}: {}", jobId, e.getMessage());
                 }
-            } catch (Exception e) {
-                log.debug("Failed to send heartbeat for job {}: {}", jobId, e.getMessage());
+            }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (RejectedExecutionException e) {
+            running.decrementAndGet();
+            if (shuttingDown) {
+                log.debug("Heartbeat scheduler stopped while starting job {} execution {}; job skipped",
+                        jobId, executionId);
+            } else {
+                log.warn("Heartbeat scheduler rejected job {} execution {}; job skipped",
+                        jobId, executionId, e);
             }
-        }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
+            return;
+        }
 
         try {
             byte[] restoreState = null;
@@ -305,7 +329,11 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                             }
                         }
                     } catch (Exception e) {
-                        log.warn("Failed to apply checkpoint retention for {}", jobId, e);
+                        if (isTransientStorageFailure(e)) {
+                            log.debug("Checkpoint retention for job {} deferred: {}", jobId, compactException(e));
+                        } else {
+                            log.warn("Failed to apply checkpoint retention for {}", jobId, e);
+                        }
                     }
                     
                     com.aegisos.proto.CheckpointMetadata meta = com.aegisos.proto.CheckpointMetadata.newBuilder()
@@ -400,6 +428,8 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         } catch (Exception e) {
             if (shuttingDown) {
                 log.info("Job {} aborted due to node shutdown, ignoring failure so it can be marked LOST.", jobId);
+            } else if (isCurrentState(jobId, executionId, JobState.CANCELLED)) {
+                log.info("Execution {} of job {} exited after cancellation; preserving CANCELLED state", executionId, jobId);
             } else {
                 if (!isSuperseded(jobId, executionId)) {
                     log.error("Job {} FAILED", jobId, e);
@@ -454,6 +484,10 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                     break;
                 }
             }
+        }
+        if (shuttingDown) {
+            log.debug("Skipping {} update for job {} execution {} during shutdown", state, jobId, executionId);
+            return false;
         }
         log.error("Failed to commit {} for job {} execution {} after retries",
                 state, jobId, executionId, lastFailure);
@@ -538,6 +572,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             if (normalized.contains("replication requirement not met")
                     || normalized.contains("partitioned from")
                     || normalized.contains("not connected to")
+                    || normalized.contains("network closed")
                     || normalized.contains("no known leader")
                     || normalized.contains("raftnode is shutting down")
                     || normalized.contains("executor")) {

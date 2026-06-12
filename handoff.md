@@ -1,100 +1,426 @@
-# AegisOS v0.95 — Engineering Handoff
+# AegisOS Engineering Handoff
 
-> Handoff for the next engineer/agent. Read this top-to-bottom before touching code.
-> It captures **what exists, what was verified, the findings of the latest investigation, and exactly where to start.**
-
----
-
-## 0. TL;DR
-
-- **What it is:** AegisOS — a secure, peer-to-peer, distributed OS runtime in **Java 21**. Nodes authenticate, gossip membership, store files, and execute JAR artifacts as jobs.
-- **Current Phase:** We are in the **Sprint 9.5 (Locality-Aware Scheduling)** verification and stabilization phase.
-- **Milestone Status:** Sprints 1 through 8 are **COMPLETE and SIGNED OFF**. Sprint 9/9.5 implementation is complete, and the scheduler placement logic has been fixed.
-- **Current Task:** The full integration test suite of 81+ tests is flaky under sequential execution, producing connection timeouts and a checkpoint retention policy failure. We have diagnosed these issues, and they are ready to be fixed.
+> Current handoff for the next engineer/agent. Read this before changing code.
+> It captures the problems investigated during the latest stabilization pass,
+> the actual root causes found, the fixes applied, and what still deserves follow-up.
 
 ---
 
-## 1. Work Completed up to Sprint 9.5
+## 0. Current Status
 
-### Sprints 1-7 ✅ SIGNED OFF
-- **Sprints 1-5 (v0.5 Foundation):** Secure transport, Kad DHT routing, gossip membership, replicated file system (AegisFS), leader-driven storage audits, and two-phase chunk repair.
-- **Sprint 6 (Snapshots & Compaction):** Log compaction using state machine snapshots; dynamic snapshot transfer to lagging/new nodes.
-- **Sprint 7 (Job Execution & CLI):** Process-isolated execution of JAR artifacts; strict `JobState` machine lifecycle in `JobRegistry`; stdout/stderr logging persisted to AegisFS; dual-gate execution fencing.
+- **Project:** AegisOS, a Java 21 peer-to-peer distributed runtime with secure networking, gossip membership, Raft consensus, AegisFS storage, job execution, checkpointing, repair, and locality-aware scheduling.
+- **Latest full validation:** `mvn clean package`
+- **Latest result:** `BUILD SUCCESS`
+- **Latest test total:** `Tests run: 83, Failures: 0, Errors: 0, Skipped: 1`
+- **Latest elapsed time:** `17:04 min`
+- **Most recent user log:** `build.log`, finished `2026-06-12T14:42:12+05:30`
 
-### Sprint 8 ✅ SIGNED OFF
-- Advanced execution lease-based failure detection, job cancellation, storage audit reality testing, and cluster stability under network partitions.
-
-### Sprint 9 / 9.5: Locality-Aware Scheduling 🔄 IN PROGRESS / IMPLEMENTATION COMPLETE
-- **Locality Scheduling:** Implemented scheduler scoring that accounts for both artifact cached bytes and checkpoint locality, preferring nodes that already hold local copies.
-- **Scheduler Bug Fix:** Fixed a major bug in [Scheduler.java](file:///C:/Users/astra/Desktop/projects/AgeisOS/aegis-scheduler/src/main/java/com/aegisos/scheduler/Scheduler.java) where `ASSIGN_JOB` proposals had an empty `assignedNodeId` and state `PENDING` (corrected to copy `bestNode` and state `QUEUED`).
-- **Isolation Verification:** Verified that targeted tests like `WorkerFailureResumeTest` and `LocalityMetricsValidationTest` pass when run in isolation.
+The original build hang and later `HotArtifactSpreadTest` failure are resolved.
+The remaining visible exceptions in `build.log` are mostly expected chaos-test or negative-test behavior, plus a few shutdown/logging-noise candidates listed below.
 
 ---
 
-## 2. Active Investigation: Test Suite Stabilization (June 11, 2026)
+## 1. Stabilization Story So Far
 
-The full test suite execution runs ~81 tests sequentially in a single JVM and consistently fails with build failures due to test errors. Below is the current state of the investigation into the dominant failures.
+### 1.1 Original Symptom: `mvn clean package` Appeared to Hang
 
-### Issue A: "Read timed out" during Discovery / Seed Handshake
-- **Symptom:** Multi-node cluster tests frequently fail with:
-  ```
-  Could not reach seed 127.0.0.1:60437: Read timed out
-  New node ... did not join Gossip on leader ... within 30s
-  ```
-- **Context:** The timeout happens exactly 5 seconds after the node starts, which matches `CONNECT_TIMEOUT_MS = 5000` in `NetworkLayer.java`. In isolation, tests like `VoterPromotionTest` pass cleanly.
-- **Evidence:** We also see `JobSupervisor shutdown complete: executor.isTerminated=false` repeatedly in the logs, indicating that virtual threads inside scheduled executors are failing to terminate or are getting starved.
-- **Leading Theory (Virtual Thread Carrier Pinning):**
-  AegisOS heavily utilizes Java 21 Virtual Threads for networking. Virtual threads share a small pool of OS carrier threads (ForkJoinPool). In Java 21, executing a `synchronized` block pins the virtual thread to its carrier thread.
-  - `RaftLog.java` and `RaftMetadataStore.java` use `synchronized` methods extensively.
-  - `RaftLog.append()` performs blocking file I/O (`FileOutputStream.write()`) inside a `synchronized` block.
-  - Under heavy test load (hundreds of nodes doing Raft elections/appends simultaneously), the synchronous disk I/O inside `synchronized` blocks pins all available carrier threads.
-  - This completely starves the virtual thread scheduler. When a new node attempts a discovery handshake, the `aegis-conn` virtual thread cannot be scheduled, causing the initiator to wait >5 seconds for the `HELLO` response, resulting in a `SocketTimeoutException`.
-- **Current Actions Taken:**
-  - We have added detailed `log.info` instrumentation to `HandshakeHandler.java` (`HANDSHAKE START`, `HELLO SENT`, `HELLO RECEIVED`) and `DiscoveryService.java` to trace exactly where the handshake stalls.
+The first major incident looked like a distributed live-lock during the integration suite:
 
-### Issue B: Checkpoint Retention Policy Test Failure
-- **Symptom:** `CheckpointPersistenceTest.testCheckpointsAreWrittenAndRetained` occasionally fails with:
-  ```
-  Retention policy should cap checkpoints at 5 ==> expected: <true> but was: <false>
-  ```
-- **Proposed Fix:** Implement read-your-own-writes consistency. Modifying the `commit` method in `AegisFS.java` to block until the local node's `lastApplied` index catches up to the committed Raft index returned by `propose().get()` has been confirmed as the correct approach for this issue.
+- Phase 5 snapshot/storage tests ran for a very long time.
+- Logs showed leader churn, election storms, anti-entropy activity, snapshot load fallback, and repeated background work.
+- The suite appeared to stall on “dead logs” instead of terminating.
 
----
+The initial suspicion was consensus/storage starvation: Raft heartbeats and membership work were being delayed while storage repair/audit/checkpoint paths were active.
 
-## 3. Where to Start for the Next Agent / Engineer
+### 1.2 Shutdown and Background-Executor Races
 
-To complete Sprint 9.5 and fully stabilize the project, follow these steps:
+After improving shutdown behavior, full builds started completing instead of hanging, but logs showed lifecycle races such as:
 
-### Step 1: Prove or Disprove the Carrier Pinning Theory
-1. We have instrumented `HandshakeHandler` and `DiscoveryService`. Run the full test suite (`mvn clean package` or `mvn test -pl aegis-test-cluster -am`) and grep the output for `HANDSHAKE START` and `Could not reach seed`.
-2. Determine exactly which handshake step (HELLO or VERIFY) is failing to send/receive.
-3. If the handshake is simply starving, proceed to fix the locking.
+- `RejectedExecutionException`
+- tasks rejected by terminated executors
+- cleanup/heartbeat work submitted while nodes were already shutting down
 
-### Step 2: Fix Virtual Thread Pinning in Consensus Storage
-If carrier pinning is confirmed as the root cause:
-1. Modify `RaftLog.java`: Replace all `synchronized` method signatures with a `java.util.concurrent.locks.ReentrantLock`. Reentrant locks do not pin carrier threads in Java 21.
-2. Modify `RaftMetadataStore.java`: Replace its `synchronized` methods with a `ReentrantLock`.
+These were not correctness failures, but they polluted logs and could leak state if a job startup failed halfway through.
 
-### Step 3: Implement Read-Your-Own-Writes in AegisFS
-Modify `AegisFS.java`'s `commit` method to block until the local node's state machine has applied the entry:
-```java
-    private void commit(StateCommand command) throws IOException {
-        try {
-            long index = consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            long deadline = System.currentTimeMillis() + COMMIT_TIMEOUT_MS;
-            while (consensus.raftNode().lastApplied() < index) {
-                if (System.currentTimeMillis() > deadline) {
-                    throw new java.util.concurrent.TimeoutException(
-                        "Timeout waiting for local state machine to apply index " + index);
-                }
-                Thread.sleep(10);
-            }
-        } catch (Exception e) {
-            throw new IOException("failed to commit file metadata: " + e.getMessage(), e);
-        }
-    }
+Fixes applied:
+
+- `ProcessRuntimeAgent` now skips job execution when shutting down.
+- Heartbeat scheduling is guarded against `RejectedExecutionException`.
+- Shutdown-time updates avoid reporting false hard failures when Raft is already stopping.
+- Delayed cleanup scheduling is guarded so cleanup is skipped cleanly during shutdown.
+- Transient storage/network shutdown failures are logged compactly.
+
+Relevant files:
+
+- `aegis-runtime/src/main/java/com/aegisos/runtime/ProcessRuntimeAgent.java`
+- `aegis-network/src/main/java/com/aegisos/network/PeerConnection.java`
+- `aegis-fs/src/main/java/com/aegisos/fs/ChunkReplicator.java`
+
+### 1.3 Cancellation Semantics: `CANCELLED -> FAILED`
+
+Logs showed suspicious state transitions where a cancelled job could later become failed:
+
+```text
+CANCELLED -> FAILED
 ```
 
-### Step 4: Verify the Fixes
-1. Run `mvn clean package` and verify that the `Read timed out` failures are eliminated and the 81+ integration tests pass sequentially.
-2. Verify Sprint 9.5 metrics (`scheduler_download_bytes_saved`, `locality_wins`) as defined in the verification plan.
+Root cause:
+
+- The runtime could kill a local worker after cancellation.
+- The worker failure path then attempted to publish `FAILED`.
+- `JobRegistry` previously logged invalid transitions but still applied some Raft-committed state updates.
+
+Fixes applied:
+
+- `JobRegistry` treats terminal states deterministically.
+- Terminal states are not overwritten by later invalid terminal rewrites.
+- `ProcessRuntimeAgent` preserves `CANCELLED` when the worker exits after cancellation.
+- `JobCancellationTest` now expects cancellation to remain terminal.
+
+Relevant files:
+
+- `aegis-runtime/src/main/java/com/aegisos/runtime/JobRegistry.java`
+- `aegis-runtime/src/main/java/com/aegisos/runtime/ProcessRuntimeAgent.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/JobCancellationTest.java`
+
+### 1.4 Worker Recovery and Supervisor Identity
+
+Recovery tests exposed stale/superseded execution behavior.
+
+Root cause:
+
+- Local process supervision was keyed too coarsely by job identity.
+- A later execution could interact badly with an earlier execution if both existed around failover/recovery boundaries.
+
+Fix applied:
+
+- `JobExecutor` supervisors are keyed by `jobId#executionId`, separating executions.
+
+Relevant file:
+
+- `aegis-runtime/src/main/java/com/aegisos/runtime/JobExecutor.java`
+
+### 1.5 Checkpoint Fencing and Monotonicity
+
+`LeaderFailoverCheckpointTest` exposed a race where a new leader could observe a checkpoint sequence lower than the old leader had observed before failover.
+
+Root causes:
+
+- Checkpoint updates are asynchronous relative to job execution.
+- A leader failover can expose state before every local registry view has caught up.
+- Same-execution checkpoint metadata needed monotonic protection.
+
+Fixes applied:
+
+- `JobRegistry` now ignores stale same-execution checkpoint updates where the current checkpoint sequence is newer.
+- `LeaderFailoverCheckpointTest` waits for the new leader registry to catch up instead of sampling immediately after election.
+
+Relevant files:
+
+- `aegis-runtime/src/main/java/com/aegisos/runtime/JobRegistry.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/LeaderFailoverCheckpointTest.java`
+
+### 1.6 Cluster Join Harness Flake
+
+A focused full-suite validation once failed in `Phase6Test` during `harness.start(5)`:
+
+```text
+New node ... did not join Gossip on leader ... within 30s
+```
+
+Root cause:
+
+- `ClusterHarness.addNodeWithHome` captured one leader and waited for that specific leader to observe the new node.
+- During full-suite load, leadership could move or a different leader could already see the node.
+- The harness was checking a stale leader snapshot, not the current cluster leader view.
+
+Fix applied:
+
+- `ClusterHarness` now re-checks the current leader during join/catch-up/proposal flow.
+- `ADD_VOTER` is proposed on a current leader that sees the joining node.
+
+Relevant file:
+
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/ClusterHarness.java`
+
+### 1.7 Client Command Forwarding Noise
+
+One validation run showed:
+
+```text
+NodeId must be 32 bytes
+```
+
+Root cause:
+
+- A forwarded `CLIENT_COMMAND` failure response could carry a malformed or absent leader id.
+- The caller attempted to parse any non-empty leader id bytes as a `NodeId`.
+
+Fix applied:
+
+- `ConsensusModule` validates leader id length before parsing.
+- Malformed leader ids are ignored and reported as no known leader instead of causing parse noise.
+
+Relevant file:
+
+- `aegis-consensus/src/main/java/com/aegisos/consensus/ConsensusModule.java`
+
+### 1.8 Final Build Failure: `HotArtifactSpreadTest`
+
+The last real build failure was:
+
+```text
+HotArtifactSpreadTest.testHotArtifactSpillsOver:103
+Hotspot protection failed: all jobs went to a single node
+```
+
+Root cause:
+
+- The test intentionally fills the artifact-cache node with dummy reservations.
+- The hot jobs must spill to non-cache nodes.
+- Before the fix, the scheduler only saw already-running jobs and local resource reservations.
+- Burst-submitted jobs were assigned but not yet running, so placement did not count those in-flight assignments.
+- The remaining fallback nodes had equal scores, so placement fell through to a hash tie-breaker.
+- For that run, the hash tie-breaker selected the same fallback node for every job.
+
+Fix applied:
+
+- `Scheduler` now tracks in-flight assignment load per node.
+- Placement scoring includes both `runningJobs` and pending `assignmentLoad`.
+- The score/tie-break/track operation is protected by a small `placementLock`.
+- Raft `ASSIGN_JOB` proposal still happens outside the lock to avoid serializing slow consensus work.
+- Assignment load is released on terminal states: `COMPLETED`, `FAILED`, `LOST`, and `CANCELLED`.
+- Provisional assignment load is rolled back if the Raft proposal fails.
+- `schedulerEpoch` is now atomic so concurrent scheduling gets stable reservation epochs.
+
+Relevant files:
+
+- `aegis-scheduler/src/main/java/com/aegisos/scheduler/Scheduler.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/HotArtifactSpreadTest.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/SchedulerDeterminismTest.java`
+
+Validation performed:
+
+```powershell
+mvn -pl aegis-test-cluster -am "-Dtest=HotArtifactSpreadTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+```powershell
+mvn -pl aegis-test-cluster -am "-Dtest=HotArtifactSpreadTest,SchedulerDeterminismTest,Phase5Test" "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+Both passed.
+
+---
+
+## 2. Latest Full Build Result
+
+The user reran:
+
+```powershell
+mvn clean package 2>&1 | Tee-Object -FilePath build.log
+```
+
+Final result:
+
+```text
+[WARNING] Tests run: 83, Failures: 0, Errors: 0, Skipped: 1
+BUILD SUCCESS
+Total time: 17:04 min
+Finished at: 2026-06-12T14:42:12+05:30
+```
+
+Important interpretation:
+
+- The scheduler hotspot failure is fixed.
+- Phase 5, Phase 6, Phase 8, Phase 9, and Phase 10 chaos tests completed.
+- `LeaderFailoverCheckpointTest` passed.
+- `JobCancellationTest` passed.
+- `SchedulerDeterminismTest` passed.
+- `HotArtifactSpreadTest` passed.
+
+---
+
+## 3. Expected Log Noise in Passing Builds
+
+Several warnings/errors in `build.log` are expected because the tests intentionally break things.
+
+### Expected Negative-Test Failures
+
+These are expected when the corresponding tests pass:
+
+- `ArtifactNotFoundTest`: job fails because the artifact/file does not exist.
+- `MountPathTraversalTest`: job fails because mount paths like `/etc/passwd` or `../escaped.bin` are rejected.
+- `CorruptCheckpointRecoveryTest`: worker fails on invalid checkpoint bytes.
+- `CorruptSnapshotRecoveryTest`: snapshot load fails and falls back to full log replay.
+
+These logs look scary but are the assertions being exercised.
+
+### Expected Chaos/Partition Warnings
+
+Common expected messages:
+
+```text
+partitioned from ...
+not connected to ...
+Replication requirement not met
+Checkpoint sequence ... temporarily deferred
+no known leader
+RaftNode is shutting down
+```
+
+These appear in partition, failover, checkpoint, and chaos tests.
+They usually mean the runtime refused to violate replication or fencing guarantees.
+
+### SLF4J Provider Warnings
+
+Some module-local unit test JVMs print:
+
+```text
+SLF4J(W): No SLF4J providers were found.
+```
+
+This is harmless for correctness. It only means that specific test classpath has `slf4j-api` without a logging backend.
+
+---
+
+## 4. Remaining Follow-Up Candidates
+
+The suite passes, but the logs still contain cleanup/noise worth reducing later.
+
+### 4.1 Repair/Audit During Shutdown
+
+Example:
+
+```text
+Failed to propose REPAIR_CHUNK ...
+RejectedExecutionException ...
+ScheduledThreadPoolExecutor[Terminated]
+```
+
+This happened during `RaftQuorumIsolationTest` after a node was already shutting down.
+
+Recommended follow-up:
+
+- Make `RepairProposer` / audit scheduler treat terminated consensus as shutdown noise.
+- Skip proposing repairs when the local node or Raft executor is stopping.
+- Log compactly at debug/warn instead of full stack traces.
+
+Likely files:
+
+- `aegis-fs/src/main/java/com/aegisos/fs/audit/RepairProposer.java`
+- `aegis-fs/src/main/java/com/aegisos/fs/audit/StorageAuditScheduler.java`
+- `aegis-consensus/src/main/java/com/aegisos/consensus/RaftNode.java`
+
+### 4.2 Checkpoint Retention Timeout Noise
+
+Example:
+
+```text
+Failed to apply checkpoint retention ...
+failed to commit file metadata: null
+Caused by: TimeoutException
+```
+
+This happened during `LongRunningCheckpointChaosTest`, which still passed.
+
+Recommended follow-up:
+
+- Treat checkpoint retention delete failures as transient under leader failover/partition.
+- Prefer compact logs for timeout/no-known-leader/raft-shutdown cases.
+- Consider retrying retention opportunistically instead of treating it as immediate warning-level noise.
+
+Likely file:
+
+- `aegis-runtime/src/main/java/com/aegisos/runtime/ProcessRuntimeAgent.java`
+
+### 4.3 Storage Unavailable Log Uploads
+
+Examples:
+
+```text
+Skipped stdout log upload ... Replication requirement not met
+Skipped stderr log upload ... no known leader
+```
+
+These are expected when tests kill or partition nodes while jobs complete.
+The current behavior is correct: job completion is not failed merely because log upload could not meet storage replication during chaos.
+
+Recommended follow-up:
+
+- Keep current semantics.
+- Optionally reduce repeated messages during high-churn chaos tests.
+
+### 4.4 SLF4J Test Classpath
+
+Optional cleanup:
+
+- Add a test-scoped logging backend for modules that only have `slf4j-api`.
+- This would remove `SLF4J(W): No SLF4J providers were found` from module unit test logs.
+
+---
+
+## 5. Developer Environment Note
+
+During focused Maven runs, the VS Code Java language server sometimes raced Maven by touching or deleting class files under `target`.
+
+Symptom:
+
+```text
+cannot access MessageType
+class file for MessageType not found
+cannot access AegisMessage
+cannot access NodeId
+```
+
+This was not a source-code compile error. It was an IDE/Maven file-system race.
+
+Workarounds:
+
+- Close/restart the Java language server before clean full builds.
+- Or run Maven with the Red Hat Java language server paused.
+- If this appears, rerun the same Maven command before debugging source code.
+
+---
+
+## 6. Current Modified Areas
+
+The stabilization pass touched or involved these areas:
+
+- `aegis-consensus/src/main/java/com/aegisos/consensus/ConsensusModule.java`
+- `aegis-fs/src/main/java/com/aegisos/fs/ChunkReplicator.java`
+- `aegis-runtime/src/main/java/com/aegisos/runtime/JobRegistry.java`
+- `aegis-runtime/src/main/java/com/aegisos/runtime/ProcessRuntimeAgent.java`
+- `aegis-runtime/src/main/java/com/aegisos/runtime/ProcessSupervisor.java`
+- `aegis-scheduler/src/main/java/com/aegisos/scheduler/ResourceAllocator.java`
+- `aegis-scheduler/src/main/java/com/aegisos/scheduler/Scheduler.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/ClusterHarness.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/HotArtifactSpreadTest.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/JobCancellationTest.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/LeaderFailoverCheckpointTest.java`
+- `aegis-test-cluster/src/test/java/com/aegisos/cluster/SchedulerDeterminismTest.java`
+
+Before committing, review the full diff and ensure each change is intended.
+
+---
+
+## 7. Recommended Next Steps
+
+1. Review the current `git diff` for all modified files.
+2. Run one more full `mvn clean package` if any code changes are made after this handoff.
+3. Optionally clean up remaining shutdown/audit log noise.
+4. Consider adding a small unit-level scheduler test for in-flight assignment load, so `HotArtifactSpreadTest` is not the only guard.
+5. Update release notes to mention scheduler burst placement stabilization and cancellation/checkpoint fencing hardening.
+
+---
+
+## 8. Bottom Line
+
+AegisOS is currently in a much healthier state:
+
+- Build completes.
+- Full integration suite passes.
+- Previous hang is gone.
+- Hot artifact spread flake is fixed.
+- Cancellation and checkpoint fencing are more deterministic.
+- Remaining issues are mostly logging/lifecycle polish, not correctness failures.

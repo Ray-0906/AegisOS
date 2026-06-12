@@ -42,9 +42,11 @@ public class LeaderFailoverCheckpointTest {
             AegisNode newLeader = nodes.stream().filter(n -> n != leader && n.consensus().isLeader()).findFirst().orElseThrow();
 
             // Check that the new leader has the checkpoint sequence >= lastSeq
-            var chk = newLeader.runtimeAgent().registry().getCheckpoint(jobId);
-            assertTrue(chk.isPresent(), "Checkpoint record should be replicated");
-            assertTrue(chk.get().metadata().getSequence() >= lastSeq, "Sequence should be at least as advanced as before failover");
+            assertTrue(ClusterHarness.await(10_000, () ->
+                    newLeader.runtimeAgent().registry().getCheckpoint(jobId)
+                            .map(chk -> chk.metadata().getSequence() >= lastSeq)
+                            .orElse(false)
+            ), "Checkpoint record should be replicated at least as advanced as before failover");
         }
     }
 }

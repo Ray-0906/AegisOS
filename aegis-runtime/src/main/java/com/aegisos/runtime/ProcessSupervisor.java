@@ -69,7 +69,7 @@ public class ProcessSupervisor {
                 java.nio.file.Files.createSymbolicLink(targetPath, java.nio.file.Paths.get(localCachePath));
                 log.info("Symlinked artifact {} to {}", localCachePath, targetPath);
             } catch (Exception e) {
-                log.warn("Failed to create symlink for {}, falling back to copy", mountPath);
+                log.debug("Failed to create symlink for {}, falling back to copy: {}", mountPath, e.getMessage());
                 java.nio.file.Files.copy(java.nio.file.Paths.get(localCachePath), targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 log.info("Copied artifact {} to {}", localCachePath, targetPath);
             }

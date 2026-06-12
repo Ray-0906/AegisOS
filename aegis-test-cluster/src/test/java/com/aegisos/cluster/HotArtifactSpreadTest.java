@@ -79,7 +79,7 @@ public class HotArtifactSpreadTest {
         }
 
         for (com.aegisos.api.JobHandle handle : handles) {
-            pm.awaitResult(handle, 15_000);
+            pm.awaitResult(handle, 30_000);
         }
         
         // Assert jobs were spread due to hotspot protection

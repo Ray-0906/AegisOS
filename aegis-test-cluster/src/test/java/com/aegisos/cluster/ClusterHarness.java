@@ -99,38 +99,28 @@ public final class ClusterHarness implements AutoCloseable {
 
         if (!isBootstrap) {
             try {
-                // Find leader node
-                AegisNode leaderNode = null;
-                for (int attempt = 0; attempt < 200; attempt++) {
-                    for (AegisNode existing : nodes) {
-                        if (existing.consensus().isLeader()) {
-                            leaderNode = existing;
-                            break;
-                        }
-                    }
-                    if (leaderNode != null) {
-                        break;
-                    }
-                    Thread.sleep(50);
-                }
+                AegisNode leaderNode = awaitLeader(10_000);
                 if (leaderNode == null) {
                     throw new IllegalStateException("No leader found to add node as voter");
                 }
 
-                final AegisNode finalLeader = leaderNode;
-                // Wait for Gossip to discover the new node and mark it alive
                 boolean joinedGossip = await(30_000, () -> {
-                    com.aegisos.proto.PeerStatus status = finalLeader.discovery().membership().statusOf(node.identity().nodeId());
-                    return status == com.aegisos.proto.PeerStatus.ALIVE || status == com.aegisos.proto.PeerStatus.SUSPECT;
+                    AegisNode leaderSeeingNode = currentLeaderSeeing(node);
+                    return leaderSeeingNode != null;
                 });
                 if (!joinedGossip) {
-                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not join Gossip on leader " + finalLeader.identity().nodeId().shortId() + " within 30s");
+                    AegisNode currentLeader = awaitLeader(1_000);
+                    String leaderId = currentLeader == null ? "none" : currentLeader.identity().nodeId().shortId();
+                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not join Gossip on any leader within 30s (current leader " + leaderId + ")");
                 }
 
-                // Wait for replicator to catch up (so lag is <= 10)
                 boolean caughtUp = await(30_000, () -> {
-                    long leaderLast = finalLeader.consensus().raftNode().lastLogIndex();
-                    long nodeMatch = finalLeader.consensus().raftNode().matchIndex(node.identity().nodeId());
+                    AegisNode currentLeader = currentLeaderSeeing(node);
+                    if (currentLeader == null) {
+                        return false;
+                    }
+                    long leaderLast = currentLeader.consensus().raftNode().lastLogIndex();
+                    long nodeMatch = currentLeader.consensus().raftNode().matchIndex(node.identity().nodeId());
                     return (leaderLast - nodeMatch) <= 10;
                 });
                 if (!caughtUp) {
@@ -142,7 +132,7 @@ public final class ClusterHarness implements AutoCloseable {
                         .setType(com.aegisos.proto.CommandType.ADD_VOTER)
                         .setPayload(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
                         .build();
-                finalLeader.consensus().propose(addCmd).get(30, java.util.concurrent.TimeUnit.SECONDS);
+                proposeOnCurrentLeader(addCmd, node);
 
                 // Wait for the new node to actually apply the ADD_VOTER command and become a voter locally
                 boolean appliedLocally = await(30_000, () -> node.consensus().clusterConfiguration().isVoter(node.identity().nodeId()));
@@ -154,6 +144,56 @@ public final class ClusterHarness implements AutoCloseable {
             }
         }
         return node;
+    }
+
+    private AegisNode awaitLeader(long timeoutMs) throws InterruptedException {
+        final AegisNode[] found = new AegisNode[1];
+        await(timeoutMs, () -> {
+            found[0] = currentLeader();
+            return found[0] != null;
+        });
+        return found[0];
+    }
+
+    private AegisNode currentLeader() {
+        for (AegisNode existing : nodes) {
+            if (existing.consensus().isLeader()) {
+                return existing;
+            }
+        }
+        return null;
+    }
+
+    private AegisNode currentLeaderSeeing(AegisNode node) {
+        NodeId nodeId = node.identity().nodeId();
+        for (AegisNode existing : nodes) {
+            if (existing == node || !existing.consensus().isLeader()) {
+                continue;
+            }
+            com.aegisos.proto.PeerStatus status = existing.discovery().membership().statusOf(nodeId);
+            if (status == com.aegisos.proto.PeerStatus.ALIVE || status == com.aegisos.proto.PeerStatus.SUSPECT) {
+                return existing;
+            }
+        }
+        return null;
+    }
+
+    private void proposeOnCurrentLeader(com.aegisos.proto.StateCommand command, AegisNode joiningNode) throws Exception {
+        long deadline = System.currentTimeMillis() + 30_000;
+        Exception lastFailure = null;
+        while (System.currentTimeMillis() < deadline) {
+            AegisNode currentLeader = currentLeaderSeeing(joiningNode);
+            if (currentLeader != null) {
+                try {
+                    currentLeader.consensus().propose(command).get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    return;
+                } catch (Exception e) {
+                    lastFailure = e;
+                }
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("Failed to propose ADD_VOTER on a stable leader", lastFailure);
     }
 
 

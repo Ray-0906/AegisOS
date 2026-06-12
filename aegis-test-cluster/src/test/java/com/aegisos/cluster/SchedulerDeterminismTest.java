@@ -55,7 +55,7 @@ public class SchedulerDeterminismTest {
         }
 
         for (com.aegisos.api.JobHandle handle : handles) {
-            pm.awaitResult(handle, 10_000);
+            pm.awaitResult(handle, 30_000);
         }
         
         // Assert jobs were spread due to hash tie-breaking, or load scoring
