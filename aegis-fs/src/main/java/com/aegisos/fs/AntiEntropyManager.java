@@ -84,13 +84,13 @@ public final class AntiEntropyManager implements AutoCloseable {
 
             // 1. Orphan Cleanup
             List<String> physicalChunks = fs.chunkStore().listChunkIds();
-            log.info("Node {} physical chunks: {}", self.toString(), physicalChunks);
-            log.info("Node {} expected chunks: {}", self.toString(), expectedLocalChunks);
+            log.debug("Node {} physical chunks: {}", self.toString(), physicalChunks);
+            log.debug("Node {} expected chunks: {}", self.toString(), expectedLocalChunks);
             
             for (String physicalId : physicalChunks) {
                 if (!expectedLocalChunks.contains(physicalId)) {
                     boolean older = fs.chunkStore().isOlderThan(HexUtil.decode(physicalId), 30_000);
-                    log.info("Node {} checking orphan {}. isOlderThan: {}", self.toString(), physicalId, older);
+                    log.debug("Node {} checking orphan {}. isOlderThan: {}", self.toString(), physicalId, older);
                     if (older) {
                         log.info("Orphan chunk detected locally: {}. Quarantining.", physicalId);
                         fs.chunkStore().quarantine(HexUtil.decode(physicalId));

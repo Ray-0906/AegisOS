@@ -106,11 +106,11 @@ public final class ClusterStateMachine implements RaftStateMachine {
     public void apply(long index, byte[] command) {
         try {
             StateCommand cmd = StateCommand.parseFrom(command);
-            log.info("ClusterStateMachine applying {} at {}", cmd.getType(), index);
+            log.debug("ClusterStateMachine applying {} at {}", cmd.getType(), index);
             if (cmd.getType() == CommandType.UPDATE_JOB) {
                 try {
                     com.aegisos.proto.JobUpdate update = com.aegisos.proto.JobUpdate.parseFrom(cmd.getPayload());
-                    log.info("Applying UPDATE_JOB for {}: state={}", update.getJobId(), update.getState());
+                    log.debug("Applying UPDATE_JOB for {}: state={}", update.getJobId(), update.getState());
                 } catch (Exception e) {}
             }
             List<BiConsumer<Long, StateCommand>> list = appliers.get(cmd.getType());

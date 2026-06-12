@@ -19,6 +19,9 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
 import java.time.Instant;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -28,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class PeerConnection implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(PeerConnection.class);
+    private static final int OUTBOUND_QUEUE_CAPACITY = 256;
 
     public interface InboundHandler {
         void onMessage(PeerConnection connection, AegisMessage message, long correlation);
@@ -43,8 +47,11 @@ public final class PeerConnection implements AutoCloseable {
     private final InboundHandler handler;
 
     private final AtomicLong sequence = new AtomicLong(1);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final BlockingQueue<byte[]> outbound = new ArrayBlockingQueue<>(OUTBOUND_QUEUE_CAPACITY);
     private volatile boolean running = true;
     private Thread receiveThread;
+    private Thread writerThread;
 
     public PeerConnection(Socket socket, DataInputStream in, DataOutputStream out,
                           EstablishedSession session, IdentityService identity,
@@ -67,6 +74,10 @@ public final class PeerConnection implements AutoCloseable {
     }
 
     public void startReceiving() {
+        writerThread = Thread.ofPlatform()
+                .daemon()
+                .name("aegis-send-" + remoteNodeId().shortId())
+                .start(this::writeLoop);
         // Platform daemon thread: receive loops are few (one per peer) and long-lived,
         // and message delivery must not depend on the virtual thread scheduler.
         receiveThread = Thread.ofPlatform()
@@ -75,29 +86,44 @@ public final class PeerConnection implements AutoCloseable {
                 .start(this::receiveLoop);
     }
 
-    private final java.util.concurrent.locks.ReentrantLock sendLock = new java.util.concurrent.locks.ReentrantLock();
-
     /** Sends an encrypted, signed application message to the peer. */
     public void send(MessageType type, byte[] payload, long correlation) throws IOException {
-        sendLock.lock();
+        if (!running) {
+            throw new IOException("connection is closed");
+        }
+        byte[] nonce = session.cipher().newNonce();
+        MessageHeader header = MessageHeader.newBuilder()
+                .setSenderId(ByteString.copyFrom(identity.nodeId().toBytes()))
+                .setRecipientId(ByteString.copyFrom(remoteNodeId().toBytes()))
+                .setMessageType(type.code())
+                .setTimestamp(Instant.now().toEpochMilli())
+                .setNonce(ByteString.copyFrom(nonce))
+                .setSequence(sequence.getAndIncrement())
+                .setCorrelation(correlation)
+                .setHandshake(false)
+                .build();
+        byte[] aad = header.toByteArray();
+        byte[] cipherText = session.cipher().encrypt(nonce, payload, aad);
+        Envelope env = EnvelopeCodec.build(header, cipherText, identity::sign);
+        if (!outbound.offer(env.toByteArray())) {
+            closeQuietly();
+            throw new IOException("outbound queue full for " + remoteNodeId().shortId());
+        }
+    }
+
+    private void writeLoop() {
         try {
-            byte[] nonce = session.cipher().newNonce();
-            MessageHeader header = MessageHeader.newBuilder()
-                    .setSenderId(ByteString.copyFrom(identity.nodeId().toBytes()))
-                    .setRecipientId(ByteString.copyFrom(remoteNodeId().toBytes()))
-                    .setMessageType(type.code())
-                    .setTimestamp(Instant.now().toEpochMilli())
-                    .setNonce(ByteString.copyFrom(nonce))
-                    .setSequence(sequence.getAndIncrement())
-                    .setCorrelation(correlation)
-                    .setHandshake(false)
-                    .build();
-            byte[] aad = header.toByteArray();
-            byte[] cipherText = session.cipher().encrypt(nonce, payload, aad);
-            Envelope env = EnvelopeCodec.build(header, cipherText, identity::sign);
-            Framing.writeFrame(out, env.toByteArray());
+            while (running) {
+                Framing.writeFrame(out, outbound.take());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            if (running) {
+                log.debug("Connection write to {} failed: {}", remoteNodeId().shortId(), e.getMessage());
+            }
         } finally {
-            sendLock.unlock();
+            closeQuietly();
         }
     }
 
@@ -144,14 +170,23 @@ public final class PeerConnection implements AutoCloseable {
 
     @Override
     public void close() {
-        running = false;
         closeQuietly();
     }
 
     private void closeQuietly() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        running = false;
         try {
             socket.close();
         } catch (IOException ignored) {
+        }
+        if (writerThread != null && writerThread != Thread.currentThread()) {
+            writerThread.interrupt();
+        }
+        if (receiveThread != null && receiveThread != Thread.currentThread()) {
+            receiveThread.interrupt();
         }
         try {
             handler.onConnectionClosed(this);

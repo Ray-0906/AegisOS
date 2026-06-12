@@ -191,18 +191,33 @@ public final class RaftNode {
     public void stop() {
         electionTimer.stop();
         scheduler.shutdownNow();
-        
-        lock.lock();
+
+        boolean locked = false;
         try {
-            for (List<CompletableFuture<Void>> list : awaitAppliedPending.values()) {
-                for (CompletableFuture<Void> f : list) {
-                    f.completeExceptionally(new RuntimeException("RaftNode is shutting down"));
-                }
+            locked = lock.tryLock(2, TimeUnit.SECONDS);
+            if (!locked) {
+                failAwaitAppliedPending(new RuntimeException("RaftNode is shutting down"));
+                log.warn("Timed out waiting for Raft lock during shutdown on {}", self.shortId());
+                return;
             }
-            awaitAppliedPending.clear();
+            failAwaitAppliedPending(new RuntimeException("RaftNode is shutting down"));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            failAwaitAppliedPending(new RuntimeException("RaftNode shutdown interrupted", e));
         } finally {
-            lock.unlock();
+            if (locked) {
+                lock.unlock();
+            }
         }
+    }
+
+    private void failAwaitAppliedPending(Throwable cause) {
+        for (List<CompletableFuture<Void>> list : awaitAppliedPending.values()) {
+            for (CompletableFuture<Void> f : list) {
+                f.completeExceptionally(cause);
+            }
+        }
+        awaitAppliedPending.clear();
     }
 
     public RaftRole role() {
@@ -663,7 +678,7 @@ public final class RaftNode {
     public AppendEntriesResult handleAppendEntries(AppendEntries req) {
         lock.lock();
         try {
-            log.info("RaftNode received AppendEntries: prevLogIndex={}, entries={}, leaderCommit={}", req.getPrevLogIndex(), req.getEntriesCount(), req.getLeaderCommit());
+            log.debug("RaftNode received AppendEntries: prevLogIndex={}, entries={}, leaderCommit={}", req.getPrevLogIndex(), req.getEntriesCount(), req.getLeaderCommit());
             long term = metadata.currentTerm();
             if (req.getTerm() < term) {
                 return appendResult(term, false, raftLog.lastIndex());
