@@ -263,9 +263,13 @@ final class ClientCommands {
                             .setStatus(com.aegisos.proto.ArtifactStatus.ARTIFACT_ACTIVE)
                             .build();
 
+                    com.aegisos.proto.RegisterArtifact regCmd = com.aegisos.proto.RegisterArtifact.newBuilder()
+                            .setArtifact(record)
+                            .build();
+
                     node.consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
                             .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
-                            .setPayload(record.toByteString())
+                            .setPayload(regCmd.toByteString())
                             .build()).get(5, java.util.concurrent.TimeUnit.SECONDS);
 
                     System.out.println("Uploaded " + jarFile.getName() + " (artifact: " + sha256 + ", size: " + data.length + " bytes)");
