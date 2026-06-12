@@ -149,9 +149,8 @@ public class ProcessSupervisor {
                 pinger.setDaemon(true);
                 pinger.start();
 
-                @SuppressWarnings("deprecation")
                 String line;
-                while (!completed.get() && (line = in.readLine()) != null) {
+                while (!completed.get() && (line = readAsciiLine(in)) != null) {
                     log.debug("[{}] Acceptor read: {}", jobId, line);
                     if (line.contains("\"type\":\"COMPLETE\"")) {
                         completed.set(true);
@@ -284,5 +283,24 @@ public class ProcessSupervisor {
         try { if (in != null) in.close(); } catch (Exception e) {}
         try { if (clientSocket != null) clientSocket.close(); } catch (Exception e) {}
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception e) {}
+    }
+
+    private String readAsciiLine(java.io.DataInputStream in) throws java.io.IOException {
+        StringBuilder sb = new StringBuilder();
+        while (true) {
+            int b;
+            try {
+                b = in.readByte();
+            } catch (java.io.EOFException e) {
+                return sb.length() > 0 ? sb.toString() : null;
+            }
+            if (b == '\n') {
+                break;
+            }
+            if (b != '\r') {
+                sb.append((char) (b & 0xFF));
+            }
+        }
+        return sb.toString();
     }
 }

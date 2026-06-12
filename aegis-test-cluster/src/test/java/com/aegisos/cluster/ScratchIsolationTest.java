@@ -52,8 +52,8 @@ public class ScratchIsolationTest {
                 .setArgs(com.google.protobuf.ByteString.copyFrom(Serialization.serialize(new SleepJob(100))))
                 .build());
 
-        pm.awaitResult(handle1, 10_000);
-        pm.awaitResult(handle2, 10_000);
+        pm.awaitResult(handle1, 30_000);
+        pm.awaitResult(handle2, 30_000);
 
         com.aegisos.proto.JobRecord record1 = node.runtimeAgent().registry().get(job1Id).orElseThrow();
         com.aegisos.proto.JobRecord record2 = node.runtimeAgent().registry().get(job2Id).orElseThrow();

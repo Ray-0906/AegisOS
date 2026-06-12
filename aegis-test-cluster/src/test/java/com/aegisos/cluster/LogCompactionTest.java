@@ -13,6 +13,11 @@ import org.junit.jupiter.api.Test;
  * Phase 4: Take second snapshot
  * Phase 5: Assert first snapshot replaced, log re-truncated to second snapshot point
  * Phase 6: Verify state integrity throughout
+ *
+ * Note: This test is currently disabled because the underlying 
+ * multi-round log compaction logic is a Sprint 6 feature. 
+ * While snapshots and recovery work, continuous log trimming 
+ * is not yet integrated.
  */
 @Disabled("Sprint 6 — not yet implemented")
 public class LogCompactionTest {
