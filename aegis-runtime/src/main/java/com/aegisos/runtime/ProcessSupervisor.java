@@ -117,6 +117,7 @@ public class ProcessSupervisor {
 
         AtomicBoolean completed = new AtomicBoolean(false);
         AtomicReference<String> failError = new AtomicReference<>(null);
+        AtomicReference<String> controlError = new AtomicReference<>(null);
         CountDownLatch latch = new CountDownLatch(1);
 
         Thread acceptor = new Thread(() -> {
@@ -179,9 +180,7 @@ public class ProcessSupervisor {
             } catch (Exception e) {
                 log.info("[{}] Acceptor exception: {}", jobId, e.getMessage());
                 if (!completed.get()) {
-                    failError.set("Socket error: " + e.getMessage());
-                    completed.set(true);
-                    latch.countDown();
+                    controlError.set("Socket error: " + e.getMessage());
                 }
             }
         });
@@ -218,6 +217,9 @@ public class ProcessSupervisor {
         File resultFile = workDir.resolve("result.bin").toFile();
         if (resultFile.exists()) {
             return Files.readAllBytes(resultFile.toPath());
+        }
+        if (controlError.get() != null) {
+            throw new RuntimeException(controlError.get());
         }
         return null;
     }

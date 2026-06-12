@@ -20,6 +20,7 @@ import com.aegisos.network.NetworkLayer;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.io.File;
 import java.nio.file.Files;
@@ -34,6 +35,8 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
 
     private static final Logger log = LoggerFactory.getLogger(ProcessRuntimeAgent.class);
     private static final int MAX_CONCURRENT_JOBS = 100;
+    private static final long UPDATE_RETRY_WINDOW_MS = 30_000;
+    private static final long UPDATE_RETRY_DELAY_MS = 250;
 
     private final ConsensusModule consensus;
     private final NetworkLayer network;
@@ -385,9 +388,10 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             }
             // Gate B: upload job logs to AegisFS (fenced by executionId)
             uploadJobLogs(jobId, executionId);
-            update(jobId, executionId, JobState.COMPLETED, result, null);
-            jobsCompleted.incrementAndGet();
-            log.info("Job {} COMPLETED", jobId);
+            if (update(jobId, executionId, JobState.COMPLETED, result, null)) {
+                jobsCompleted.incrementAndGet();
+                log.info("Job {} COMPLETED", jobId);
+            }
         } catch (Exception e) {
             if (shuttingDown) {
                 log.info("Job {} aborted due to node shutdown, ignoring failure so it can be marked LOST.", jobId);
@@ -395,8 +399,10 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 if (!isSuperseded(jobId, executionId)) {
                     log.error("Job {} FAILED", jobId, e);
                     uploadJobLogs(jobId, executionId);
-                    update(jobId, executionId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
-                    jobsFailed.incrementAndGet();
+                    if (update(jobId, executionId, JobState.FAILED, null,
+                            e.getMessage() == null ? "error" : e.getMessage())) {
+                        jobsFailed.incrementAndGet();
+                    }
                 } else {
                     fencingDrops.incrementAndGet();
                     jobsSuperseded.incrementAndGet();
@@ -410,7 +416,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         }
     }
 
-    private void update(String jobId, long executionId, JobState state, byte[] result, String error) {
+    private boolean update(String jobId, long executionId, JobState state, byte[] result, String error) {
         JobUpdate.Builder b = JobUpdate.newBuilder()
                 .setJobId(jobId)
                 .setExecutionId(executionId)
@@ -422,11 +428,31 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 .setType(CommandType.UPDATE_JOB)
                 .setPayload(b.build().toByteString())
                 .build();
-        try {
-            consensus.propose(cmd).get(10, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.error("Failed to commit {} for job {}", state, jobId, e);
+
+        long deadline = System.currentTimeMillis() + UPDATE_RETRY_WINDOW_MS;
+        Exception lastFailure = null;
+        while (!shuttingDown && System.currentTimeMillis() < deadline) {
+            if (isSuperseded(jobId, executionId)) {
+                log.info("Skipping {} update for superseded execution {} of job {}", state, executionId, jobId);
+                return false;
+            }
+            try {
+                consensus.propose(cmd).get(10, TimeUnit.SECONDS);
+                return true;
+            } catch (Exception e) {
+                lastFailure = e;
+                try {
+                    Thread.sleep(UPDATE_RETRY_DELAY_MS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    lastFailure = interrupted;
+                    break;
+                }
+            }
         }
+        log.error("Failed to commit {} for job {} execution {} after retries",
+                state, jobId, executionId, lastFailure);
+        return false;
     }
 
     /**
@@ -475,12 +501,21 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         if (delaySeconds <= 0) {
             log.info("Cleaning up workspace for job {} execution {} immediately", jobId, executionId);
             deleteWorkspace(jobId, executionId);
-        } else {
+            return;
+        }
+        if (shuttingDown || cleanupExecutor.isShutdown()) {
+            log.debug("Skipping deferred cleanup for job {} execution {} during shutdown", jobId, executionId);
+            return;
+        }
+        try {
             cleanupExecutor.schedule(() -> {
                 log.info("Executing deferred workspace cleanup for job {} execution {}", jobId, executionId);
                 deleteWorkspace(jobId, executionId);
             }, delaySeconds, TimeUnit.SECONDS);
             log.info("Scheduled workspace cleanup for job {} execution {} in {} seconds", jobId, executionId, delaySeconds);
+        } catch (RejectedExecutionException e) {
+            log.debug("Cleanup executor stopped while scheduling job {} execution {}; cleanup skipped",
+                    jobId, executionId);
         }
     }
 
