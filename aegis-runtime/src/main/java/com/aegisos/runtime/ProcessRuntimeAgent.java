@@ -19,6 +19,7 @@ import com.aegisos.network.NetworkLayer;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
@@ -37,6 +38,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     private static final int MAX_CONCURRENT_JOBS = 100;
     private static final long UPDATE_RETRY_WINDOW_MS = 30_000;
     private static final long UPDATE_RETRY_DELAY_MS = 250;
+    private static final long CHECKPOINT_FAILURE_LOG_INTERVAL_MS = 5_000;
 
     private final ConsensusModule consensus;
     private final NetworkLayer network;
@@ -276,11 +278,14 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             byte[] result;
             int memoryMb = (int) record.getSpec().getResources().getMemoryMb();
             String artifactId = record.getSpec().getCodeFileId();
+            AtomicLong lastCheckpointFailureLogAt = new AtomicLong(0);
             
             // Phase 3, 4, 7 Checkpoint Listener
             java.util.function.Consumer<byte[]> checkpointListener = payload -> {
+                long checkpointSequence = -1;
                 try {
                     CheckpointEnvelope env = CheckpointEnvelope.fromByteArray(payload);
+                    checkpointSequence = env.sequence();
                     if (env.executionId() != record.getExecutionId()) {
                         log.warn("Dropped stale checkpoint for job {} (env execution {} != current {})", jobId, env.executionId(), record.getExecutionId());
                         return;
@@ -325,7 +330,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                     consensus.propose(cmd);
                     log.info("Saved checkpoint sequence {} for job {} ({} bytes)", env.sequence(), jobId, payload.length);
                 } catch (Exception e) {
-                    log.error("Failed to process checkpoint for job {}", jobId, e);
+                    logCheckpointFailure(jobId, checkpointSequence, e, lastCheckpointFailureLogAt);
                 }
             };
 
@@ -475,7 +480,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         try {
             boolean exists = java.nio.file.Files.exists(localFile);
             long size = exists ? java.nio.file.Files.size(localFile) : -1;
-            log.info("uploadLogFile: localFile={}, exists={}, size={}", localFile.toAbsolutePath(), exists, size);
+            log.debug("uploadLogFile: localFile={}, exists={}, size={}", localFile.toAbsolutePath(), exists, size);
             if (exists) {
                 byte[] data = java.nio.file.Files.readAllBytes(localFile);
                 if (data.length > 0) {
@@ -485,15 +490,76 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                     log.info("Uploaded job {} execution {} {} ({} bytes) -> {}",
                             jobId, executionId, name, data.length, fsPath);
                 } else {
-                    log.warn("uploadLogFile: localFile={} exists but has size 0", localFile.toAbsolutePath());
+                    log.debug("uploadLogFile: localFile={} exists but has size 0", localFile.toAbsolutePath());
                 }
             } else {
-                log.warn("uploadLogFile: localFile={} does not exist", localFile.toAbsolutePath());
+                log.debug("uploadLogFile: localFile={} does not exist", localFile.toAbsolutePath());
             }
         } catch (Exception e) {
             logUploadsFailed.incrementAndGet();
-            log.error("Failed to upload {} for job {}: {}", name, jobId, e.getMessage(), e);
+            if (isTransientStorageFailure(e)) {
+                log.warn("Skipped {} log upload for job {} execution {} while storage is unavailable: {}",
+                        name, jobId, executionId, compactException(e));
+            } else {
+                log.error("Failed to upload {} for job {}: {}", name, jobId, e.getMessage(), e);
+            }
         }
+    }
+
+    private void logCheckpointFailure(String jobId, long checkpointSequence, Exception e, AtomicLong lastLogAt) {
+        if (!isTransientStorageFailure(e)) {
+            log.error("Failed to process checkpoint{} for job {}",
+                    checkpointSequence >= 0 ? " sequence " + checkpointSequence : "", jobId, e);
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long last = lastLogAt.get();
+        if (now - last >= CHECKPOINT_FAILURE_LOG_INTERVAL_MS && lastLogAt.compareAndSet(last, now)) {
+            log.warn("Checkpoint{} for job {} temporarily deferred: {}",
+                    checkpointSequence >= 0 ? " sequence " + checkpointSequence : "", jobId, compactException(e));
+        } else {
+            log.debug("Checkpoint{} for job {} temporarily deferred",
+                    checkpointSequence >= 0 ? " sequence " + checkpointSequence : "", jobId, e);
+        }
+    }
+
+    private boolean isTransientStorageFailure(Throwable throwable) {
+        for (Throwable t = throwable; t != null; t = t.getCause()) {
+            String className = t.getClass().getName();
+            if (className.contains("NotLeaderException") || className.contains("RejectedExecutionException")) {
+                return true;
+            }
+            String message = t.getMessage();
+            if (message == null) {
+                continue;
+            }
+            String normalized = message.toLowerCase(java.util.Locale.ROOT);
+            if (normalized.contains("replication requirement not met")
+                    || normalized.contains("partitioned from")
+                    || normalized.contains("not connected to")
+                    || normalized.contains("no known leader")
+                    || normalized.contains("raftnode is shutting down")
+                    || normalized.contains("executor")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String compactException(Throwable throwable) {
+        Throwable root = throwable;
+        while (root.getCause() != null) {
+            root = root.getCause();
+        }
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) {
+            message = throwable.getMessage();
+        }
+        if (message == null || message.isBlank()) {
+            return root.getClass().getSimpleName();
+        }
+        return root.getClass().getSimpleName() + ": " + message.replaceAll("\\s+", " ").trim();
     }
 
     private void cleanupJobFiles(String jobId, long executionId) {

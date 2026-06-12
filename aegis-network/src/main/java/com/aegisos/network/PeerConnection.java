@@ -21,6 +21,7 @@ import java.net.Socket;
 import java.time.Instant;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -162,6 +163,10 @@ public final class PeerConnection implements AutoCloseable {
             MessageType type = MessageType.fromCode(header.getMessageType());
             AegisMessage msg = new AegisMessage(remoteNodeId(), identity.nodeId(), type, payload);
             handler.onMessage(this, msg, header.getCorrelation());
+        } catch (RejectedExecutionException e) {
+            log.debug("Dropping inbound frame from {} during handler shutdown: {}",
+                    remoteNodeId().shortId(), e.toString());
+            closeQuietly();
         } catch (Exception e) {
             log.warn("Failed to handle inbound frame from {}: {}",
                     remoteNodeId().shortId(), e.toString());

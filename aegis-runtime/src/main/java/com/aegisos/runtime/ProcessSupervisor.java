@@ -200,9 +200,7 @@ public class ProcessSupervisor {
                 int exitCode = process.exitValue();
                 log.info("[{}] Process exited with code {}", jobId, exitCode);
                 if (exitCode != 0) {
-                    if (stderrFile != null && stderrFile.exists()) {
-                        log.error("[{}] Worker process stderr: {}", jobId, Files.readString(stderrFile.toPath()));
-                    }
+                    logWorkerStderr(stderrFile);
                     throw new RuntimeException("Process exited abruptly with code " + exitCode);
                 }
             }
@@ -229,11 +227,10 @@ public class ProcessSupervisor {
             return;
         }
         log.info("ProcessSupervisor.kill() called for job {}", jobId);
-        boolean wasAlive = process != null && process.isAlive();
         if (process == null) {
-            log.warn("Cannot kill process for job {} because process is null", jobId);
+            log.debug("Cannot kill process for job {} because process is null", jobId);
         } else if (!process.isAlive()) {
-            log.warn("Cannot kill process for job {} because process is no longer alive", jobId);
+            log.debug("Cannot kill process for job {} because process is no longer alive", jobId);
         } else {
             log.info("Killing process tree for job {}", jobId);
             process.descendants().forEach(ProcessHandle::destroyForcibly);
@@ -248,6 +245,27 @@ public class ProcessSupervisor {
             }
         }
         closeSockets();
+    }
+
+    private void logWorkerStderr(File stderrFile) {
+        try {
+            if (stderrFile == null || !stderrFile.exists()) {
+                log.debug("[{}] Worker process stderr is unavailable", jobId);
+                return;
+            }
+            String stderr = Files.readString(stderrFile.toPath());
+            if (stderr.isBlank()) {
+                log.debug("[{}] Worker process exited non-zero with empty stderr", jobId);
+                return;
+            }
+            if (killed.get()) {
+                log.debug("[{}] Worker process stderr after supervisor kill: {}", jobId, stderr);
+            } else {
+                log.error("[{}] Worker process stderr: {}", jobId, stderr);
+            }
+        } catch (Exception e) {
+            log.debug("[{}] Failed to read worker stderr: {}", jobId, e.getMessage());
+        }
     }
     
     public void cleanupFiles() {

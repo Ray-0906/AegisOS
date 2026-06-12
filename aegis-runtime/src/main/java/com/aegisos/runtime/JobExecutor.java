@@ -39,12 +39,13 @@ public final class JobExecutor {
         WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
         ProcessSupervisor supervisor = new ProcessSupervisor(jobId, memoryMb, workspace);
         supervisor.setCheckpointListener(checkpointListener);
-        activeSupervisors.put(jobId, supervisor);
+        String supervisorKey = supervisorKey(jobId, executionId);
+        activeSupervisors.put(supervisorKey, supervisor);
         try {
             supervisor.mountArtifacts(mountPaths);
             return supervisor.runWorker(args);
         } finally {
-            activeSupervisors.remove(jobId);
+            activeSupervisors.remove(supervisorKey, supervisor);
         }
     }
 
@@ -62,23 +63,40 @@ public final class JobExecutor {
         WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
         ProcessSupervisor supervisor = new ProcessSupervisor(jobId, memoryMb, workspace);
         supervisor.setCheckpointListener(checkpointListener);
-        activeSupervisors.put(jobId, supervisor);
+        String supervisorKey = supervisorKey(jobId, executionId);
+        activeSupervisors.put(supervisorKey, supervisor);
         try {
             supervisor.mountArtifacts(mountPaths);
             return supervisor.runWorker(args);
         } finally {
-            activeSupervisors.remove(jobId);
+            activeSupervisors.remove(supervisorKey, supervisor);
         }
     }
     
     public void cancelJob(String jobId) {
         log.info("JobExecutor asked to cancel job: {}. Active supervisors: {}", jobId, activeSupervisors.keySet());
-        ProcessSupervisor supervisor = activeSupervisors.get(jobId);
-        if (supervisor != null) {
-            log.info("Supervisor found for job {}, calling kill()", jobId);
-            supervisor.kill();
-        } else {
+        String prefix = jobId + "#";
+        java.util.List<ProcessSupervisor> supervisors = activeSupervisors.entrySet().stream()
+                .filter(entry -> entry.getKey().startsWith(prefix))
+                .map(java.util.Map.Entry::getValue)
+                .toList();
+        if (supervisors.isEmpty()) {
             log.warn("No supervisor found for job {}", jobId);
+            return;
+        }
+        log.info("Found {} supervisor(s) for job {}, calling kill()", supervisors.size(), jobId);
+        supervisors.forEach(ProcessSupervisor::kill);
+    }
+
+    private static String supervisorKey(String jobId, long executionId) {
+        return jobId + "#" + executionId;
+    }
+
+    public void close() {
+        int count = activeSupervisors.size();
+        log.info("JobExecutor closing {} active supervisor(s)", count);
+        for (ProcessSupervisor supervisor : activeSupervisors.values()) {
+            supervisor.kill();
         }
     }
 
@@ -88,10 +106,4 @@ public final class JobExecutor {
         return state == null ? null : Serialization.serialize(state);
     }
 
-    public void close() {
-        int count = activeSupervisors.size();
-        for (ProcessSupervisor supervisor : activeSupervisors.values()) {
-            supervisor.kill();
-        }
-    }
 }
