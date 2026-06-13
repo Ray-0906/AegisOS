@@ -85,6 +85,7 @@ public class StaleCheckpointFenceTest {
             assertTrue(finalChk.executionId() >= 2, "Final checkpoint must be from the new execution, not stale overwrites");
             assertTrue(finalChk.metadata().getSequence() >= latestSeq, "Sequence should not be rolled back by old node");
         } finally {
+            com.aegisos.network.NetworkLayer.clearMessageFilter();
             System.clearProperty("aegis.lease.duration.ms");
         }
     }

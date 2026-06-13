@@ -304,10 +304,13 @@ public final class ClusterHarness implements AutoCloseable {
 
     @Override
     public void close() {
+        int threadsBefore = Thread.activeCount();
         for (AegisNode node : nodes) {
             try {
                 node.close();
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                System.err.println("[HARNESS-DIAG] node.close() failed for "
+                        + node.identity().nodeId().shortId() + ": " + e);
             }
         }
         nodes.clear();
@@ -315,6 +318,8 @@ public final class ClusterHarness implements AutoCloseable {
             deleteRecursive(dir.toFile());
         }
         tempDirs.clear();
+        System.out.println("[HARNESS-DIAG] close complete threadsBefore=" + threadsBefore
+                + " threadsAfter=" + Thread.activeCount());
     }
 
     private static void deleteRecursive(java.io.File f) {
