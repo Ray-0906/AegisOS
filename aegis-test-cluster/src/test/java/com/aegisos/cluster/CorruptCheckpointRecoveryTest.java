@@ -61,6 +61,7 @@ public class CorruptCheckpointRecoveryTest {
             // Wait for lease to expire and job to transition to FAILED due to bad checkpoint
             assertTrue(ClusterHarness.await(45_000, () -> {
                 JobState state = aliveNode.api().getProcessManager().status(jobId);
+                System.out.println("[TEST-DEBUG] Current state = " + state);
                 return state == JobState.FAILED;
             }), "Job should fail after attempting to load corrupt checkpoint");
         } finally {

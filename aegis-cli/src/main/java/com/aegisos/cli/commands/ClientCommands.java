@@ -18,13 +18,13 @@ import java.util.function.Function;
  * <p>Implementations are completed as the underlying layers land (Phase 2: nodes,
  * Phase 4: put/get/ls, Phase 5: run/status).
  */
-final class ClientCommands {
+public final class ClientCommands {
 
     private ClientCommands() {
     }
 
     /** Boots a transient client node joined to the cluster, runs {@code fn}, then shuts down. */
-    static <T> T withClient(List<String> seeds, Function<AegisNode, T> fn) throws Exception {
+    public static <T> T withClient(List<String> seeds, Function<AegisNode, T> fn) throws Exception {
         Path home = Files.createTempDirectory("aegis-cli-");
         NodeConfig config = new NodeConfig().homeDir(home).port(0).advertiseHost("127.0.0.1")
                 .role(com.aegisos.proto.NodeRole.CLIENT);
@@ -354,6 +354,13 @@ final class ClientCommands {
         try {
             return withClient(seeds, node -> {
                 try {
+                    long start = System.currentTimeMillis();
+                    while (node.consensus().leaderId() == null && (System.currentTimeMillis() - start) < 5000) {
+                        Thread.sleep(100);
+                    }
+                    if (node.consensus().leaderId() == null) {
+                        throw new IllegalStateException("Timeout waiting to discover cluster leader");
+                    }
                     byte[] payload = com.aegisos.core.util.HexUtil.decode(targetNodeIdHex);
                     com.aegisos.proto.StateCommand cmd = com.aegisos.proto.StateCommand.newBuilder()
                             .setType(com.aegisos.proto.CommandType.ADD_VOTER)

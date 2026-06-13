@@ -241,9 +241,34 @@ public final class JobSupervisor implements AutoCloseable {
         }
     }
 
+    private void emitTerminalFailure(String jobId, JobRecord record, String errorMsg) {
+        try {
+            com.aegisos.proto.JobUpdate failedUpdate = com.aegisos.proto.JobUpdate.newBuilder()
+                    .setJobId(jobId)
+                    .setExecutionId(record.getExecutionId())
+                    .setState(JobState.FAILED)
+                    .setError(errorMsg)
+                    .build();
+            consensus.propose(com.aegisos.proto.StateCommand.newBuilder()
+                    .setType(com.aegisos.proto.CommandType.UPDATE_JOB)
+                    .setPayload(failedUpdate.toByteString())
+                    .build()).get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.warn("Failed to emit FAILED state for job {}: {}", jobId, e.getMessage());
+        }
+    }
+
+    private static final int DEFAULT_MAX_RETRIES = 3;
+
     private void requeueJob(String jobId, JobRecord record) {
         try {
             long nextExecutionId = record.getExecutionId() + 1;
+            
+            if (nextExecutionId > DEFAULT_MAX_RETRIES + 1) {
+                log.warn("Job {} exceeded max retries ({}). Marking FAILED.", jobId, DEFAULT_MAX_RETRIES);
+                emitTerminalFailure(jobId, record, "exceeded max retries (" + DEFAULT_MAX_RETRIES + ")");
+                return;
+            }
 
             NodeId newNode = scheduler.schedule(record.getSpec(), nextExecutionId, record.getCheckpointFileId());
 

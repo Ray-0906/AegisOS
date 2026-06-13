@@ -635,7 +635,11 @@ public final class RaftNode {
     }
 
     private void stepDown(long newTerm) {
-        metadata.setCurrentTerm(newTerm);
+        long current = metadata.currentTerm();
+        if (newTerm > current) {
+            metadata.setCurrentTerm(newTerm);
+            metadata.setVotedFor(null);
+        }
         role = RaftRole.FOLLOWER;
         leaderId = null;
         failPending(new NotLeaderException(null));

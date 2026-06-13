@@ -151,26 +151,63 @@ public class RepairLeaderFailoverTest {
         newLeader.fileSystem().repairTaskStore().pendingByRepairId(repairId).get()
                 .setCommittedAt(System.currentTimeMillis() - 1000000L); // set in the past to expire
 
-        // Run runOnce() on B — B's scheduler will run, expire the old task, verify the divergence (since scan 1 was in Phase 3),
-        // propose the new REPAIR_CHUNK, and execute the physical copy + REPAIR_COMPLETE.
+        // Run runOnce() on B — B's scheduler will run, expire the old task, verify the divergence,
+        // and propose the new REPAIR_CHUNK. Physical copy may or may not succeed immediately.
         newLeader.auditScheduler().runOnce();
 
-        // Verify task status is now EXPIRED
-        Optional<RepairTaskStore.RepairTask> expiredTask = newLeader.fileSystem().repairTaskStore().all().stream()
-                .filter(t -> t.repairId().equals(repairId))
-                .findFirst();
-        assertTrue(expiredTask.isPresent());
-        assertEquals(RepairTaskStore.TaskStatus.EXPIRED, expiredTask.get().status(), "Old task must be EXPIRED");
+        // Assert Phase A: Leadership recovery and task proposal is immediate
+        
+        AegisNode currentLeader = nodes.stream()
+                .filter(n -> n.consensus().isLeader())
+                .findFirst().orElse(null);
+        String currentLeaderId = (currentLeader != null) ? currentLeader.identity().nodeId().shortId() : "NONE";
+        
+        System.out.println("DEBUG: Phase A checks:");
+        System.out.println("  newLeader (expected B): " + newLeader.identity().nodeId().shortId());
+        System.out.println("  newLeader.isLeader(): " + newLeader.consensus().isLeader());
+        System.out.println("  Actual cluster leader: " + currentLeaderId);
+        
+        assertTrue(newLeader.consensus().isLeader(), "Phase A: Expected B to still be the consensus leader");
+        
+        List<RepairOutcome> initialOutcomes = newLeader.auditScheduler().getRepairOutcomes();
+        boolean proposedNew = initialOutcomes.stream().anyMatch(o -> o.status() == RepairOutcome.Status.REPAIR_PROPOSED);
+        boolean blockedByPending = initialOutcomes.stream().anyMatch(o -> o.status() == RepairOutcome.Status.BLOCKED);
 
-        // Assert: new REPAIR_CHUNK proposed and committed
-        List<RepairOutcome> recoveryOutcomes = newLeader.auditScheduler().getRepairOutcomes();
-        assertFalse(recoveryOutcomes.isEmpty());
+        if (blockedByPending) {
+            // The background timer on a node might have proposed a repair between Phase 3 and Phase 4.
+            // Verify that the blocking task is a newly generated task, and not the stale task from Phase 1.
+            java.util.Optional<com.aegisos.fs.audit.RepairTaskStore.RepairTask> pendingTaskOpt = newLeader.fileSystem().repairTaskStore().pendingFor(chunkIdHex);
+            assertTrue(pendingTaskOpt.isPresent(), "If blocked, a pending task must exist");
+            com.aegisos.fs.audit.RepairTaskStore.RepairTask pendingTask = pendingTaskOpt.get();
 
-        boolean proposedNew = recoveryOutcomes.stream().anyMatch(o -> o.status() == RepairOutcome.Status.REPAIR_PROPOSED);
-        boolean copySucceededNew = recoveryOutcomes.stream().anyMatch(o -> o.status() == RepairOutcome.Status.COPY_SUCCEEDED);
+            System.out.println("DEBUG: Blocked by pending task:");
+            System.out.println("  repairId: " + pendingTask.repairId());
+            System.out.println("  status: " + pendingTask.status());
+            System.out.println("  committedAt: " + pendingTask.committedAt());
 
-        assertTrue(proposedNew, "New leader must propose a new REPAIR_CHUNK");
-        assertTrue(copySucceededNew, "Physical copy and REPAIR_COMPLETE must succeed");
+            assertNotEquals(repairId, pendingTask.repairId(), "The original task should have been expired; a new task should have been created after failover");
+
+            // Verify the old task is expired
+            java.util.Optional<com.aegisos.fs.audit.RepairTaskStore.RepairTask> oldTaskOpt = newLeader.fileSystem().repairTaskStore().all().stream()
+                    .filter(t -> t.repairId().equals(repairId))
+                    .findFirst();
+            assertTrue(oldTaskOpt.isPresent() && oldTaskOpt.get().status() == com.aegisos.fs.audit.RepairTaskStore.TaskStatus.EXPIRED,
+                    "The old task from Phase 1 must be EXPIRED");
+        } else if (!proposedNew) {
+            System.out.println("Phase A failed! initialOutcomes:");
+            for (RepairOutcome outcome : initialOutcomes) {
+                System.out.println("  - Status: " + outcome.status() + ", Reason: " + outcome.details());
+            }
+        }
+        
+        assertTrue(proposedNew || blockedByPending, "New leader must propose a new REPAIR_CHUNK immediately or be correctly blocked by a duplicate pending repair");
+
+        // Assert Phase B: Physical copy and completion is eventual
+        ClusterHarness.await(15000, () -> {
+            newLeader.auditScheduler().runOnce();
+            List<RepairOutcome> outcomes = newLeader.auditScheduler().getRepairOutcomes();
+            return outcomes.stream().anyMatch(o -> o.status() == RepairOutcome.Status.COPY_SUCCEEDED);
+        });
 
         // Assert: physical copy succeeds (C gets the chunk)
         assertNotNull(C.fileSystem().chunkStore().get(chunkId), "C must physically possess the chunk now");

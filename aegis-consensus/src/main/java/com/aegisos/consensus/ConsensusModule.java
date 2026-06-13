@@ -225,7 +225,11 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                     try {
                         ClientCommandResult result = ClientCommandResult.parseFrom(reply.payload());
                         if (!result.getSuccess()) {
-                            throw new NotLeaderException(parseLeaderId(result.getLeaderId()));
+                            if ("not leader".equals(result.getError()) || !result.getLeaderId().isEmpty()) {
+                                throw new NotLeaderException(parseLeaderId(result.getLeaderId()));
+                            } else {
+                                throw new IllegalStateException(result.getError() != null && !result.getError().isEmpty() ? result.getError() : "Unknown error");
+                            }
                         }
                         return result.getIndex();
                     } catch (CompletionException ce) {

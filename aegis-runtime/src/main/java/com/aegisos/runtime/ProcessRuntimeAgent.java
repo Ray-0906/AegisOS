@@ -419,12 +419,13 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 log.warn("Execution {} of job {} superseded, discarding result", executionId, jobId);
                 return;
             }
-            // Gate B: upload job logs to AegisFS (fenced by executionId)
-            uploadJobLogs(jobId, executionId);
+            // Commit terminal state BEFORE non-essential work
             if (update(jobId, executionId, JobState.COMPLETED, result, null)) {
                 jobsCompleted.incrementAndGet();
                 log.info("Job {} COMPLETED", jobId);
             }
+            // Gate B: upload job logs to AegisFS (best effort)
+            uploadJobLogsBestEffort(jobId, executionId);
         } catch (Exception e) {
             if (shuttingDown) {
                 log.info("Job {} aborted due to node shutdown, ignoring failure so it can be marked LOST.", jobId);
@@ -433,11 +434,13 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             } else {
                 if (!isSuperseded(jobId, executionId)) {
                     log.error("Job {} FAILED", jobId, e);
-                    uploadJobLogs(jobId, executionId);
+                    // Commit terminal state BEFORE non-essential work
                     if (update(jobId, executionId, JobState.FAILED, null,
                             e.getMessage() == null ? "error" : e.getMessage())) {
                         jobsFailed.incrementAndGet();
                     }
+                    // Best-effort log upload
+                    uploadJobLogsBestEffort(jobId, executionId);
                 } else {
                     fencingDrops.incrementAndGet();
                     jobsSuperseded.incrementAndGet();
@@ -497,17 +500,28 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     /**
      * Uploads stdout/stderr from the worker's temporary directory to AegisFS.
      * Gate B: only uploads if this execution has not been superseded.
+     * Best effort: does not throw exceptions.
      */
-    private void uploadJobLogs(String jobId, long executionId) {
-        if (isSuperseded(jobId, executionId)) {
-            fencingDrops.incrementAndGet();
-            log.warn("Execution {} of job {} superseded, skipping log upload (Gate B)", executionId, jobId);
-            return;
+    private void uploadJobLogsBestEffort(String jobId, long executionId) {
+        try {
+            if (System.getProperty("aegis.test.delay_upload_logs") != null) {
+                long delay = Long.parseLong(System.getProperty("aegis.test.delay_upload_logs"));
+                log.info("TEST HOOK: Delaying log upload for {}ms", delay);
+                try { Thread.sleep(delay); } catch (InterruptedException e) {}
+                log.info("TEST HOOK: Finished log upload delay");
+            }
+            if (isSuperseded(jobId, executionId)) {
+                fencingDrops.incrementAndGet();
+                log.warn("Execution {} of job {} superseded, skipping log upload (Gate B)", executionId, jobId);
+                return;
+            }
+            java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
+            WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
+            uploadLogFile(workspace.stdoutLog(), jobId, executionId, "stdout");
+            uploadLogFile(workspace.stderrLog(), jobId, executionId, "stderr");
+        } catch (Exception e) {
+            log.error("Failed to upload logs for job {} execution {}", jobId, executionId, e);
         }
-        java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
-        WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
-        uploadLogFile(workspace.stdoutLog(), jobId, executionId, "stdout");
-        uploadLogFile(workspace.stderrLog(), jobId, executionId, "stderr");
     }
 
     private void uploadLogFile(java.nio.file.Path localFile, String jobId, long executionId, String name) {
