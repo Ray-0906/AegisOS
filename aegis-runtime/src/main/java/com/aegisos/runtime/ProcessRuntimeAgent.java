@@ -286,7 +286,10 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         try {
             byte[] restoreState = null;
             if (!record.getCheckpointFileId().isEmpty()) {
-                update(jobId, executionId, JobState.RESTORING, null, null);
+                if (!update(jobId, executionId, JobState.RESTORING, null, null)) {
+                    log.warn("Execution {} of job {} failed to transition to RESTORING (likely superseded), discarding", executionId, jobId);
+                    return;
+                }
                 try {
                     restoreState = fileSystem.read(record.getCheckpointFileId());
                 } catch (Exception e) {
@@ -296,7 +299,10 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 }
             }
 
-            update(jobId, executionId, JobState.RUNNING, null, null);
+            if (!update(jobId, executionId, JobState.RUNNING, null, null)) {
+                log.warn("Execution {} of job {} failed to transition to RUNNING (likely superseded), discarding", executionId, jobId);
+                return;
+            }
             jobsStarted.incrementAndGet();
 
             byte[] result;
