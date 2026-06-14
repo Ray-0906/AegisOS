@@ -265,6 +265,23 @@ message ArtifactReference {
   string mount_path = 2; // relative to workspace root, e.g. "artifacts/model.bin"
 }
 
+enum RuntimeType {
+  RUNTIME_UNSPECIFIED = 0;  // legacy/default: treated as RUNTIME_JVM
+  RUNTIME_JVM         = 1;  // JVM process via ProcessSupervisor
+  RUNTIME_CONTAINER   = 2;  // container via ContainerEngine
+}
+
+message EnvVar {
+  string key   = 1;
+  string value = 2;
+}
+
+message ContainerSpec {
+  string image          = 1;  // e.g. "alpine:latest", "myapp:1.0"
+  repeated string cmd   = 2;  // override entrypoint
+  repeated EnvVar env   = 3;  // environment variables
+}
+
 message JobSpec {
   string job_id          = 1; // UUID
   string class_name      = 2;
@@ -274,6 +291,8 @@ message JobSpec {
   string code_file_id    = 6; // AegisFS file id for job code
   ResourceRequest resources = 7;
   repeated ArtifactReference artifacts = 8;
+  RuntimeType runtime    = 9;          // execution backend (default: JVM)
+  ContainerSpec container = 10;        // only used when runtime == RUNTIME_CONTAINER
 }
 
 message JobRecord {

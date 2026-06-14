@@ -44,6 +44,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     private final NetworkLayer network;
     private final NodeId self;
     private final JobExecutor executor;
+    private final JvmRuntimeBackend jvmBackend;
     private final AegisFS fileSystem;
     private final ArtifactRegistry artifactRegistry;
     private final ArtifactClassLoader artifactClassLoader;
@@ -91,6 +92,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         this.workspaceRoot = workspaceRoot;
         this.workspaceCleanupDelaySeconds = workspaceCleanupDelaySeconds;
         this.executor = new JobExecutor(self, fileSystem, artifactClassLoader, workspaceRoot);
+        this.jvmBackend = new JvmRuntimeBackend(this.executor);
         this.fileSystem = fileSystem;
 
         // Startup crash cleanup
@@ -171,7 +173,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
 
     private void killProcessLocal(String jobId) {
         log.info("Killing process for job {} locally", jobId);
-        executor.cancelJob(jobId);
+        jvmBackend.cancelJob(jobId);
     }
 
 
@@ -407,10 +409,10 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                     pinnedArtifacts.add(artifactId);
                     String className = record.getSpec().getClassName();
                     String[] args = Serialization.deserialize(record.getSpec().getArgs().toByteArray());
-                    result = executor.runFromArtifact(jobId, record.getExecutionId(), artifactId, artifact.getFsPath(),
+                    result = jvmBackend.executeSyncFromArtifact(jobId, record.getExecutionId(), artifactId, artifact.getFsPath(),
                             className, args, restoreState, memoryMb, mountPaths, checkpointListener);
                 } else {
-                    result = executor.run(jobId, record.getExecutionId(), record.getSpec().getArgs().toByteArray(), restoreState, memoryMb, mountPaths, checkpointListener);
+                    result = jvmBackend.executeSync(jobId, record.getExecutionId(), record.getSpec().getArgs().toByteArray(), restoreState, memoryMb, mountPaths, checkpointListener);
                 }
             } finally {
                 for (String pinned : pinnedArtifacts) {
@@ -665,7 +667,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         log.info("ProcessRuntimeAgent shutting down: runningJobs={}", running.get());
         shuttingDown = true;
         // Cancel all active jobs to ensure child processes are killed
-        executor.close();
+        jvmBackend.close();
         heartbeatScheduler.shutdownNow();
         cleanupExecutor.shutdownNow();
         try {
