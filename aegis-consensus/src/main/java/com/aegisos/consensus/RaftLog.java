@@ -281,7 +281,18 @@ public final class RaftLog {
     public void installSnapshot(long lastIncludedIndex, long lastIncludedTerm) {
         lock.lock();
         try {
-            entries.clear();
+            if (termAt(lastIncludedIndex) == lastIncludedTerm) {
+                // Suffix preservation
+                int entriesToRemove = (int) (lastIncludedIndex - snapshotIndex);
+                if (entriesToRemove > 0 && entriesToRemove <= entries.size()) {
+                    entries.subList(0, entriesToRemove).clear();
+                } else if (entriesToRemove > entries.size()) {
+                    entries.clear();
+                }
+            } else {
+                // Discard entire log
+                entries.clear();
+            }
             this.snapshotIndex = lastIncludedIndex;
             this.snapshotTerm = lastIncludedTerm;
             rewriteFile();

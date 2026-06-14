@@ -124,6 +124,28 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
      */
     public void replayFromLog() {
         raftNode.replayCommitted();
+        
+        // Raft dictates that configuration changes take effect immediately upon being added to the log,
+        // regardless of whether they are committed. Because we no longer replay uncommitted entries
+        // into the general state machine on startup (to prevent safety violations), we must manually
+        // pre-scan the uncommitted log entries and apply any membership changes.
+        // Without this, nodes restarting without a snapshot would forget they are voters, leading
+        // to a cluster deadlock where no elections can start.
+        for (long i = raftNode.lastApplied() + 1; i <= raftNode.lastLogIndex(); i++) {
+            com.aegisos.proto.RaftLogEntry entry = raftNode.raftLog().get(i);
+            if (entry != null) {
+                try {
+                    StateCommand cmd = StateCommand.parseFrom(entry.getCommand());
+                    if (cmd.getType() == CommandType.ADD_VOTER) {
+                        clusterConfiguration.applyAddVoter(i, cmd);
+                    } else if (cmd.getType() == CommandType.REMOVE_VOTER) {
+                        clusterConfiguration.applyRemoveVoter(i, cmd);
+                    }
+                } catch (Exception e) {
+                    // Ignore parsing errors for pre-scan
+                }
+            }
+        }
     }
 
     public NodeId leaderId() {

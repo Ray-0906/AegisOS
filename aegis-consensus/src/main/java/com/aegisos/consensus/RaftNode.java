@@ -160,29 +160,20 @@ public final class RaftNode {
                 }
             }
 
-            // Replay remaining log entries after the snapshot
+            // Do NOT replay uncommitted log entries on startup.
+            // Raft safety requires that we only apply entries when they are known to be committed.
+            // Uncommitted entries that survived on disk must wait for an active leader to confirm them.
+            // lastApplied and commitIndex remain at 0 (or snapshotIndex if a snapshot was loaded).
+            
             long lastOnDisk = raftLog.lastIndex();
-            if (lastOnDisk == 0 && lastApplied == 0) {
-                return; // fresh node, nothing to replay
+            long uncommitted = lastOnDisk - lastApplied;
+            if (uncommitted > 0) {
+                log.info("Raft node {} has {} uncommitted log entries on disk (from {} to {}). Waiting for leader to advance commitIndex.",
+                        self.shortId(), uncommitted, lastApplied + 1, lastOnDisk);
+            } else {
+                log.info("Raft node {} startup complete. No uncommitted entries. (lastApplied={}, commitIndex={})", 
+                        self.shortId(), lastApplied, commitIndex);
             }
-            long toReplay = lastOnDisk - lastApplied;
-            if (toReplay > 0) {
-                log.info("Raft node {} replaying {} log entries from disk on startup (from {} to {})",
-                        self.shortId(), toReplay, lastApplied + 1, lastOnDisk);
-            }
-            while (lastApplied < lastOnDisk) {
-                lastApplied++;
-                RaftLogEntry entry = raftLog.get(lastApplied);
-                if (entry != null) {
-                    try {
-                        stateMachine.apply(entry.getIndex(), entry.getCommand().toByteArray());
-                    } catch (Exception e) {
-                        log.error("State machine replay failed at index {}: {}", lastApplied, e.toString());
-                    }
-                }
-            }
-            commitIndex = lastApplied;
-            log.info("Raft node {} startup replay complete (lastApplied={}, commitIndex={})", self.shortId(), lastApplied, commitIndex);
         } finally {
             lock.unlock();
         }
@@ -579,12 +570,11 @@ public final class RaftNode {
         maybeSnapshot();
     }
 
-    /** Checks if a snapshot should be triggered based on configured thresholds. */
     private void maybeSnapshot() {
-        if (role != RaftRole.LEADER || snapshotTaker == null || snapshotDir == null) {
+        if (snapshotTaker == null || snapshotDir == null) {
             return;
         }
-        long entriesSinceSnapshot = commitIndex - raftLog.snapshotIndex();
+        long entriesSinceSnapshot = lastApplied - raftLog.snapshotIndex();
         if (entriesSinceSnapshot >= snapshotEntryThreshold
                 || raftLog.diskSizeBytes() >= snapshotSizeThresholdBytes) {
             triggerSnapshot();
