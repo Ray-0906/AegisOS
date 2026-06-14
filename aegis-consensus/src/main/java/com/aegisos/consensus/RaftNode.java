@@ -291,7 +291,7 @@ public final class RaftNode {
         
         int qSize = queuedBroadcasts.incrementAndGet();
         if (qSize >= 10) {
-            log.warn("[DIAGNOSTIC] Queued broadcast tasks: {}", qSize);
+            log.debug("Queued broadcast tasks: {}", qSize);
         }
         scheduler.execute(() -> {
             queuedBroadcasts.decrementAndGet();
@@ -319,7 +319,7 @@ public final class RaftNode {
     }
 
     private void startElection() {
-        log.warn("[DIAGNOSTIC] TRANSITION: {} -> CANDIDATE", role);
+        log.debug("TRANSITION: {} -> CANDIDATE", role);
         long newTerm = metadata.currentTerm() + 1;
         metadata.setCurrentTerm(newTerm);
         metadata.setVotedFor(self.toHex());
@@ -379,7 +379,7 @@ public final class RaftNode {
     }
 
     private void becomeLeader() {
-        log.warn("[DIAGNOSTIC] TRANSITION: {} -> LEADER", role);
+        log.debug("TRANSITION: {} -> LEADER", role);
         role = RaftRole.LEADER;
         leaderId = self;
         electionTimer.stop();
@@ -403,7 +403,7 @@ public final class RaftNode {
         long now = System.currentTimeMillis();
         long drift = now - lastHeartbeatTick;
         if (drift > 100) {
-            log.warn("[DIAGNOSTIC] Heartbeat delayed by {} ms", drift);
+            log.debug("Heartbeat delayed by {} ms", drift);
         }
         lastHeartbeatTick = now;
 
@@ -645,7 +645,7 @@ public final class RaftNode {
     }
 
     private void stepDown(long newTerm) {
-        log.warn("[DIAGNOSTIC] TRANSITION: {} -> FOLLOWER", role);
+        log.debug("TRANSITION: {} -> FOLLOWER", role);
         long current = metadata.currentTerm();
         if (newTerm > current) {
             metadata.setCurrentTerm(newTerm);
