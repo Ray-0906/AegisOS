@@ -141,6 +141,11 @@ Full reactor build:
 mvn clean package
 ```
 
+> **Known Build Caveat:**
+> Avoid running `mvn test verify` after a previous reactor build without a `clean` phase. The `maven-compiler-plugin`'s incremental compiler drops fully-qualified package mappings across module boundaries, causing false `cannot be converted to NodeId` type-checking errors. 
+> 
+> Use `mvn clean verify` for a full validation run.
+
 ---
 
 ## Design
