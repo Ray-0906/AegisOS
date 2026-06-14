@@ -1,18 +1,50 @@
-# Known Limitations — AegisOS v0.9
+# Known Limitations — AegisOS v1.0 RC1
 
-This document captures the known limitations and architectural gaps in the current release. These are intentional design boundaries, not bugs. Each entry includes the impact and the planned resolution timeline.
+This document captures known limitations and architectural gaps in the current release.
+These are intentional design boundaries or deferred work, not undiagnosed bugs.
+
+Deferred engineering items with investigation evidence: [`docs/post-v1-roadmap.md`](docs/post-v1-roadmap.md)
 
 ---
 
-## Scheduling
+## Consensus & Storage
 
-### No locality-aware scheduling
+### Raft log compaction not implemented
 
-The scheduler scores nodes based on CPU, memory, and current load. It does **not** consider whether a node already holds a cached copy of the required artifact or the latest checkpoint.
+Single-round snapshot install and recovery work. Continuous multi-round log trimming
+is not integrated (`LogCompactionTest` is disabled).
 
-**Impact:** Every job recovery or failover requires a full artifact download from AegisFS, even if another node already has the artifact cached locally. This increases network traffic and recovery latency proportionally to artifact size.
+**Impact:** Raft logs grow until manual intervention or node restart with snapshot load.
+**Planned:** v1.1 — see `docs/LOG_COMPACTION_DESIGN.md`.
 
-**Planned fix:** Sprint 9.5 — Node scoring will incorporate `checkpointLocality` and `artifactLocality` weights.
+### No artifact garbage collection
+
+Uploaded artifacts persist in AegisFS indefinitely.
+
+**Impact:** Disk usage grows as new artifacts are uploaded.
+**Planned:** Future — reference-counted GC.
+
+### No artifact quotas
+
+No per-user, per-namespace, or cluster-wide upload limits.
+
+**Impact:** A single client can exhaust cluster storage.
+**Planned:** Future — alongside runtime artifact API.
+
+### No artifact versioning
+
+Artifacts are content-addressed (SHA-256) only. No named versions or tags.
+
+**Impact:** Users track hashes externally.
+**Planned:** Future — artifact namespace and version registry.
+
+### Cache is per-node
+
+Each node maintains its own artifact cache. No shared distributed cache layer.
+
+**Impact:** Without locality-aware scheduling, jobs may download artifacts remotely even
+when another node has a cached copy. **Mitigated:** locality-aware scheduling is
+implemented and routes jobs toward nodes with local checkpoint/artifact chunks.
 
 ---
 
@@ -20,84 +52,59 @@ The scheduler scores nodes based on CPU, memory, and current load. It does **not
 
 ### No runtime artifact uploads
 
-Jobs cannot upload artifacts during execution. The `JobContext` API provides `checkpoint()` but not `uploadArtifact()` or `downloadArtifact()`.
+Jobs cannot upload artifacts during execution. `JobContext` provides `checkpoint()`
+but not `uploadArtifact()` / `downloadArtifact()`.
 
-**Impact:** Jobs that produce output files (models, reports, datasets) must encode results into the return value (`byte[]`), which is stored in the Raft log. This is unsuitable for large outputs.
-
-**Planned fix:** Sprint 10 — Runtime Artifact API with quota enforcement.
+**Impact:** Large outputs must fit in the job return value (stored in Raft log).
+**Planned:** v1.1+ — Runtime Artifact API.
 
 ### No container isolation
 
-Jobs execute as forked JVM processes on the host. There is no cgroup, namespace, or Docker-based sandboxing.
+Jobs execute as forked JVM processes. No cgroup, namespace, or OCI sandboxing.
 
-**Impact:**
-- Jobs can access the host filesystem (mitigated by workspace provisioning)
-- No CPU/memory enforcement beyond JVM `-Xmx` flags
-- No network isolation between jobs
-
-**Planned fix:** Sprint 10 or 11 — Container execution backend.
+**Impact:** Limited isolation; resource enforcement is JVM-level only.
+**Planned:** See `docs/V1_RUNTIME_DESIGN.md`.
 
 ### No resource limits enforcement
 
-`ResourceRequest` (cpu_cores, memory_mb) is used for scheduling placement decisions only. The runtime does not enforce these limits on the executing process.
+`ResourceRequest` (cpu_cores, memory_mb) affects scheduling placement only.
+The runtime does not enforce limits on the executing process.
 
-**Impact:** A job requesting 2 CPUs and 512 MB could consume all available resources on the node, starving co-located jobs.
+**Impact:** A job can starve co-located jobs on the same node.
+**Planned:** Container runtime with cgroup enforcement.
 
-**Planned fix:** Container runtime will enforce cgroup limits.
+### Worker lifecycle hardening ongoing
 
----
+Intermittent worker EOF / deserialization errors were observed in fork-isolated test
+runs. The v1.0 RC1 shared-JVM suite is green; worker termination protocol, socket
+shutdown ordering, and `CANCEL_JOB` timing deserve further investigation.
 
-## Storage
+**Evidence:** `suite_fork_isolated.log`, `docs/post-v1-roadmap.md` §2.
 
-### No artifact garbage collection
+### Lease configuration testability
 
-Uploaded artifacts persist in AegisFS indefinitely. There is no automatic cleanup of artifacts that are no longer referenced by any job.
+`JobSupervisor.LEASE_DURATION_MS` is a `static final` loaded at class init.
+Test property overrides do not apply after first class load in a shared JVM.
 
-**Impact:** Disk usage grows monotonically as new artifact versions are uploaded. Operators must manually track and delete stale artifacts.
-
-**Planned fix:** Future — Reference-counted GC with orphan detection.
-
-### No artifact quotas
-
-Any node can upload unlimited artifacts of any size. There are no per-user, per-namespace, or cluster-wide quotas.
-
-**Impact:** A single user can exhaust cluster storage.
-
-**Planned fix:** To be designed alongside Runtime Artifact API.
-
-### No artifact versioning
-
-Artifacts are content-addressed only (SHA-256). There is no concept of named versions (`v1.2.3`), tags, or semantic version resolution.
-
-**Impact:** Users must track SHA-256 hashes externally. Re-uploading the same content is a no-op (same hash), but there is no way to say "use the latest version of artifact X."
-
-**Planned fix:** Future — Artifact namespace and version registry.
-
-### Cache is per-node
-
-Each node maintains its own independent artifact cache. There is no shared or distributed cache layer.
-
-**Impact:** An artifact uploaded on node A and requested by a job on node B must be downloaded from AegisFS, even if node C already has it cached. With locality-aware scheduling this becomes less of an issue.
-
-**Planned fix:** Locality-aware scheduling will naturally route jobs to nodes that already have artifacts cached.
+**Impact:** Test ordering can affect lease-timeout behavior in integration tests.
+**Planned:** v1.1 — runtime-readable lease configuration.
 
 ---
 
 ## Observability
 
-### No metrics export
+### Limited metrics integration
 
-The system exposes a `/metrics` HTTP endpoint per node, but there is no Prometheus scrape integration, no Grafana dashboards, and no alerting.
+Each node exposes an HTTP `/metrics` endpoint, but there is no bundled Prometheus
+scrape config, Grafana dashboards, or alerting.
 
-**Impact:** Operators have limited visibility into cluster health, job throughput, artifact cache hit rates, and checkpoint frequency.
-
-**Planned fix:** Future — Prometheus metrics exporter.
+**Planned:** Future — operational tooling.
 
 ### No web UI
 
-All interaction is via CLI or programmatic API. There is no browser-based dashboard for job monitoring, artifact management, or cluster visualization.
+All interaction is via CLI or programmatic API.
 
-**Planned fix:** Future.
+**Planned:** Future.
 
 ---
 
@@ -105,24 +112,48 @@ All interaction is via CLI or programmatic API. There is no browser-based dashbo
 
 ### No rolling upgrades
 
-There is no mechanism for upgrading node software without full cluster restart. The Raft protocol version and protobuf schema are not negotiated at runtime.
+No mechanism for upgrading node software without coordinated restart.
+Protocol version is not negotiated at runtime.
 
-**Impact:** Upgrading requires coordinated downtime.
-
-**Planned fix:** Future — Protocol version negotiation.
+**Impact:** Upgrades require downtime.
+**Planned:** Future.
 
 ### No authentication / authorization
 
-All nodes in the cluster are trusted equally. There is no user identity, role-based access control, or multi-tenancy.
+All cluster members are trusted equally. No RBAC or multi-tenancy.
 
-**Impact:** Any client that can connect to a cluster node can submit jobs, upload artifacts, and read all data.
-
-**Planned fix:** Future — Identity and RBAC layer.
+**Impact:** Any client that can reach a node can submit jobs and read data.
+**Planned:** Future — identity and RBAC layer.
 
 ### Windows symlink fallback
 
-On Windows, artifact mounting falls back from symlinks to file copies because symlink creation requires elevated privileges.
+Artifact mounting falls back from symlinks to file copies on Windows.
 
-**Impact:** Slightly higher disk usage and slower workspace provisioning on Windows development machines. Production targets Linux where symlinks work without elevation.
+**Impact:** Higher disk use on Windows dev machines. Production targets Linux.
+**Status:** Acceptable; not planned for fix.
 
-**Status:** Acceptable. Not planned for fix.
+### Long-duration chaos validation
+
+Short and medium integration tests cover failover, partitions, and repair under load.
+Extended multi-hour production soak patterns are not part of the v1.0 RC1 validation
+baseline.
+
+**Impact:** Rare timing-dependent worker or shutdown races may surface only under
+sustained load. Post-v1.0 investigation recommended if reproduced consistently.
+
+---
+
+## What v1.0 RC1 does include
+
+| Capability | Status |
+|------------|--------|
+| Cluster formation (gossip + Raft) | ✅ |
+| Leader election and failover | ✅ |
+| Node failure / partition tolerance | ✅ |
+| Distributed job execution | ✅ |
+| Job checkpointing | ✅ |
+| Job recovery after failover | ✅ |
+| Locality-aware scheduling | ✅ |
+| Storage repair (audit + chunk repair) | ✅ |
+| Raft snapshot install / recovery | ✅ |
+| Raft log compaction (continuous) | ❌ deferred |

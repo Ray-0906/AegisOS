@@ -1,20 +1,73 @@
 # AegisOS Engineering Handoff
 
 > Current handoff for the next engineer/agent. Read this before changing code.
-> It captures the problems investigated during the latest stabilization pass,
-> the actual root causes found, the fixes applied, and what still deserves follow-up.
+> It captures stabilization work, the shared-JVM test instability investigation,
+> root causes found, fixes applied, and what still deserves follow-up.
+
+**Branch:** `v1.0-dev`
+**Last updated:** 2026-06-14
+
+> **Key lesson:** The final stability work did not primarily involve making tests less strict; it involved correcting tests whose observation points no longer matched the distributed system's actual authority and ownership model after failover or migration.
+
+**Deferred work (solo dev — no issue tracker):** see [`docs/post-v1-roadmap.md`](docs/post-v1-roadmap.md)
 
 ---
 
 ## 0. Current Status
 
-- **Project:** AegisOS, a Java 21 peer-to-peer distributed runtime with secure networking, gossip membership, Raft consensus, AegisFS storage, job execution, checkpointing, repair, and locality-aware scheduling.
-- **Latest Full Validation:** Run `mvn clean package`
-- **Latest Result:** `BUILD SUCCESS` (with test suite execution completing successfully).
-- **Latest Test Total:** 84 tests run, 0 failures, 0 errors, 1 skipped.
-- **Elapsed Time:** ~17:04 min.
-- **Core Stability**: Core runtime correctness, lease recovery, state persistence ordering, retry storm protection, and repair failover tests are fully stabilized.
-- **Pending Flake Fix**: A proposed fix for `LocalityMetricsValidationTest` timing race condition under full-suite JVM load is defined in `implementation_plan.md` but not yet applied.
+- **Project:** AegisOS — Java 21 peer-to-peer distributed runtime with secure networking, gossip membership, Raft consensus, AegisFS storage, job execution, checkpointing, repair, and locality-aware scheduling.
+- **Modules:** 12 Maven modules; integration tests live in `aegis-test-cluster` (~84 tests, ~17 min full run).
+- **Surefire default:** single shared JVM (`reuseForks=true`, `forkCount=1`).
+
+### Latest Validation (post-fix)
+
+```bash
+mvn clean test -pl aegis-test-cluster
+```
+
+| Metric | Result |
+|--------|--------|
+| Tests run | 84 |
+| Failures | 0 |
+| Errors | 0 |
+| Skipped | 1 (`LogCompactionTest`) |
+| Elapsed | ~17 min |
+| Log | `suite_shared_jvm_post_fix.log` |
+
+**Suite is considered stable** — not because of pass counts alone, but because the last failing test now asserts the actual system invariant (see §4.4).
+
+### Investigation Closure (Resolved)
+
+| Item | Status |
+|------|--------|
+| Shared-JVM contamination | **Resolved** — substantially reduced by hygiene fixes (`TestJvmHygiene`, `JvmHygieneExtension`, filter cleanup) |
+| `LocalityMetricsValidationTest` | **Resolved** — root cause identified and fixed (incorrect observation point) |
+| Snapshot-related failures (`InstallSnapshotVerificationTest`, `SnapshotDuringExecutionTest`, etc.) | **Resolved** — disappeared after hygiene work; not scheduler/snapshot production bugs |
+| Scheduler locality logic | **Validated** — placement and metrics work when observed from correct node |
+| Runtime correctness fixes (§1) | **Validated** — terminal state ordering, retry ceiling, cancellation, hotspot spread, etc. |
+| Thread leak as suite-wide driver | **Ruled out** — no monotonic thread climb across suite |
+
+### v1.0 Freeze Checklist
+
+- [x] Known correctness bugs fixed
+- [x] Reproducible failures explained
+- [x] Test suite stable (84 run, 0 failures, 0 errors, 1 skipped)
+- [x] Remaining concerns documented and bounded (`handoff.md`, `docs/post-v1-roadmap.md`)
+- [x] No active mystery failures
+
+**Preserve before freeze:** `handoff.md`, investigation logs (`suite_*.log`), [`docs/post-v1-roadmap.md`](docs/post-v1-roadmap.md).
+
+### Still Worth Tracking (Not Release Blockers)
+
+Details in [`docs/post-v1-roadmap.md`](docs/post-v1-roadmap.md).
+
+| Item | Classification | Notes |
+|------|----------------|-------|
+| `JobSupervisor.LEASE_DURATION_MS` static final | **Technical debt** | Did not cause locality failure. Deferred — see `docs/post-v1-roadmap.md` §1 |
+| Worker lifecycle races | **Post-v1.0 investigation** | Green in latest suite; logs in `suite_fork_isolated.log`. Deferred — see `docs/post-v1-roadmap.md` §2 |
+| Leadership observation inconsistency | **Low priority** | Stale `isLeader()` during concurrent elections |
+| Repair/audit during shutdown | **Low priority** | `RejectedExecutionException` on teardown |
+| Log compaction | **v1.0+ feature** | `LogCompactionTest` skipped |
 
 ---
 
@@ -25,237 +78,419 @@
 The first major incident looked like a distributed live-lock during the integration suite:
 - Phase 5 snapshot/storage tests ran for a very long time.
 - Logs showed leader churn, election storms, anti-entropy activity, snapshot load fallback, and repeated background work.
-- The suite appeared to stall on “dead logs” instead of terminating.
-- The initial suspicion was consensus/storage starvation: Raft heartbeats and membership work were being delayed while storage repair/audit/checkpoint paths were active.
+- The suite appeared to stall on "dead logs" instead of terminating.
+- Initial suspicion: consensus/storage starvation.
 
 ### 1.2 Shutdown and Background-Executor Races
 
-After improving shutdown behavior, full builds started completing instead of hanging, but logs showed lifecycle races such as rejected tasks by terminated executors.
-Fixes applied:
-- `ProcessRuntimeAgent` now skips job execution when shutting down.
-- Heartbeat scheduling is guarded against `RejectedExecutionException`.
-- Shutdown-time updates avoid reporting false hard failures when Raft is already stopping.
-- Delayed cleanup scheduling is guarded so cleanup is skipped cleanly during shutdown.
-- Transient storage/network shutdown failures are logged compactly.
+After improving shutdown behavior, full builds started completing. Fixes applied:
+- `ProcessRuntimeAgent` skips job execution when shutting down.
+- Heartbeat scheduling guarded against `RejectedExecutionException`.
+- Shutdown-time updates avoid false hard failures when Raft is stopping.
+- Delayed cleanup scheduling guarded during shutdown.
+- Transient storage/network shutdown failures logged compactly.
 
 Relevant files:
-- [ProcessRuntimeAgent.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/ProcessRuntimeAgent.java)
-- [PeerConnection.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-network/src/main/java/com/aegisos/network/PeerConnection.java)
-- [ChunkReplicator.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-fs/src/main/java/com/aegisos/fs/ChunkReplicator.java)
+- `aegis-runtime/.../ProcessRuntimeAgent.java`
+- `aegis-network/.../PeerConnection.java`
+- `aegis-fs/.../ChunkReplicator.java`
 
 ### 1.3 Cancellation Semantics: `CANCELLED -> FAILED`
 
-Logs showed suspicious state transitions where a cancelled job could later become failed (`CANCELLED -> FAILED`).
-Root cause:
-- The runtime could kill a local worker after cancellation.
-- The worker failure path then attempted to publish `FAILED`.
-- `JobRegistry` previously logged invalid transitions but still applied some Raft-committed state updates.
+Root cause: runtime could kill a local worker after cancellation; worker failure path published `FAILED` over `CANCELLED`.
 
-Fixes applied:
+Fixes:
 - `JobRegistry` treats terminal states deterministically.
-- Terminal states are not overwritten by later invalid terminal rewrites.
-- `ProcessRuntimeAgent` preserves `CANCELLED` when the worker exits after cancellation.
-- `JobCancellationTest` now expects cancellation to remain terminal.
-
-Relevant files:
-- [JobRegistry.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/JobRegistry.java)
-- [ProcessRuntimeAgent.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/ProcessRuntimeAgent.java)
-- [JobCancellationTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/JobCancellationTest.java)
+- `ProcessRuntimeAgent` preserves `CANCELLED` when worker exits after cancellation.
 
 ### 1.4 Worker Recovery and Supervisor Identity
 
-Recovery tests exposed stale/superseded execution behavior.
-Root cause:
-- Local process supervision was keyed too coarsely by job identity.
-- A later execution could interact badly with an earlier execution if both existed around failover/recovery boundaries.
-
-Fix applied:
-- `JobExecutor` supervisors are keyed by `jobId#executionId`, separating executions.
-
-Relevant file:
-- [JobExecutor.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/JobExecutor.java)
+Fix: `JobExecutor` supervisors keyed by `jobId#executionId`, separating executions.
 
 ### 1.5 Checkpoint Fencing and Monotonicity
 
-`LeaderFailoverCheckpointTest` exposed a race where a new leader could observe a checkpoint sequence lower than the old leader had observed before failover.
-Root causes:
-- Checkpoint updates are asynchronous relative to job execution.
-- A leader failover can expose state before every local registry view has caught up.
-- Same-execution checkpoint metadata needed monotonic protection.
-
-Fixes applied:
-- `JobRegistry` now ignores stale same-execution checkpoint updates where the current checkpoint sequence is newer.
-- `LeaderFailoverCheckpointTest` waits for the new leader registry to catch up instead of sampling immediately after election.
-
-Relevant files:
-- [JobRegistry.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/JobRegistry.java)
-- [LeaderFailoverCheckpointTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/LeaderFailoverCheckpointTest.java)
+Fixes:
+- `JobRegistry` ignores stale same-execution checkpoint updates.
+- `LeaderFailoverCheckpointTest` waits for new leader registry to catch up.
 
 ### 1.6 Cluster Join Harness Flake
 
-A focused full-suite validation once failed in `Phase6Test` during `harness.start(5)`:
-`New node ... did not join Gossip on leader ... within 30s`
-Root cause:
-- `ClusterHarness.addNodeWithHome` captured one leader and waited for that specific leader to observe the new node.
-- During full-suite load, leadership could move or a different leader could already see the node.
-- The harness was checking a stale leader snapshot, not the current cluster leader view.
-
-Fix applied:
-- `ClusterHarness` now re-checks the current leader during join/catch-up/proposal flow.
-- `ADD_VOTER` is proposed on a current leader that sees the joining node.
-
-Relevant file:
-- [ClusterHarness.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/ClusterHarness.java)
+Fix: `ClusterHarness` re-checks current leader during join/catch-up/proposal flow instead of using a stale leader snapshot.
 
 ### 1.7 Client Command Forwarding Noise
 
-One validation run showed `NodeId must be 32 bytes`.
-Root cause:
-- A forwarded `CLIENT_COMMAND` failure response could carry a malformed or absent leader id.
-- The caller attempted to parse any non-empty leader id bytes as a `NodeId`.
-
-Fix applied:
-- `ConsensusModule` validates leader id length before parsing.
-- Malformed leader ids are ignored and reported as no known leader instead of causing parse noise.
-
-Relevant file:
-- [ConsensusModule.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-consensus/src/main/java/com/aegisos/consensus/ConsensusModule.java)
+Fix: `ConsensusModule` validates leader id length before parsing.
 
 ### 1.8 Build Failure: `HotArtifactSpreadTest`
 
-The scheduler hotspot failure occurred where all hotspot jobs went to a single node.
-Root cause:
-- Burst-submitted jobs were assigned but not yet running, so placement did not count those in-flight assignments, resulting in a hash tie-breaker choosing the same node.
-
-Fix applied:
-- `Scheduler` now tracks in-flight assignment load per node.
-- Placement scoring includes both `runningJobs` and pending `assignmentLoad`.
-- The score/tie-break/track operation is protected by a small `placementLock`.
-- Raft `ASSIGN_JOB` proposal still happens outside the lock to avoid serializing slow consensus work.
-- Assignment load is released on terminal states: `COMPLETED`, `FAILED`, `LOST`, and `CANCELLED`.
-- Provisional assignment load is rolled back if the Raft proposal fails.
-- `schedulerEpoch` is now atomic so concurrent scheduling gets stable reservation epochs.
-
-Relevant files:
-- [Scheduler.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-scheduler/src/main/java/com/aegisos/scheduler/Scheduler.java)
-- [HotArtifactSpreadTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/HotArtifactSpreadTest.java)
-- [SchedulerDeterminismTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/SchedulerDeterminismTest.java)
+Fix: `Scheduler` tracks in-flight assignment load per node; placement scoring includes `runningJobs` + pending `assignmentLoad`.
 
 ### 1.9 Terminal State Persistence Ordering (Bug 1)
 
-During lease recovery/failover testing, a critical bug was found: if a job failed (e.g. crashed due to corruption), the agent attempted to upload job logs before proposing the terminal `FAILED` state to Raft. If the log upload blocked, took too long, or encountered a transport exception, the node lease could expire. The supervisor would then assume the worker node was lost and increment the execution ID (requeuing the job), which discarded the delayed `FAILED` state update, causing the job crash to go unnoticed.
-
-Fixes applied:
-- **State-First Ordering**: In [ProcessRuntimeAgent.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/ProcessRuntimeAgent.java), reversed the ordering to ensure the terminal state is committed via `update()` *before* log upload is attempted.
-- **Best-Effort Log Upload**: Wrapped log uploading in a try-catch block (`uploadJobLogsBestEffort`) to prevent log-upload exceptions from failing the job or blocking the state update.
-- **Verification**: Created [TerminalStateOrderingTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/TerminalStateOrderingTest.java) which simulates log upload delay and asserts that the `FAILED` state is successfully persisted.
+Fix: terminal state committed via `update()` **before** log upload; log upload wrapped in best-effort try-catch.
+New test: `TerminalStateOrderingTest.java`.
 
 ### 1.10 Job Retry Ceiling Enforcement (Bug 2)
 
-In the prototype, there was no protection against infinite job failure loops. A job that consistently failed would be requeued by the supervisor indefinitely, spamming the cluster with infinite execution increments.
-
-Fixes applied:
-- **Max Retry Enforcement**: In [JobSupervisor.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/JobSupervisor.java), added a hard ceiling. If the next execution ID exceeds `DEFAULT_MAX_RETRIES + 1` (where `DEFAULT_MAX_RETRIES = 3`), the job is transitioned to a terminal `FAILED` state instead of being rescheduled.
+Fix: `JobSupervisor` hard ceiling — exceeds `DEFAULT_MAX_RETRIES + 1` → terminal `FAILED`.
 
 ### 1.11 Raft Election Term Reset Hardening
 
-During leadership transitions, a subtle Raft consensus issue was discovered in [RaftNode.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-consensus/src/main/java/com/aegisos/consensus/RaftNode.java). When a node stepped down due to receiving a message with a higher term, it updated its current term but failed to clear its `votedFor` state. This caused the node to carry over its previous term's voting decision, violating Raft's single-vote-per-term invariant and causing election deadlocks.
-
-Fixes applied:
-- Hardened `stepDown` to reset `votedFor` to `null` whenever a term increase is encountered.
+Fix: `RaftNode.stepDown` resets `votedFor` to `null` on term increase.
 
 ### 1.12 `RepairLeaderFailoverTest` Hardening
 
-The `RepairLeaderFailoverTest` was flaking (~1/60 runs) due to background timing races.
-Root cause:
-- A transient GC pause or timing shift could cause a leader transition just before Phase A. The new leader B would start its background `StorageAuditScheduler` automatically, which proposed the repair before the test could execute `newLeader.auditScheduler().runOnce()`. When the test ran `runOnce()`, it returned `BLOCKED` instead of `REPAIR_PROPOSED`, failing the test.
-
-Fixes applied:
-- Hardened the test in [RepairLeaderFailoverTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/RepairLeaderFailoverTest.java) to accept either `REPAIR_PROPOSED` or `BLOCKED` due to a newly-generated pending repair task. It verifies that the blocking task is indeed a new task and that the old task is expired.
+Fix: test accepts `REPAIR_PROPOSED` or `BLOCKED` when background audit races ahead.
 
 ---
 
-## 2. Latest Full Build Result
+## 2. Shared-JVM Test Instability Investigation (2026-06-13/14)
 
-The Reactor Summary and integration tests pass successfully:
-```text
-[WARNING] Tests run: 83, Failures: 0, Errors: 0, Skipped: 1
-[INFO] Reactor Summary:
-[INFO] AegisOS Parent 0.1.0-SNAPSHOT ...................... SUCCESS [  0.083 s]
-[INFO] AegisOS Core 0.1.0-SNAPSHOT ........................ SUCCESS [  7.165 s]
-...
-[INFO] AegisOS Test Cluster 0.1.0-SNAPSHOT ................ SUCCESS [16:50 min]
-[INFO] BUILD SUCCESS
+### 2.1 Original Symptom
+
+Rotating failures across timing-sensitive tests in **shared-JVM** full suite runs. Each failing test passed in isolation. Suspects included:
+- `InstallSnapshotVerificationTest`
+- `SnapshotDuringExecutionTest`
+- `LocalityMetricsValidationTest`
+- `DuplicateExecutionPreventionTest`
+- `HotArtifactSpreadTest`
+- `ArtifactCacheReuseTest`
+
+### 2.2 Key Experiment: Fork Isolation Proves Contamination
+
+```bash
+mvn test -pl aegis-test-cluster -Dsurefire.forkCount=1 -Dsurefire.reuseForks=false
 ```
 
+**Result:** 84 tests, **0 assertion failures**, 3 errors, 1 skipped (~16:37).
+Log: `suite_fork_isolated.log`
+
+All previously flaky assertion tests passed under per-class JVM isolation. **Contamination hypothesis proven.**
+
+### 2.3 Post-Hygiene Shared-JVM Baseline
+
+Test-only hygiene fixes applied (see §3). Then:
+
+```bash
+mvn clean test -pl aegis-test-cluster
+```
+
+**Result:** 83 passed, **1 failed**, 0 errors, 1 skipped (~16:57).
+Log: `suite_shared_jvm_hygiene_run1.log`
+
+**Only failure:** `LocalityMetricsValidationTest` — `winsAfter: 0, bytes: 0`
+
+All other previously suspect tests passed in shared JVM after hygiene.
+
+### 2.4 Thread Leak Theory — Weakened
+
+`ClusterHarness.close()` diagnostics show `threadsBefore` 30–100, `threadsAfter` consistently ~4–5 after cleanup. No monotonic thread climb across suite. Thread leaks are not the primary shared-JVM instability driver.
+
+### 2.5 Contamination Sources Identified
+
+#### High confidence
+
+1. **`NetworkLayer.messageFilter`** — static JVM-global (`aegis-network/.../NetworkLayer.java` ~line 55). Survives across tests when Surefire reuses fork. `StaleCheckpointFenceTest` lacked `finally` cleanup (fixed).
+
+2. **`JobSupervisor.LEASE_DURATION_MS`** — `static final Long.getLong("aegis.lease.duration.ms", 15000)` at class load. `System.setProperty` + `clearProperty` **cannot** change it after first class load. Affects many failover tests; hygiene cannot fix this. Still a v1.0 testability defect.
+
+#### Runtime-read hooks (cleanup works)
+
+- `aegis.test.delay_upload_logs` → `ProcessRuntimeAgent`
+- `aegis.test.delay_after_lost` → `JobSupervisor`
+- `aegis.snapshot.entryThreshold` system property — unused; tests use `harness.setSnapshotEntryThreshold()`
+
+#### Property audit
+
+13 tests set `aegis.*` properties. All have matching `clearProperty` in `finally` or `@AfterEach`, but cleanup is ineffective for `static final` lease field.
+
+### 2.6 Fork-Isolated Intermittent Errors (not assertion failures)
+
+Observed once in full fork run; passed in post-hygiene shared-JVM run:
+- `ArtifactCacheReuseTest`: `NoClassDefFoundError: SleepJob`
+- `DuplicateExecutionPreventionTest`, `HotArtifactSpreadTest`: worker `Socket EOF. Parent died` / deserialization failed
+
+Deprioritized unless they reappear.
+
 ---
 
-## 3. Expected Log Noise in Passing Builds
+## 3. Test Hygiene Fixes Applied
 
-Several warnings/errors in `build.log` are expected because the tests intentionally break things.
-- `ArtifactNotFoundTest`: job fails because the artifact/file does not exist.
+### 3.1 New Files
+
+| File | Purpose |
+|------|---------|
+| `aegis-test-cluster/.../TestJvmHygiene.java` | Clears `messageFilter` + all `aegis.*` system properties |
+| `aegis-test-cluster/.../JvmHygieneExtension.java` | `@BeforeEach` logs inherited JVM state; `@AfterEach` calls `TestJvmHygiene.clearAll()` |
+| `aegis-test-cluster/src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension` | Registers extension globally for all cluster tests |
+
+### 3.2 Modified Test Files
+
+| File | Change |
+|------|--------|
+| `StaleCheckpointFenceTest.java` | `clearMessageFilter()` in `finally` |
+| `LocalityMetricsValidationTest.java` | Fixed observation model (see §4) |
+| `ClusterHarness.java` | `close()` logs `threadsBefore/After`; prints `node.close()` exceptions instead of swallowing |
+
+**NOT changed:** production runtime, `JobSupervisor` lease logic, scheduler locality logic.
+
+---
+
+## 4. LocalityMetricsValidationTest — Root Cause and Fix
+
+### 4.1 Symptom
+
+Intermittent failure in shared-JVM suite: `winsAfter: 0, bytes: 0`.
+~⅓ of isolated runs failed when `leader == executor`; 100% pass when `leader != executor`.
+
+### 4.2 What Was NOT the Problem
+
+Diagnostics proved on failing runs:
+- Migration **did** happen (`aliveNode` registry: `executionId=2`, `RUNNING`)
+- Checkpoint replicas existed on non-executor nodes (`localChunks=true`, 36 bytes each)
+- Scheduler locality logic worked (pass runs: `winsAfter=1`, `bytesSaved=36`)
+
+### 4.3 Actual Root Cause: Incorrect Observation Point
+
+The test captured `leader` **before** partition, then read metrics from that reference **after** partition:
+
+```java
+// OLD (broken assumption)
+AegisNode leader = nodes.stream().filter(n -> n.consensus().isLeader()).findFirst().orElseThrow();
+long winsAfter = leader.scheduler().getLocalityWins();
+```
+
+When `leader == executor` and executor is partitioned:
+
+| View | State |
+|------|-------|
+| Partitioned leader (stale reference) | `executionId=1`, `RUNNING`, `wins=0` |
+| Non-partitioned alive node | `executionId=2`, `RUNNING`, migrated |
+
+**Why:** `JobSupervisor.scan()` skips lease monitoring for self-assigned jobs:
+
+```java
+// JobSupervisor.java ~180-183
+if (assigned.equals(self)) {
+    continue;
+}
+```
+
+Partitioned leader never processes LOST/reschedule. Followers (or new leader) migrate the job. `localityWins` increments on the **scheduling leader**, not the stale pre-partition reference.
+
+**Classification:** `incorrect observation point` — NOT scheduler defect, NOT contamination, NOT shutdown issue.
+
+### 4.4 Fix Applied (Option B — not topology pinning)
+
+Topology remains random. Assertion model fixed:
+
+#### Primary assertion (real invariant)
+
+After migration, read job state from **non-partitioned nodes** via `resolveMigratedJob()`:
+1. `executionId >= 2` and `RUNNING`
+2. Assigned node ≠ partitioned executor
+3. Assigned node has local checkpoint replicas (`getDownloadBytesSaved > 0`)
+
+Pattern mirrors `CheckpointLocalityTest` — validate placement, not counters.
+
+#### Supplementary assertion (metrics, correct observation point)
+
+1. Snapshot `localityWins` on **all nodes** before partition
+2. After migration, re-resolve scheduling leader among **non-partitioned nodes** via `resolveSchedulingLeader()`
+3. Assert that node's metrics increased
+
+#### Why this fix matters (causality, not pass rate)
+
+The test was unsound because it broke causality:
+
+```text
+BEFORE (unsound):
+  Observe leader at T0 → Partition → Leadership may change
+  → Migration occurs elsewhere → Read metrics from original leader
+
+AFTER (sound):
+  Migration occurs → Find node that owns/scheduled migrated execution
+  → Verify locality-aware placement → Optionally verify metrics on scheduling authority
+```
+
+Pass counts (10/10 isolated, 84/84 suite) confirm the fix. The fix itself aligns the assertion with the system invariant.
+
+#### Deliberately NOT done
+
+**Option A (pin executor to non-leader follower)** was rejected. It avoids the bad assumption by constraining topology rather than removing the assumption. The fix must survive leadership changes and future scheduling ownership shifts.
+
+### 4.5 Validation
+
+| Run | Result |
+|-----|--------|
+| 10× isolated `LocalityMetricsValidationTest` | 10/10 pass (includes `leader==executor` cases) |
+| 1× full shared-JVM suite | 84 run, 0 failures |
+
+---
+
+## 5. Key Log Files
+
+| File | Content |
+|------|---------|
+| `suite_fork_isolated.log` | Full `reuseForks=false` run (proves contamination) |
+| `suite_shared_jvm_hygiene_run1.log` | Post-hygiene shared-JVM run (1 failure before locality fix) |
+| `suite_shared_jvm_post_fix.log` | Post-fix shared-JVM run (84/84 green) |
+| `locality_diag_run.log` | Single locality test run with pre-fix diagnostics |
+| `fail_locality.txt` | Earlier isolated locality failure capture |
+
+---
+
+## 6. Expected Log Noise in Passing Builds
+
+Several warnings/errors are expected because tests intentionally break things:
+- `ArtifactNotFoundTest`: job fails because artifact/file does not exist.
 - `MountPathTraversalTest`: job fails because mount paths are rejected.
 - `CorruptCheckpointRecoveryTest`: worker fails on invalid checkpoint bytes.
 - `CorruptSnapshotRecoveryTest`: snapshot load fails and falls back to full log replay.
-- Chaos/Partition warnings (e.g. `partitioned from ...`, `not connected to ...`, `Replication requirement not met`, `Checkpoint sequence ... temporarily deferred`, `no known leader`).
+- Chaos/Partition warnings: `partitioned from ...`, `Replication requirement not met`, `Checkpoint sequence ... temporarily deferred`, `no known leader`, `Failed to propose REPAIR_CHUNK`.
 
 ---
 
-## 4. Remaining Follow-Up Candidates
+## 7. Remaining Follow-Up Candidates
 
-### 4.1 LocalityMetricsValidationTest Timing Flake (Pending Fix)
+> Canonical deferred-work log: [`docs/post-v1-roadmap.md`](docs/post-v1-roadmap.md). Sections below are summaries; the roadmap preserves evidence for future-you.
 
-- **Symptom**: The test intermittently fails in full-suite runs under heavy JVM load with `winsAfter: 0, bytes: 0`.
-- **RCA**: The test wait condition only checks that the `submitter` node has registered the checkpoint before partitioning the executor. In load situations, candidate nodes lag in applying the Raft log command (`REGISTER_FILE`). When the scheduler probes these candidate nodes, their local `fileIndex` lookup fails, causing them to report `0` saved bytes.
-- **Status**: An implementation plan exists in [implementation_plan.md](file:///C:/Users/astra/.gemini/antigravity/brain/53360205-5af9-43b6-91c6-60a7db461cfd/implementation_plan.md) to wait for *all* nodes to apply the checkpoint and sync their `fileIndex` before partitioning.
+### 7.1 `LEASE_DURATION_MS` Static Final — **Deferred (§1 of roadmap)**
 
-### 4.2 Leadership Observation Inconsistency
+**Problem:**
+```java
+static final long LEASE_DURATION_MS = Long.getLong("aegis.lease.duration.ms", 15000);
+```
+Loaded at class init. `System.setProperty` + `clearProperty` cannot change it after first class load in a shared JVM.
 
-- **Symptom**: During failover testing, `newLeader.isLeader()` could return `true` while the cluster considered a different node the actual leader.
-- **RCA**: Stale leadership views or concurrent election transitions.
-- **Recommended Follow-up**: Implement a stricter leader election validation test or state checking in [ConsensusModule.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-consensus/src/main/java/com/aegisos/consensus/ConsensusModule.java).
+**Impact:** Future failover/lease tests can be poisoned by test ordering. Did **not** cause the locality failure.
 
-### 4.3 Repair/Audit During Shutdown
+**Severity:** Technical debt, **not a release blocker**.
 
-- **Symptom**: `Failed to propose REPAIR_CHUNK` due to `RejectedExecutionException` when shutting down.
-- **Recommended Follow-up**: Make `RepairProposer` and audit schedulers check the node's shutdown state and skip proposing repairs when consensus is stopping.
+**Recommended fix:** Refactor to runtime config (constructor injection or per-scan property read). Production behavior change — needs careful review.
 
-### 4.4 Checkpoint Retention Timeout Noise
+**Workaround:** `JvmHygieneExtension` logs effective lease via reflection before each test.
 
-- **Symptom**: `Failed to apply checkpoint retention ... Caused by: TimeoutException` during chaos tests.
-- **Recommended Follow-up**: Log compactly and retry retention delete operations rather than raising warning logs.
+### 7.2 Worker Lifecycle Races — **Deferred (§2 of roadmap)**
+
+**Prior symptoms** (fork-isolated run; green in latest shared-JVM suite):
+- `DuplicateExecutionPreventionTest`, `HotArtifactSpreadTest`: `Socket EOF`, `Parent died`, `deserialization failed`
+- `ArtifactCacheReuseTest`: `NoClassDefFoundError: SleepJob`
+
+**Archived logs:** `suite_fork_isolated.log`
+
+**Scope for future investigation:** worker process lifecycle, job cancellation, socket shutdown ordering.
+
+**Severity:** Post-v1.0. See roadmap §2.
+
+### 7.3 Executor Shutdown Audit — **Deferred (§3 of roadmap)**
+
+Review `shutdownNow()` paths; add bounded `awaitTermination()` where appropriate. Collect evidence before changing behavior. See roadmap §3.
+
+### 7.4 Leadership Observation Inconsistency
+
+**Symptom:** During failover, `newLeader.isLeader()` can return `true` while cluster considers a different node the actual leader.
+
+**Recommended follow-up:** Stricter leader election validation in tests or `ConsensusModule`.
+
+### 7.5 Repair/Audit During Shutdown
+
+**Symptom:** `Failed to propose REPAIR_CHUNK` due to `RejectedExecutionException` when shutting down.
+
+**Recommended follow-up:** `RepairProposer` and audit schedulers check shutdown state before proposing.
+
+### 7.6 Checkpoint Retention Timeout Noise
+
+**Symptom:** `Failed to apply checkpoint retention ... TimeoutException` during chaos tests.
+
+**Recommended follow-up:** Compact logging and retry retention deletes.
+
+### 7.7 Container-based Runtime Evolution
+
+Review `docs/V1_RUNTIME_DESIGN.md` for OCI container job execution.
+
+### 7.8 Log Compaction Implementation
+
+Review `docs/LOG_COMPACTION_DESIGN.md` for Raft snapshotting and log compaction.
 
 ---
 
-## 5. Developer Environment Note
+## 8. What NOT to Do (Lessons Learned)
 
-- During focused Maven runs, the VS Code Java language server sometimes races Maven by touching or deleting class files under `target`, causing `class file not found` errors. Workaround: Restart the language server or pause it.
-
----
-
-## 6. Current Modified Areas
-
-The stabilization pass touched or added these files:
-- [ClientCommands.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-cli/src/main/java/com/aegisos/cli/commands/ClientCommands.java)
-- [ConsensusModule.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-consensus/src/main/java/com/aegisos/consensus/ConsensusModule.java)
-- [RaftNode.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-consensus/src/main/java/com/aegisos/consensus/RaftNode.java)
-- [JobSupervisor.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/JobSupervisor.java)
-- [ProcessRuntimeAgent.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-runtime/src/main/java/com/aegisos/runtime/ProcessRuntimeAgent.java)
-- [CorruptCheckpointRecoveryTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/CorruptCheckpointRecoveryTest.java)
-- [RepairLeaderFailoverTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/RepairLeaderFailoverTest.java)
-- [TerminalStateOrderingTest.java](file:///c:/Users/astra/Desktop/AegisOS/aegis-test-cluster/src/test/java/com/aegisos/cluster/TerminalStateOrderingTest.java) [NEW]
+- **Do not** run a 10× suite matrix to diagnose locality failure — signal was already definitive at 83/84.
+- **Do not** pin executor to non-leader follower as the primary locality fix — hides topology edge case.
+- **Do not** assume `leader at T0 == node that performed reschedule` in partition/failover tests.
+- **Do not** treat scheduler counter reads as primary assertions when placement can be verified directly.
+- **Do not** assume shared-JVM flakiness is always a production bug — check contamination first.
 
 ---
 
-## 7. Recommended Next Steps
+## 9. Developer Environment Notes
 
-1. **Apply the `LocalityMetricsValidationTest` Fix**: Apply the changes in `implementation_plan.md` to wait for all nodes to apply checkpoints and sync their `fileIndex` before partitioning.
-2. **Review Leadership Observation Window**: Analyze why `newLeader.isLeader()` can return `true` concurrently with another node being leader under high election load.
-3. **Container-based Runtime Evolution**: Review the design document in [V1_RUNTIME_DESIGN.md](file:///c:/Users/astra/Desktop/AegisOS/docs/V1_RUNTIME_DESIGN.md) for transitioning to OCI containers for job execution.
-4. **Log Compaction Implementation**: Review [LOG_COMPACTION_DESIGN.md](file:///c:/Users/astra/Desktop/AegisOS/docs/LOG_COMPACTION_DESIGN.md) to implement Raft snapshotting and log compaction.
+- **Build:** `mvn clean test -pl aegis-test-cluster` (integration suite only)
+- **Fork-isolated run:** `mvn test -pl aegis-test-cluster -Dsurefire.forkCount=1 -Dsurefire.reuseForks=false`
+- **Single test:** `mvn clean test -pl aegis-test-cluster -Dtest=LocalityMetricsValidationTest` (clean avoids stale classloader `NoClassDefFoundError` on Windows)
+- VS Code Java language server sometimes races Maven by touching `target/` class files. Workaround: restart language server or pause it during Maven runs.
 
 ---
 
-## 8. Bottom Line
+## 10. Key Code Locations
 
-AegisOS's distributed repair, scheduler hotspots, terminal state ordering, and job retry ceilings are fully stabilized and verified with extensive unit and integration testing. The project is highly resilient to worker crashes, log delays, and term-stepping-down edge cases. Applying the pending locality metrics test fix will complete the v1.0 RC stabilization phase.
+| Area | Path |
+|------|------|
+| Test harness | `aegis-test-cluster/.../ClusterHarness.java` |
+| JVM hygiene | `aegis-test-cluster/.../TestJvmHygiene.java`, `JvmHygieneExtension.java` |
+| Locality test (fixed) | `aegis-test-cluster/.../LocalityMetricsValidationTest.java` |
+| Locality placement test (reference) | `aegis-test-cluster/.../CheckpointLocalityTest.java` |
+| Job supervisor / lease skip | `aegis-runtime/.../JobSupervisor.java` |
+| Scheduler locality metrics | `aegis-scheduler/.../Scheduler.java` |
+| Network partition filter | `aegis-network/.../NetworkLayer.java` |
+
+---
+
+## 11. Files Touched in This Investigation
+
+### New
+- `aegis-test-cluster/.../TestJvmHygiene.java`
+- `aegis-test-cluster/.../JvmHygieneExtension.java`
+- `aegis-test-cluster/src/test/resources/META-INF/services/org.junit.jupiter.api.extension.Extension`
+
+### Modified (test-only unless noted)
+- `LocalityMetricsValidationTest.java` — observation model fix
+- `StaleCheckpointFenceTest.java` — message filter cleanup
+- `ClusterHarness.java` — close diagnostics
+
+### Prior stabilization (see §1)
+- `ProcessRuntimeAgent.java`, `JobRegistry.java`, `JobSupervisor.java`, `JobExecutor.java`
+- `ConsensusModule.java`, `RaftNode.java`, `Scheduler.java`
+- Various test hardening files
+
+---
+
+## 12. Recommended Next Steps for Next Agent
+
+**v1.0 release path:** Suite is stable. No blockers from this investigation.
+
+**Post-v1.0 / deferred items:** documented in [`docs/post-v1-roadmap.md`](docs/post-v1-roadmap.md) — no issue tracker needed for solo dev; preserves evidence so future-you does not redo this investigation.
+
+1. **Lease configuration cleanup** — technical debt, not release blocker
+2. **Worker lifecycle investigation** — post-v1.0; logs in `suite_fork_isolated.log`
+3. **Executor shutdown audit** — low priority; collect evidence before changing behavior
+4. **v1.0+ features** — container runtime, log compaction
+
+**Closed — do not revisit unless new evidence:**
+- Scheduler locality logic redesign
+- Shared-JVM contamination (hygiene in place)
+- `LocalityMetricsValidationTest` observation model (fixed)
+- 10× suite statistical matrix for locality
+- Option A topology pinning (rejected by design)
+
+---
+
+## 13. Bottom Line
+
+The suite is stable because the **last assertion now follows causality**, not because a counter hit 84/84.
+
+Resolved: shared-JVM contamination (hygiene), locality test observation bug, snapshot-related false positives, scheduler locality validation, prior runtime correctness fixes.
+
+Remaining: **`LEASE_DURATION_MS` technical debt** and **worker lifecycle races** (post-v1.0, logs archived). Neither blocked this stabilization pass.

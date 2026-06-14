@@ -1,8 +1,9 @@
 # AegisOS Usage Guide
 
-AegisOS is a secure, distributed P2P operating system runtime that uses Raft for consensus, Kademlia for discovery, and provides a globally distributed file system and job scheduler.
+> **Quick start:** see the [README](../README.md) for a 5-minute cluster setup.
+> This document covers extended CLI usage, jobs, and artifacts.
 
-This document explains how to build the project, run a cluster locally, and interact with the cluster using the `aegis-cli` tool.
+AegisOS is a secure, distributed P2P operating system runtime that uses Raft for consensus, Kademlia for discovery, and provides a globally distributed file system and job scheduler.
 
 ---
 
@@ -24,8 +25,10 @@ mvn clean package
 This will compile all modules, run the test suite, and generate shaded, executable JAR files in the respective `target` directories.
 
 The two main executable JARs you will use are:
-1. **Node daemon**: `aegis-node/target/aegis-node-0.1.0-SNAPSHOT-shaded.jar`
-2. **CLI client**: `aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar`
+1. **CLI (recommended):** `aegis-cli/target/aegis.jar` — starts nodes and runs client commands
+2. **Node daemon (alternative):** `aegis-node/target/aegis-node-0.1.0-SNAPSHOT-shaded.jar`
+
+For new users, prefer the CLI JAR and the [README quick start](../README.md).
 
 ---
 
