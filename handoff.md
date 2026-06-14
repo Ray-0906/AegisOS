@@ -494,3 +494,11 @@ The suite is stable because the **last assertion now follows causality**, not be
 Resolved: shared-JVM contamination (hygiene), locality test observation bug, snapshot-related false positives, scheduler locality validation, prior runtime correctness fixes.
 
 Remaining: **`LEASE_DURATION_MS` technical debt** and **worker lifecycle races** (post-v1.0, logs archived). Neither blocked this stabilization pass.
+
+### Transport Layer Correlation Collision (RESOLVED)
+
+Discovered a severe bug in `aegis-network` where RPC correlation IDs were strictly matched by ID and not by request/response type. Under load, such as in `Phase8Test`, this caused correlation ID overlap between concurrent requests (e.g. a Node sent a GOSSIP_SYN request and matched an inbound CLIENT_COMMAND_RESULT as the response). This resulted in protobuf parsing failures such as `NotLeaderException(null)`.
+
+**Fix applied:**
+1. Modified `aegis.proto` to add `bool is_response = 9;` to `MessageHeader`.
+2. Updated `NetworkLayer.java` and `PeerConnection.java` to serialize and verify the `is_response` boolean, ensuring that inbound requests do not complete pending futures.

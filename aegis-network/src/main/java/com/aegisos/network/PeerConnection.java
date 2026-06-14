@@ -35,7 +35,7 @@ public final class PeerConnection implements AutoCloseable {
     private static final int OUTBOUND_QUEUE_CAPACITY = 256;
 
     public interface InboundHandler {
-        void onMessage(PeerConnection connection, AegisMessage message, long correlation);
+        void onMessage(PeerConnection connection, AegisMessage message, long correlation, boolean isResponse);
         void onConnectionClosed(PeerConnection connection);
     }
 
@@ -88,7 +88,7 @@ public final class PeerConnection implements AutoCloseable {
     }
 
     /** Sends an encrypted, signed application message to the peer. */
-    public void send(MessageType type, byte[] payload, long correlation) throws IOException {
+    public void send(MessageType type, byte[] payload, long correlation, boolean isResponse) throws IOException {
         if (!running) {
             throw new IOException("connection is closed");
         }
@@ -102,6 +102,7 @@ public final class PeerConnection implements AutoCloseable {
                 .setSequence(sequence.getAndIncrement())
                 .setCorrelation(correlation)
                 .setHandshake(false)
+                .setIsResponse(isResponse)
                 .build();
         byte[] aad = header.toByteArray();
         byte[] cipherText = session.cipher().encrypt(nonce, payload, aad);
@@ -162,7 +163,7 @@ public final class PeerConnection implements AutoCloseable {
 
             MessageType type = MessageType.fromCode(header.getMessageType());
             AegisMessage msg = new AegisMessage(remoteNodeId(), identity.nodeId(), type, payload);
-            handler.onMessage(this, msg, header.getCorrelation());
+            handler.onMessage(this, msg, header.getCorrelation(), header.getIsResponse());
         } catch (RejectedExecutionException e) {
             log.debug("Dropping inbound frame from {} during handler shutdown: {}",
                     remoteNodeId().shortId(), e.toString());

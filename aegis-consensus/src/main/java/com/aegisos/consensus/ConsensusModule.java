@@ -314,6 +314,8 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                 result.setLeaderId(ByteString.copyFrom(leader.toBytes()));
             }
             result.setError("not leader");
+            log.error("[DIAG] Rejecting command. role={}, leaderId={}, term={}", 
+                raftNode.role(), leader == null ? "null" : leader.shortId(), raftNode.currentTerm());
         } else {
             try {
                 StateCommand cmd = StateCommand.parseFrom(msg.payload());

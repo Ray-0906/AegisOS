@@ -27,6 +27,7 @@ message MessageHeader {
   uint64 sequence     = 6; // per-connection monotonic counter
   uint64 correlation  = 7; // request/response correlation id (0 = none)
   bool   handshake    = 8; // true while body is still plaintext (pre-session-key)
+  bool   is_response  = 9; // true if this message is a response to an earlier correlation id
 }
 
 message Envelope {

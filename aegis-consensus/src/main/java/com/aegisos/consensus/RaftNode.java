@@ -68,6 +68,9 @@ public final class RaftNode {
     private final Map<Long, CompletableFuture<Long>> pending = new ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentSkipListMap<Long, List<CompletableFuture<Void>>> awaitAppliedPending = new java.util.concurrent.ConcurrentSkipListMap<>();
 
+    private long lastHeartbeatTick = System.currentTimeMillis();
+    private final AtomicInteger queuedBroadcasts = new AtomicInteger(0);
+
     // --- snapshot support ---
     private final AtomicInteger snapshotCreatedCount = new AtomicInteger(0);
     private final AtomicInteger installSnapshotSentCount = new AtomicInteger(0);
@@ -285,7 +288,15 @@ public final class RaftNode {
         } finally {
             lock.unlock();
         }
-        scheduler.execute(this::broadcastAppendEntries);
+        
+        int qSize = queuedBroadcasts.incrementAndGet();
+        if (qSize >= 10) {
+            log.warn("[DIAGNOSTIC] Queued broadcast tasks: {}", qSize);
+        }
+        scheduler.execute(() -> {
+            queuedBroadcasts.decrementAndGet();
+            this.broadcastAppendEntries();
+        });
         return future;
     }
 
@@ -308,6 +319,7 @@ public final class RaftNode {
     }
 
     private void startElection() {
+        log.warn("[DIAGNOSTIC] TRANSITION: {} -> CANDIDATE", role);
         long newTerm = metadata.currentTerm() + 1;
         metadata.setCurrentTerm(newTerm);
         metadata.setVotedFor(self.toHex());
@@ -367,6 +379,7 @@ public final class RaftNode {
     }
 
     private void becomeLeader() {
+        log.warn("[DIAGNOSTIC] TRANSITION: {} -> LEADER", role);
         role = RaftRole.LEADER;
         leaderId = self;
         electionTimer.stop();
@@ -387,6 +400,13 @@ public final class RaftNode {
     // --- replication / heartbeats ---------------------------------------
 
     private void heartbeatTick() {
+        long now = System.currentTimeMillis();
+        long drift = now - lastHeartbeatTick;
+        if (drift > 100) {
+            log.warn("[DIAGNOSTIC] Heartbeat delayed by {} ms", drift);
+        }
+        lastHeartbeatTick = now;
+
         if (role == RaftRole.LEADER) {
             broadcastAppendEntries();
         }
@@ -625,6 +645,7 @@ public final class RaftNode {
     }
 
     private void stepDown(long newTerm) {
+        log.warn("[DIAGNOSTIC] TRANSITION: {} -> FOLLOWER", role);
         long current = metadata.currentTerm();
         if (newTerm > current) {
             metadata.setCurrentTerm(newTerm);

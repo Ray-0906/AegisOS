@@ -207,7 +207,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
             return false;
         }
         try {
-            conn.get().send(type, payload, 0L);
+            conn.get().send(type, payload, 0L, false);
             return true;
         } catch (IOException e) {
             log.debug("Send to {} failed: {}", nodeId.shortId(), e.getMessage());
@@ -234,7 +234,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         CompletableFuture<AegisMessage> future = new CompletableFuture<>();
         pending.put(correlation, future);
         try {
-            conn.get().send(type, payload, correlation);
+            conn.get().send(type, payload, correlation, false);
         } catch (IOException e) {
             pool.remove(nodeId);
             pending.remove(correlation);
@@ -245,7 +245,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     }
 
     @Override
-    public void onMessage(PeerConnection connection, AegisMessage message, long correlation) {
+    public void onMessage(PeerConnection connection, AegisMessage message, long correlation, boolean isResponse) {
         if (!messageFilter.test(message.sender(), localNodeId())) {
             log.debug("Partition dropped inbound message from {} to {}", message.sender().shortId(), localNodeId().shortId());
             return;
@@ -256,7 +256,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         // Complete the waiting future immediately on the receive thread.
         // This is always safe: future.complete() is non-blocking.
         // ----------------------------------------------------------------
-        if (correlation != 0) {
+        if (correlation != 0 && isResponse) {
             CompletableFuture<AegisMessage> waiting = pending.remove(correlation);
             if (waiting != null) {
                 waiting.complete(message);
@@ -278,9 +278,9 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
             // the per-connection serialisation that Raft depends on.
             // ----------------------------------------------------------------
             try {
-                AegisMessage reply = handler.handle(message);
-                if (reply != null) {
-                    connection.send(reply.type(), reply.payload(), correlation);
+                AegisMessage response = handler.handle(message);
+                if (response != null && correlation != 0) {
+                    connection.send(response.type(), response.payload(), correlation, true);
                 }
             } catch (Exception e) {
                 log.warn("Handler for {} threw: {}", message.type(), e.toString());
@@ -303,7 +303,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
                                 message.type(), message.sender().shortId(), elapsedMs);
                     }
                     if (reply != null) {
-                        connection.send(reply.type(), reply.payload(), correlationId);
+                        connection.send(reply.type(), reply.payload(), correlationId, true);
                     }
                 } catch (Exception e) {
                     log.warn("Handler for {} threw: {}", message.type(), e.toString());
