@@ -10,6 +10,7 @@ import com.aegisos.proto.JobState;
 import com.aegisos.proto.PeerStatus;
 import com.aegisos.proto.RunJob;
 import com.aegisos.scheduler.Scheduler;
+import com.aegisos.core.observability.MetricsRegistry;
 import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +51,7 @@ public final class JobSupervisor implements AutoCloseable {
     private final NetworkLayer network;
     private final NodeId self;
     private final ProcessRuntimeAgent agent;
+    private final MetricsRegistry metricsRegistry;
     private final Map<String, Long> recentlyMigrated = new ConcurrentHashMap<>();
     private final Map<String, Long> lastHeartbeat = new ConcurrentHashMap<>();
     private final Map<String, Long> firstSeenQueued = new ConcurrentHashMap<>();
@@ -71,13 +73,14 @@ public final class JobSupervisor implements AutoCloseable {
 
     public JobSupervisor(DiscoveryService discovery, ConsensusModule consensus,
                                 Scheduler scheduler, NetworkLayer network, NodeId self,
-                                ProcessRuntimeAgent agent) {
+                                ProcessRuntimeAgent agent, MetricsRegistry metricsRegistry) {
         this.discovery = discovery;
         this.consensus = consensus;
         this.scheduler = scheduler;
         this.network = network;
         this.self = self;
         this.agent = agent;
+        this.metricsRegistry = metricsRegistry;
     }
 
     public void start() {
@@ -213,6 +216,9 @@ public final class JobSupervisor implements AutoCloseable {
             if (leaseExpired) {
                 log.info("Job {} on node {}: execution lease expired ({}ms since last heartbeat). Emitting LOST.",
                         jobId, assigned.shortId(), now - lastHeartbeat.getOrDefault(jobId, 0L));
+                if (metricsRegistry != null) {
+                    metricsRegistry.counter("aegis_job_lease_expirations_total").increment();
+                }
                 emitLostState(jobId, record);
             }
         }

@@ -49,6 +49,7 @@ public final class RaftNode {
     private final Supplier<List<NodeId>> votingPeers;
     private final Supplier<List<NodeId>> allPeers;
     private final java.util.function.BooleanSupplier isVotingMember;
+    private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
 
     private final ReentrantLock lock = new ReentrantLock();
     private final ScheduledExecutorService scheduler =
@@ -98,7 +99,8 @@ public final class RaftNode {
                     RaftTransport transport, RaftStateMachine stateMachine,
                     Supplier<List<NodeId>> votingPeers,
                     Supplier<List<NodeId>> allPeers,
-                    java.util.function.BooleanSupplier isVotingMember) {
+                    java.util.function.BooleanSupplier isVotingMember,
+                    com.aegisos.core.observability.MetricsRegistry metricsRegistry) {
         this.self = self;
         this.raftLog = raftLog;
         this.metadata = metadata;
@@ -108,8 +110,12 @@ public final class RaftNode {
         this.allPeers = allPeers;
         this.isVotingMember = isVotingMember;
         this.replicator = new LogReplicator();
+        this.metricsRegistry = metricsRegistry;
         this.electionTimer = new ElectionTimer(scheduler, ELECTION_MIN_MS, ELECTION_MAX_MS,
                 this::onElectionTimeout);
+        if (metricsRegistry != null) {
+            metricsRegistry.gauge("aegis_raft_current_term").set(metadata.currentTerm());
+        }
     }
 
     public void start() {
@@ -322,6 +328,9 @@ public final class RaftNode {
         log.debug("TRANSITION: {} -> CANDIDATE", role);
         long newTerm = metadata.currentTerm() + 1;
         metadata.setCurrentTerm(newTerm);
+        if (metricsRegistry != null) {
+            metricsRegistry.gauge("aegis_raft_current_term").set(newTerm);
+        }
         metadata.setVotedFor(self.toHex());
         role = RaftRole.CANDIDATE;
         leaderId = null;
@@ -380,6 +389,9 @@ public final class RaftNode {
 
     private void becomeLeader() {
         log.debug("TRANSITION: {} -> LEADER", role);
+        if (role != RaftRole.LEADER && metricsRegistry != null) {
+            metricsRegistry.counter("aegis_raft_leader_changes_total").increment();
+        }
         role = RaftRole.LEADER;
         leaderId = self;
         electionTimer.stop();
@@ -649,6 +661,9 @@ public final class RaftNode {
         long current = metadata.currentTerm();
         if (newTerm > current) {
             metadata.setCurrentTerm(newTerm);
+            if (metricsRegistry != null) {
+                metricsRegistry.gauge("aegis_raft_current_term").set(newTerm);
+            }
             metadata.setVotedFor(null);
         }
         role = RaftRole.FOLLOWER;
@@ -700,6 +715,9 @@ public final class RaftNode {
             }
             if (req.getTerm() > term) {
                 metadata.setCurrentTerm(req.getTerm());
+                if (metricsRegistry != null) {
+                    metricsRegistry.gauge("aegis_raft_current_term").set(req.getTerm());
+                }
                 term = req.getTerm();
             }
             role = RaftRole.FOLLOWER;
@@ -735,6 +753,9 @@ public final class RaftNode {
             }
             if (req.getTerm() > term) {
                 metadata.setCurrentTerm(req.getTerm());
+                if (metricsRegistry != null) {
+                    metricsRegistry.gauge("aegis_raft_current_term").set(req.getTerm());
+                }
                 term = req.getTerm();
             }
             role = RaftRole.FOLLOWER;

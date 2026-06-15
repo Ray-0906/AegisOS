@@ -40,6 +40,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
     private final ClusterConfiguration clusterConfiguration;
     private final java.util.function.Function<NodeId, com.aegisos.proto.PeerStatus> peerStatusSupplier;
     private final int lagThreshold;
+    private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
 
     public ConsensusModule(NetworkLayer network, NodeId self, Path raftDir,
                            Supplier<List<NodeId>> votingPeers,
@@ -47,12 +48,14 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                            java.util.function.BooleanSupplier isVotingMember,
                            boolean bootstrap,
                            int lagThreshold,
-                           java.util.function.Function<NodeId, com.aegisos.proto.PeerStatus> peerStatusSupplier) {
+                           java.util.function.Function<NodeId, com.aegisos.proto.PeerStatus> peerStatusSupplier,
+                           com.aegisos.core.observability.MetricsRegistry metricsRegistry) {
         this.network = network;
         this.stateMachine = new ClusterStateMachine();
         this.clusterConfiguration = new ClusterConfiguration();
         this.peerStatusSupplier = peerStatusSupplier;
         this.lagThreshold = lagThreshold;
+        this.metricsRegistry = metricsRegistry;
 
         // Register configuration appliers.
         this.stateMachine.register(CommandType.ADD_VOTER, clusterConfiguration::applyAddVoter);
@@ -83,7 +86,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
             }
         }
 
-        this.raftNode = new RaftNode(self, raftLog, metadata, this, stateMachine, votingPeers, allPeers, isVotingMember);
+        this.raftNode = new RaftNode(self, raftLog, metadata, this, stateMachine, votingPeers, allPeers, isVotingMember, metricsRegistry);
     }
 
     public void start() {

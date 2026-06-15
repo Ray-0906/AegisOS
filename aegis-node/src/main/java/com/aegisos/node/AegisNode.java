@@ -60,9 +60,13 @@ public final class AegisNode implements AutoCloseable {
 
     private volatile boolean started;
     private MetricsServer metricsServer;
+    private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
+    private final com.aegisos.core.observability.TimelineRegistry timelineRegistry;
 
     public AegisNode(NodeConfig config) {
         this.config = config;
+        this.metricsRegistry = new com.aegisos.core.observability.MetricsRegistry();
+        this.timelineRegistry = new com.aegisos.core.observability.TimelineRegistry(1000);
         KeyStore keyStore = new KeyStore(config.homeDir());
         this.identity = IdentityService.bootstrap(keyStore);
         this.network = new NetworkLayer(identity, config.port(), config.advertiseHost());
@@ -104,7 +108,8 @@ public final class AegisNode implements AutoCloseable {
         consensus = new ConsensusModule(network, identity.nodeId(), config.raftDir(),
                 votingPeers, allPeers, isVotingMember, config.bootstrap(),
                 config.membershipLagThreshold(),
-                nodeId -> discovery.membership().statusOf(nodeId));
+                nodeId -> discovery.membership().statusOf(nodeId),
+                metricsRegistry);
 
         // 1. Construct all subsystems and wire dependencies
         artifactRegistry = new ArtifactRegistry();
@@ -135,8 +140,8 @@ public final class AegisNode implements AutoCloseable {
         }
 
         NodeResourcesView resourcesView = new NodeResourcesView();
-        runtimeAgent = new ProcessRuntimeAgent(consensus, network, identity.nodeId(), fileSystem,
-                artifactRegistry, artifactClassLoader, config.workspaceDir(), config.workspaceCleanupDelaySeconds());
+        this.runtimeAgent = new ProcessRuntimeAgent(consensus, network, identity.nodeId(),
+                fileSystem, artifactRegistry, artifactClassLoader, config.workspaceDir(), config.workspaceCleanupDelaySeconds(), metricsRegistry, timelineRegistry);
 
         long maxMem = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         int cores = Runtime.getRuntime().availableProcessors();
@@ -155,7 +160,7 @@ public final class AegisNode implements AutoCloseable {
 
         if (config.jobSupervisorEnabled()) {
             jobSupervisor = new JobSupervisor(discovery, consensus, scheduler,
-                    network, identity.nodeId(), runtimeAgent);
+                    network, identity.nodeId(), runtimeAgent, metricsRegistry);
         }
 
         processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId(), fileSystem);
@@ -228,6 +233,10 @@ public final class AegisNode implements AutoCloseable {
         return metricsServer;
     }
 
+    public com.aegisos.core.observability.MetricsRegistry metricsRegistry() {
+        return metricsRegistry;
+    }
+
     public DiscoveryService discovery() {
         return discovery;
     }
@@ -238,6 +247,14 @@ public final class AegisNode implements AutoCloseable {
 
     public AegisFS fileSystem() {
         return fileSystem;
+    }
+
+    public com.aegisos.core.observability.MetricsRegistry metricsRegistry() {
+        return metricsRegistry;
+    }
+
+    public com.aegisos.core.observability.TimelineRegistry timelineRegistry() {
+        return timelineRegistry;
     }
 
     public ArtifactRegistry artifactRegistry() {

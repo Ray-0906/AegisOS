@@ -59,6 +59,19 @@ public final class JobRegistry implements SnapshotParticipant {
     private final ConcurrentHashMap<String, JobRecord> jobs = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, JobCheckpointRecord> checkpoints = new ConcurrentHashMap<>();
     private final AtomicInteger invalidTransitionCount = new AtomicInteger();
+    private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
+    private final com.aegisos.core.observability.TimelineRegistry timelineRegistry;
+
+    public JobRegistry() {
+        this.metricsRegistry = null;
+        this.timelineRegistry = null;
+    }
+
+    public JobRegistry(com.aegisos.core.observability.MetricsRegistry metricsRegistry,
+                       com.aegisos.core.observability.TimelineRegistry timelineRegistry) {
+        this.metricsRegistry = metricsRegistry;
+        this.timelineRegistry = timelineRegistry;
+    }
 
     /** Returns the number of invalid state transitions observed (for test assertions). */
     public int invalidTransitionCount() {
@@ -88,7 +101,12 @@ public final class JobRegistry implements SnapshotParticipant {
         stateMachine.register(CommandType.SUBMIT_JOB, (index, cmd) -> {
             try {
                 JobRecord record = JobRecord.parseFrom(cmd.getPayload());
-                jobs.putIfAbsent(record.getSpec().getJobId(), record);
+                if (jobs.putIfAbsent(record.getSpec().getJobId(), record) == null) {
+                    updateGauge(JobState.JOB_UNKNOWN, record.getState(), record);
+                    if (timelineRegistry != null) {
+                        timelineRegistry.recordEvent(record.getSpec().getJobId(), com.aegisos.core.observability.JobEventType.SUBMITTED, null, "");
+                    }
+                }
             } catch (Exception e) {
                 log.warn("bad SUBMIT_JOB at {}", index);
             }
@@ -165,11 +183,71 @@ public final class JobRegistry implements SnapshotParticipant {
             if (!update.getError().isEmpty()) {
                 b.setError(update.getError());
             }
+            if (oldState != newState && isValidTransition(oldState, newState)) {
+                updateGauge(oldState, newState, b.build());
+                emitEvent(oldState, newState, b.build(), update);
+            }
+
             if (isTerminalState(newState)) {
                 b.setCompletedAt(System.currentTimeMillis());
             }
             return b.build();
         });
+    }
+
+    private void updateGauge(JobState oldState, JobState newState, JobRecord record) {
+        if (metricsRegistry == null) return;
+        if (oldState == JobState.QUEUED) metricsRegistry.gauge("aegis_jobs_queued").decrement();
+        if (newState == JobState.QUEUED) metricsRegistry.gauge("aegis_jobs_queued").increment();
+        
+        if (oldState == JobState.RUNNING) {
+            metricsRegistry.gauge("aegis_jobs_running").decrement();
+            if (record.getSpec().getRuntime() == com.aegisos.proto.RuntimeType.RUNTIME_CONTAINER) {
+                metricsRegistry.gauge("aegis_runtime_container_jobs_active").decrement();
+            } else {
+                metricsRegistry.gauge("aegis_runtime_jvm_jobs_active").decrement();
+            }
+        }
+        if (newState == JobState.RUNNING) {
+            metricsRegistry.gauge("aegis_jobs_running").increment();
+            if (record.getSpec().getRuntime() == com.aegisos.proto.RuntimeType.RUNTIME_CONTAINER) {
+                metricsRegistry.gauge("aegis_runtime_container_jobs_active").increment();
+            } else {
+                metricsRegistry.gauge("aegis_runtime_jvm_jobs_active").increment();
+            }
+        }
+        if (newState == JobState.COMPLETED) {
+            metricsRegistry.counter("aegis_jobs_completed_total").increment();
+        }
+    }
+
+    private void emitEvent(JobState oldState, JobState newState, JobRecord record, JobUpdate update) {
+        if (timelineRegistry == null) return;
+        com.aegisos.core.observability.JobEventType type = null;
+        String details = update != null && !update.getError().isEmpty() ? update.getError() : "";
+
+        if (newState == JobState.QUEUED) {
+            type = com.aegisos.core.observability.JobEventType.QUEUED;
+        } else if (newState == JobState.RUNNING) {
+            if (oldState == JobState.QUEUED) {
+                type = com.aegisos.core.observability.JobEventType.ASSIGNED;
+            } else {
+                type = com.aegisos.core.observability.JobEventType.STARTED;
+            }
+        } else if (newState == JobState.COMPLETED) {
+            type = com.aegisos.core.observability.JobEventType.COMPLETED;
+        } else if (newState == JobState.FAILED) {
+            type = com.aegisos.core.observability.JobEventType.FAILED;
+        } else if (newState == JobState.LOST) {
+            type = com.aegisos.core.observability.JobEventType.HEARTBEAT_LOST;
+        } else if (newState == JobState.CANCELLED) {
+            type = com.aegisos.core.observability.JobEventType.FENCED; // Or cancelled, mapped to fenced if we only have fenced
+        }
+
+        if (type != null) {
+            String nodeId = record.getAssignedNodeId().isEmpty() ? null : record.getAssignedNodeId().toStringUtf8();
+            timelineRegistry.recordEvent(record.getSpec().getJobId(), type, nodeId, details);
+        }
     }
 
     public Optional<JobRecord> get(String jobId) {

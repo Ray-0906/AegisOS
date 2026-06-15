@@ -47,6 +47,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     private final ConsensusModule consensus;
     private final NetworkLayer network;
     private final NodeId self;
+
     private final JobExecutor executor;
     private final JvmRuntimeBackend jvmBackend;
     private ContainerEngine containerEngine;
@@ -55,7 +56,8 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     private final AegisFS fileSystem;
     private final ArtifactRegistry artifactRegistry;
     private final ArtifactClassLoader artifactClassLoader;
-    private final JobRegistry registry = new JobRegistry();
+    private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
+    private final JobRegistry registry;
     private final AtomicInteger running = new AtomicInteger(0);
     private final ScheduledExecutorService cleanupExecutor =
             Executors.newSingleThreadScheduledExecutor(r -> {
@@ -90,7 +92,8 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
 
     public ProcessRuntimeAgent(ConsensusModule consensus, NetworkLayer network, NodeId self, AegisFS fileSystem,
                                ArtifactRegistry artifactRegistry, ArtifactClassLoader artifactClassLoader, java.nio.file.Path workspaceRoot,
-                               int workspaceCleanupDelaySeconds) {
+                               int workspaceCleanupDelaySeconds, com.aegisos.core.observability.MetricsRegistry metricsRegistry,
+                               com.aegisos.core.observability.TimelineRegistry timelineRegistry) {
         this.consensus = consensus;
         this.network = network;
         this.self = self;
@@ -98,6 +101,8 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         this.artifactClassLoader = artifactClassLoader;
         this.workspaceRoot = workspaceRoot;
         this.workspaceCleanupDelaySeconds = workspaceCleanupDelaySeconds;
+        this.metricsRegistry = metricsRegistry;
+        this.registry = new JobRegistry(metricsRegistry, timelineRegistry);
         this.executor = new JobExecutor(self, fileSystem, artifactClassLoader, workspaceRoot);
         this.jvmBackend = new JvmRuntimeBackend(this.executor);
         this.containerEngine = new com.aegisos.runtime.container.DockerEngine();
@@ -309,6 +314,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
 
         try {
             if (!update(jobId, executionId, JobState.RUNNING, null, null)) {
+                if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
                 log.warn("Execution {} of job {} failed to transition to RUNNING, discarding", executionId, jobId);
                 return;
             }
@@ -326,6 +332,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                     if (isSuperseded(jobId, executionId)) {
                         fencingDrops.incrementAndGet();
                         jobsSuperseded.incrementAndGet();
+                        if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
                         log.warn("Execution {} of job {} superseded, discarding result", executionId, jobId);
                         return;
                     }
@@ -415,6 +422,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             byte[] restoreState = null;
             if (!record.getCheckpointFileId().isEmpty()) {
                 if (!update(jobId, executionId, JobState.RESTORING, null, null)) {
+                    if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
                     log.warn("Execution {} of job {} failed to transition to RESTORING (likely superseded), discarding", executionId, jobId);
                     return;
                 }
@@ -428,6 +436,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             }
 
             if (!update(jobId, executionId, JobState.RUNNING, null, null)) {
+                if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
                 log.warn("Execution {} of job {} failed to transition to RUNNING (likely superseded), discarding", executionId, jobId);
                 return;
             }
@@ -445,6 +454,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                     CheckpointEnvelope env = CheckpointEnvelope.fromByteArray(payload);
                     checkpointSequence = env.sequence();
                     if (env.executionId() != record.getExecutionId()) {
+                        if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
                         log.warn("Dropped stale checkpoint for job {} (env execution {} != current {})", jobId, env.executionId(), record.getExecutionId());
                         return;
                     }
@@ -550,6 +560,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             if (isSuperseded(jobId, executionId)) {
                 fencingDrops.incrementAndGet();
                 jobsSuperseded.incrementAndGet();
+                if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
                 log.warn("Execution {} of job {} superseded, discarding result", executionId, jobId);
                 return;
             }
@@ -578,6 +589,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 } else {
                     fencingDrops.incrementAndGet();
                     jobsSuperseded.incrementAndGet();
+                    if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
                     log.warn("Execution {} of job {} superseded (failed path), discarding", executionId, jobId);
                 }
             }

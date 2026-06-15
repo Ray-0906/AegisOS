@@ -98,12 +98,30 @@ Intermittent errors — **not** present in latest shared-JVM suite (`suite_share
 
 ---
 
-## 4. v1.0+ features (not debt)
+## 4. Post-v1.1 Roadmap
 
-Separate from stabilization; design docs already exist:
+### v1.1 (Current - Feature Complete)
+- ✅ Log compaction
+- ✅ Worker lifecycle hardening
+- ✅ RPC correlation isolation
+- ✅ Dual runtime (JVM + Container)
 
-- **Container runtime** — `docs/V1_RUNTIME_DESIGN.md`
-- **Log compaction** — `docs/LOG_COMPACTION_DESIGN.md` (`LogCompactionTest` currently skipped)
+### v1.15 (Next Sprint: Observability)
+**Observability** is the highest ROI. Focus on stability and metrics:
+- `JobTimeline`, `ClusterHealth`, `LeaderElectionMetrics`, `LeaseMetrics`, `RuntimeMetrics`, `ContainerMetrics`
+- Expose `/metrics`, `/health`, `/jobs`
+
+### v1.2 (Persistent Runtime Ownership)
+Introduce `RuntimeRegistry` persisted in Raft.
+This unlocks true container recovery:
+`cluster restart` -> `reconstruct active runtimes` -> `attach/requeue deterministically`
+
+### v1.3 (Advanced Container Features)
+- CRIU checkpointing (true state resumption)
+- Digest-based trusted image execution (`alpine@sha256:...` instead of `alpine:latest` via `TrustedImage` record).
+
+### v2.0
+- Direct OCI (`runc`) support and remove Docker dependency.
 
 ---
 
