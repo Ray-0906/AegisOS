@@ -26,7 +26,7 @@ Sprint 3 → 0 P0/P1
 
 | Priority | Area                   | Example                                       | Status |
 | -------- | ---------------------- | --------------------------------------------- | ------ |
-| P0       | Flaky release blockers | `CorruptCheckpointRecoveryTest`, `Phase7Test` | Open   |
+| P0       | Flaky release blockers | `CorruptCheckpointRecoveryTest`, `Phase7Test` | Done   |
 | P1       | Chaos tests            | `ChaosSoakTest`, `WorkerFailure*`             | Open   |
 | P2       | Integration tests      | `LongRunningCheckpointChaosTest`, `Snapshot*` | Open   |
 | P3       | Benchmarks             | `PerformanceBenchmarks`                       | Defer  |
