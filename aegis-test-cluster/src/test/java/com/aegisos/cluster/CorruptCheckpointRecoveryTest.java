@@ -19,19 +19,20 @@ public class CorruptCheckpointRecoveryTest {
         System.setProperty("aegis.lease.duration.ms", "10000");
         try (ClusterHarness harness = new ClusterHarness()) {
             List<AegisNode> nodes = harness.start(3);
-            assertTrue(ClusterHarness.await(20_000, () ->
-                    nodes.stream().allMatch(n -> n.discovery().membership().aliveCount() == 3)
-                            && nodes.stream().anyMatch(n -> n.consensus().isLeader())));
+            com.aegisos.testing.ClusterAwaiter awaiter = new com.aegisos.testing.ClusterAwaiter(harness);
+            
+            awaiter.awaitQuorum(java.time.Duration.ofSeconds(20));
+            awaiter.awaitLeaderElection(java.time.Duration.ofSeconds(20));
 
             AegisNode submitter = nodes.get(0);
 
             JobHandle handle = submitter.api().getProcessManager().submit(new CheckpointableSum(50, 100), 1, 128);
             String jobId = handle.jobId();
 
-            assertTrue(ClusterHarness.await(10_000, () -> {
+            new com.aegisos.testing.EventAwaiter().withTimeout(java.time.Duration.ofSeconds(10)).await(() -> {
                 var chk = submitter.runtimeAgent().registry().getCheckpoint(jobId);
                 return chk.isPresent() && chk.get().metadata().getSequence() >= 2;
-            }), "Job should create some checkpoints");
+            });
 
             NodeId executorId = submitter.runtimeAgent().registry().get(jobId)
                     .map(JobRecord::getAssignedNodeId)
@@ -52,18 +53,13 @@ public class CorruptCheckpointRecoveryTest {
 
             // Stop the executor so the job gets requeued
             harness.stop(executor);
+            
+            // Wait for node death detection and lease expiration
+            awaiter.awaitNodeDeath(executorId, java.time.Duration.ofSeconds(20));
+            awaiter.awaitWorkerLeaseExpiration(executorId, java.time.Duration.ofSeconds(20));
 
-            AegisNode aliveNode = harness.nodes().stream()
-                    .filter(n -> !n.identity().nodeId().equals(executorId))
-                    .findFirst()
-                    .orElseThrow();
-
-            // Wait for lease to expire and job to transition to FAILED due to bad checkpoint
-            assertTrue(ClusterHarness.await(45_000, () -> {
-                JobState state = aliveNode.api().getProcessManager().status(jobId);
-                System.out.println("[TEST-DEBUG] Current state = " + state);
-                return state == JobState.FAILED;
-            }), "Job should fail after attempting to load corrupt checkpoint");
+            // Wait for job to transition to FAILED due to bad checkpoint
+            awaiter.awaitJobState(jobId, JobState.FAILED, java.time.Duration.ofSeconds(45));
         } finally {
             System.clearProperty("aegis.lease.duration.ms");
         }

@@ -67,6 +67,20 @@ public class ClusterAwaiter {
         });
     }
 
+    public void awaitArtifactReplication(String artifactId, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(() -> {
+            for (AegisNode node : harness.nodes()) {
+                // Wait until ALL nodes have the artifact in their registry
+                boolean hasIt = node.artifactRegistry().listAll().stream()
+                        .anyMatch(a -> a.getArtifactId().equals(artifactId));
+                if (!hasIt) {
+                    return false;
+                }
+            }
+            return true;
+        });
+    }
+
     public void awaitWorkerLeaseExpiration(NodeId nodeId, Duration timeout) throws TimeoutException, InterruptedException {
         new EventAwaiter().withTimeout(timeout).await(() -> {
             for (AegisNode node : harness.nodes()) {
