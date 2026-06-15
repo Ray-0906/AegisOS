@@ -18,7 +18,7 @@ public class CorruptCheckpointRecoveryTest {
     void testCorruptCheckpointFailsJob() throws Exception {
         System.setProperty("aegis.lease.duration.ms", "10000");
         try (ClusterHarness harness = new ClusterHarness()) {
-            List<AegisNode> nodes = harness.start(3);
+            List<AegisNode> nodes = harness.start(4);
             com.aegisos.testing.ClusterAwaiter awaiter = new com.aegisos.testing.ClusterAwaiter(harness);
             
             awaiter.awaitQuorum(java.time.Duration.ofSeconds(20));
@@ -44,18 +44,26 @@ public class CorruptCheckpointRecoveryTest {
                     .findFirst()
                     .orElseThrow();
 
-            // Find checkpoint file path
-            var chk = submitter.runtimeAgent().registry().getCheckpoint(jobId).get();
+            // Stop the executor so the job gets requeued and stops writing new checkpoints
+            harness.stop(executor);
+
+            // Find a node that is still alive to perform the read/write
+            AegisNode writerNode = nodes.stream()
+                    .filter(n -> !n.identity().nodeId().equals(executorId))
+                    .findFirst()
+                    .orElseThrow();
+
+            // Wait for node death detection BEFORE writing, so AegisFS doesn't try to replicate to the dead node
+            awaiter.awaitNodeDeath(executorId, java.time.Duration.ofSeconds(20));
+
+            // Find checkpoint file path from the alive node
+            var chk = writerNode.runtimeAgent().registry().getCheckpoint(jobId).get();
             String checkpointPath = chk.checkpointFileId();
 
             // Corrupt it
-            submitter.fileSystem().write(checkpointPath, new byte[]{0, 1, 2, 3}); // Truncated/corrupt byte array
-
-            // Stop the executor so the job gets requeued
-            harness.stop(executor);
+            writerNode.fileSystem().write(checkpointPath, new byte[]{0, 1, 2, 3}); // Truncated/corrupt byte array
             
-            // Wait for node death detection and lease expiration
-            awaiter.awaitNodeDeath(executorId, java.time.Duration.ofSeconds(20));
+            // Wait for lease expiration
             awaiter.awaitWorkerLeaseExpiration(executorId, java.time.Duration.ofSeconds(20));
 
             // Wait for job to transition to FAILED due to bad checkpoint
