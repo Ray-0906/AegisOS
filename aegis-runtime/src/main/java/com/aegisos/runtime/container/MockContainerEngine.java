@@ -85,4 +85,10 @@ public class MockContainerEngine implements ContainerEngine {
             c.stderr = stderr != null ? stderr : new byte[0];
         }
     }
+
+    public void completeAll(int exitCode, byte[] stdout, byte[] stderr) {
+        for (String id : containers.keySet()) {
+            complete(id, exitCode, stdout, stderr);
+        }
+    }
 }

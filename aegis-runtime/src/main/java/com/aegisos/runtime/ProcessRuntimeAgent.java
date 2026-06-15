@@ -27,6 +27,10 @@ import java.io.File;
 import java.nio.file.Files;
 import java.io.IOException;
 
+import com.aegisos.runtime.container.ContainerEngine;
+import com.aegisos.runtime.container.ImageRegistry;
+import com.aegisos.runtime.container.DockerRuntimeBackend;
+
 /**
  * Executes jobs assigned to this node (design section 3.7). Receives RUN_JOB, runs the
  * job on a virtual thread, and records state transitions (RUNNING -> COMPLETED/FAILED)
@@ -45,6 +49,9 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     private final NodeId self;
     private final JobExecutor executor;
     private final JvmRuntimeBackend jvmBackend;
+    private ContainerEngine containerEngine;
+    private ImageRegistry imageRegistry;
+    private DockerRuntimeBackend dockerBackend;
     private final AegisFS fileSystem;
     private final ArtifactRegistry artifactRegistry;
     private final ArtifactClassLoader artifactClassLoader;
@@ -93,6 +100,9 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         this.workspaceCleanupDelaySeconds = workspaceCleanupDelaySeconds;
         this.executor = new JobExecutor(self, fileSystem, artifactClassLoader, workspaceRoot);
         this.jvmBackend = new JvmRuntimeBackend(this.executor);
+        this.containerEngine = new com.aegisos.runtime.container.DockerEngine();
+        this.imageRegistry = new com.aegisos.runtime.container.MemoryImageRegistry();
+        this.dockerBackend = new com.aegisos.runtime.container.DockerRuntimeBackend(this.containerEngine, this.imageRegistry);
         this.fileSystem = fileSystem;
 
         // Startup crash cleanup
@@ -111,6 +121,15 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
 
     public void registerAppliers() {
         registry.registerWith(consensus.stateMachine());
+    }
+
+    public void setContainerEngine(ContainerEngine engine) {
+        this.containerEngine = engine;
+        this.dockerBackend = new com.aegisos.runtime.container.DockerRuntimeBackend(engine, this.imageRegistry);
+    }
+
+    public ImageRegistry getImageRegistry() {
+        return imageRegistry;
     }
 
     public void start() {
@@ -171,9 +190,12 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         });
     }
 
-    private void killProcessLocal(String jobId) {
+    public void killProcessLocal(String jobId) {
         log.info("Killing process for job {} locally", jobId);
         jvmBackend.cancelJob(jobId);
+        if (dockerBackend != null) {
+            dockerBackend.cancelJob(jobId);
+        }
     }
 
 
@@ -249,6 +271,110 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     }
 
     private void executeJob(JobRecord record) {
+        com.aegisos.proto.RuntimeType runtime = record.getSpec().getRuntime();
+        if (runtime == com.aegisos.proto.RuntimeType.RUNTIME_CONTAINER) {
+            executeContainerJob(record);
+        } else {
+            executeJvmJob(record);
+        }
+    }
+
+    private void executeContainerJob(JobRecord record) {
+        String jobId = record.getSpec().getJobId();
+        long executionId = record.getExecutionId();
+        if (shuttingDown) {
+            log.debug("Skipping container job {} execution {} because runtime is shutting down", jobId, executionId);
+            return;
+        }
+        running.incrementAndGet();
+
+        java.util.concurrent.ScheduledFuture<?> heartbeatTask;
+        try {
+            heartbeatTask = heartbeatScheduler.scheduleAtFixedRate(() -> {
+                try {
+                    com.aegisos.core.identity.NodeId leader = consensus.leaderId();
+                    if (leader != null) {
+                        com.aegisos.proto.JobHeartbeat hb = com.aegisos.proto.JobHeartbeat.newBuilder()
+                                .setJobId(jobId)
+                                .setExecutionId(executionId)
+                                .build();
+                        network.sendAsync(leader, com.aegisos.core.message.MessageType.JOB_HEARTBEAT, hb.toByteArray());
+                    }
+                } catch (Exception e) {}
+            }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            running.decrementAndGet();
+            return;
+        }
+
+        try {
+            if (!update(jobId, executionId, JobState.RUNNING, null, null)) {
+                log.warn("Execution {} of job {} failed to transition to RUNNING, discarding", executionId, jobId);
+                return;
+            }
+            jobsStarted.incrementAndGet();
+
+            java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
+            java.nio.file.Files.createDirectories(execRoot);
+
+            ExecutionHandle handle = dockerBackend.start(jobId, executionId, record, execRoot);
+
+            while (!shuttingDown) {
+                RuntimeStatus status = dockerBackend.status(handle);
+                if (status == RuntimeStatus.COMPLETED || status == RuntimeStatus.FAILED) {
+                    
+                    if (isSuperseded(jobId, executionId)) {
+                        fencingDrops.incrementAndGet();
+                        jobsSuperseded.incrementAndGet();
+                        log.warn("Execution {} of job {} superseded, discarding result", executionId, jobId);
+                        return;
+                    }
+
+                    java.util.Optional<ExecutionResult> resultOpt = dockerBackend.tryCollect(handle);
+                    if (resultOpt.isPresent()) {
+                        ExecutionResult res = resultOpt.get();
+                        if (status == RuntimeStatus.COMPLETED) {
+                            if (update(jobId, executionId, JobState.COMPLETED, null, null)) {
+                                jobsCompleted.incrementAndGet();
+                                log.info("Container job {} COMPLETED", jobId);
+                            }
+                        } else {
+                            if (isCurrentState(jobId, executionId, JobState.CANCELLED)) {
+                                log.info("Execution {} of job {} exited after cancellation; preserving CANCELLED state", executionId, jobId);
+                            } else {
+                                if (update(jobId, executionId, JobState.FAILED, null, new String(res.stderr()))) {
+                                    jobsFailed.incrementAndGet();
+                                    log.info("Container job {} FAILED", jobId);
+                                }
+                            }
+                        }
+                    } else {
+                        if (!isCurrentState(jobId, executionId, JobState.CANCELLED)) {
+                            update(jobId, executionId, JobState.FAILED, null, "Failed to collect container result");
+                        }
+                    }
+                    uploadJobLogsBestEffort(jobId, executionId);
+                    return;
+                }
+                Thread.sleep(100);
+            }
+        } catch (Exception e) {
+            if (shuttingDown) {
+                log.info("Container job {} aborted due to node shutdown.", jobId);
+            } else if (isCurrentState(jobId, executionId, JobState.CANCELLED)) {
+                log.info("Execution {} of job {} exited after cancellation; preserving CANCELLED state", executionId, jobId);
+            } else if (!isSuperseded(jobId, executionId)) {
+                log.error("Container job {} FAILED", jobId, e);
+                update(jobId, executionId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
+            }
+        } finally {
+            heartbeatTask.cancel(true);
+            running.decrementAndGet();
+            cleanupJobFiles(jobId, executionId);
+        }
+    }
+
+    private void executeJvmJob(JobRecord record) {
         String jobId = record.getSpec().getJobId();
         long executionId = record.getExecutionId();
         if (shuttingDown) {
@@ -668,6 +794,15 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         shuttingDown = true;
         // Cancel all active jobs to ensure child processes are killed
         jvmBackend.close();
+        try {
+            if (containerEngine instanceof com.aegisos.runtime.container.DockerEngine) {
+                // Not closing standard container engine
+            } else if (containerEngine instanceof com.aegisos.runtime.container.MockContainerEngine) {
+                // Cleanup mock if needed
+            }
+        } catch (Exception e) {
+            log.warn("Error closing container engine", e);
+        }
         heartbeatScheduler.shutdownNow();
         cleanupExecutor.shutdownNow();
         try {
