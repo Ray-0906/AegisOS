@@ -155,13 +155,81 @@ public final class ClusterHarness implements AutoCloseable {
         return found[0];
     }
 
-    private AegisNode currentLeader() {
+    public AegisNode currentLeader() {
         for (AegisNode existing : nodes) {
             if (existing.consensus().isLeader()) {
                 return existing;
             }
         }
         return null;
+    }
+
+    public boolean hasQuorum() {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            int alive = leader.discovery().membership().aliveCount();
+            return alive >= nodes.size() / 2 + 1;
+        }
+        return false;
+    }
+
+    public com.aegisos.proto.JobState getJobState(String jobId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var job = leader.runtimeAgent().registry().get(jobId);
+            if (job.isPresent()) {
+                return job.get().getState();
+            }
+        }
+        return null;
+    }
+
+    public boolean isJobPresent(String jobId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            return leader.runtimeAgent().registry().get(jobId).isPresent();
+        }
+        return false;
+    }
+
+    public boolean isArtifactReplicated(String artifactId) {
+        for (AegisNode node : nodes) {
+            boolean hasIt = node.artifactRegistry().listAll().stream()
+                    .anyMatch(a -> a.getArtifactId().equals(artifactId));
+            if (!hasIt) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public boolean isWorkerLeaseExpired(NodeId nodeId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var allJobs = leader.runtimeAgent().registry().all();
+            boolean hadJobs = false;
+            for (var j : allJobs) {
+                if (!j.getAssignedNodeId().isEmpty()) {
+                    NodeId assigned = NodeId.of(j.getAssignedNodeId().toByteArray());
+                    if (nodeId.equals(assigned)) {
+                        hadJobs = true;
+                        if (j.getState() == com.aegisos.proto.JobState.RUNNING || j.getState() == com.aegisos.proto.JobState.QUEUED) {
+                            return false; // Still active
+                        }
+                    }
+                }
+            }
+            return hadJobs; // Lease expired on all its jobs
+        }
+        return false;
+    }
+
+    public boolean isNodeDead(NodeId nodeId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            return leader.discovery().membership().statusOf(nodeId) == com.aegisos.proto.PeerStatus.DEAD;
+        }
+        return false;
     }
 
     private AegisNode currentLeaderSeeing(AegisNode node) {

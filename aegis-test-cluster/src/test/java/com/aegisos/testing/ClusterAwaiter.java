@@ -17,102 +17,30 @@ public class ClusterAwaiter {
     }
 
     public void awaitLeaderElection(Duration timeout) throws TimeoutException, InterruptedException {
-        new EventAwaiter().withTimeout(timeout).await(() -> {
-            for (AegisNode node : harness.nodes()) {
-                if (node.consensus().isLeader()) {
-                    return true;
-                }
-            }
-            return false;
-        });
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.currentLeader() != null);
     }
 
     public void awaitQuorum(Duration timeout) throws TimeoutException, InterruptedException {
-        new EventAwaiter().withTimeout(timeout).await(() -> {
-            for (AegisNode node : harness.nodes()) {
-                if (node.consensus().isLeader()) {
-                    int alive = node.discovery().membership().aliveCount();
-                    if (alive >= harness.nodes().size() / 2 + 1) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        });
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.hasQuorum());
     }
 
     public void awaitJobState(String jobId, JobState state, Duration timeout) throws TimeoutException, InterruptedException {
-        new EventAwaiter().withTimeout(timeout).await(() -> {
-            for (AegisNode node : harness.nodes()) {
-                if (node.consensus().isLeader()) {
-                    var job = node.runtimeAgent().registry().get(jobId);
-                    if (job.isPresent() && job.get().getState() == state) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        });
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.getJobState(jobId) == state);
     }
 
     public void awaitReplication(String jobId, Duration timeout) throws TimeoutException, InterruptedException {
-        new EventAwaiter().withTimeout(timeout).await(() -> {
-            for (AegisNode node : harness.nodes()) {
-                if (node.consensus().isLeader()) {
-                    var job = node.runtimeAgent().registry().get(jobId);
-                    return job.isPresent();
-                }
-            }
-            return false;
-        });
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.isJobPresent(jobId));
     }
 
     public void awaitArtifactReplication(String artifactId, Duration timeout) throws TimeoutException, InterruptedException {
-        new EventAwaiter().withTimeout(timeout).await(() -> {
-            for (AegisNode node : harness.nodes()) {
-                // Wait until ALL nodes have the artifact in their registry
-                boolean hasIt = node.artifactRegistry().listAll().stream()
-                        .anyMatch(a -> a.getArtifactId().equals(artifactId));
-                if (!hasIt) {
-                    return false;
-                }
-            }
-            return true;
-        });
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.isArtifactReplicated(artifactId));
     }
 
     public void awaitWorkerLeaseExpiration(NodeId nodeId, Duration timeout) throws TimeoutException, InterruptedException {
-        new EventAwaiter().withTimeout(timeout).await(() -> {
-            for (AegisNode node : harness.nodes()) {
-                if (node.consensus().isLeader()) {
-                    var allJobs = node.runtimeAgent().registry().all();
-                    boolean hadJobs = false;
-                    for (var j : allJobs) {
-                        if (!j.getAssignedNodeId().isEmpty()) {
-                            NodeId assigned = NodeId.of(j.getAssignedNodeId().toByteArray());
-                            if (nodeId.equals(assigned)) {
-                                hadJobs = true;
-                                if (j.getState() == JobState.RUNNING || j.getState() == JobState.QUEUED) {
-                                    return false; // Still active
-                                }
-                            }
-                        }
-                    }
-                    return hadJobs; // Lease expired on all its jobs
-                }
-            }
-            return false;
-        });
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.isWorkerLeaseExpired(nodeId));
     }
 
     public void awaitNodeDeath(NodeId nodeId, Duration timeout) throws TimeoutException, InterruptedException {
-        new EventAwaiter().withTimeout(timeout).await(() -> {
-            for (AegisNode node : harness.nodes()) {
-                if (node.consensus().isLeader()) {
-                    return node.discovery().membership().statusOf(nodeId) == com.aegisos.proto.PeerStatus.DEAD;
-                }
-            }
-            return false;
-        });
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.isNodeDead(nodeId));
     }
 }

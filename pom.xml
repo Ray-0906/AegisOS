@@ -187,8 +187,6 @@
                         <configuration>
                             <excludes>
                                 <exclude>**/*ChaosTest.java</exclude>
-                                <exclude>**/Phase*Test.java</exclude>
-                                <exclude>**/*Network*.java</exclude>
                             </excludes>
                         </configuration>
                     </plugin>
