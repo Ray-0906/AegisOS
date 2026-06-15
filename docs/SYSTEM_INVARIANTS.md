@@ -56,3 +56,6 @@ New tests must use `EventAwaiter`, `TestBarrier`, `ClusterAwaiter`, or `TestCloc
 
 **INV-015: Quarantined tests are temporary, never permanent.**
 Every quarantined test must have an owner and a target milestone for resolution. Quarantine is a triage mechanism, not a disposal mechanism.
+
+**INV-016: Tests must synchronize on observable events, never on elapsed time.**
+Do not use time-based sleeps. All waits must be predicated on explicit cluster state changes, replications, or log appends.

@@ -2,6 +2,23 @@
 
 This document tracks `Thread.sleep()` usages in production-quality test suites that should be replaced with deterministic synchronization primitives.
 
+```text
+TEST_DEBT SNAPSHOT (v1.2 start)
+
+Production suites:
+Thread.sleep usages: 60
+
+P0: 2
+P1: 12
+P2: 28
+P3: 18
+
+Target:
+Sprint 1 → <40
+Sprint 2 → <20
+Sprint 3 → 0 P0/P1
+```
+
 **Scope:** `aegis-test-cluster`, `aegis-runtime`, `aegis-network` integration tests only.
 **Out of scope:** `aegis-cli`, demo jobs, benchmarks, experimental tests.
 
