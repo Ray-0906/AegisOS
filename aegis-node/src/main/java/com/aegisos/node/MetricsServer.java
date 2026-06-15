@@ -95,16 +95,22 @@ public final class MetricsServer implements AutoCloseable {
             String path = exchange.getRequestURI().getPath();
             String query = exchange.getRequestURI().getQuery();
             try {
+                String[] parts = path.split("/");
+                // path "/jobs" gives parts=["", "jobs"]
+                // path "/jobs/123" gives parts=["", "jobs", "123"]
                 String json;
-                if ("/jobs".equals(path) || "/jobs/".equals(path)) {
+                if (parts.length == 2 && "jobs".equals(parts[1])) {
                     json = buildJobsJson(query);
-                } else {
-                    String jobId = path.substring(path.startsWith("/jobs/") ? 6 : 5);
+                } else if (parts.length == 3 && "jobs".equals(parts[1])) {
+                    String jobId = parts[2];
                     json = buildJobJson(jobId);
                     if (json == null) {
                         exchange.sendResponseHeaders(404, -1);
                         return;
                     }
+                } else {
+                    exchange.sendResponseHeaders(404, -1);
+                    return;
                 }
                 byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
@@ -533,18 +539,29 @@ server.createContext("/raft/metrics", exchange -> {
         String role = isLeader ? "LEADER" : (leaderId != null ? "FOLLOWER" : "CANDIDATE");
         int aliveNodes = node.discovery().membership().aliveCount();
 
-        return String.format("""
-                {
-                  "nodeId"      : "%s",
-                  "role"        : "%s",
-                  "leader"      : %s,
-                  "term"        : %d,
-                  "commitIndex" : %d,
-                  "aliveNodes"  : %d
-                }
-                """,
-                nodeId, role, leaderId == null ? "null" : "\"" + leaderId + "\"",
-                term, commitIndex, aliveNodes);
+        java.util.List<String> followers = new java.util.ArrayList<>();
+        java.util.List<String> deadNodes = new java.util.ArrayList<>();
+        for (var member : node.discovery().membership().allPeers()) {
+            String peerShortId = com.aegisos.core.identity.NodeId.of(member.getNodeId().toByteArray()).shortId();
+            if (peerShortId.equals(nodeId)) continue;
+            if (member.getStatus() == com.aegisos.proto.PeerStatus.ALIVE) {
+                followers.add(peerShortId);
+            } else {
+                deadNodes.add(peerShortId);
+            }
+        }
+
+        java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
+        map.put("nodeId", nodeId);
+        map.put("role", role);
+        map.put("leader", leaderId);
+        map.put("term", term);
+        map.put("commitIndex", commitIndex);
+        map.put("aliveNodes", aliveNodes);
+        map.put("followers", followers);
+        map.put("deadNodes", deadNodes);
+
+        return com.aegisos.core.util.JsonBuilder.object(map);
     }
 
     private String buildJobsJson(String query) {
@@ -574,16 +591,14 @@ server.createContext("/raft/metrics", exchange -> {
             stream = stream.limit(limit);
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("[\n");
-        boolean first = true;
+        java.util.List<java.util.Map<String, Object>> jobsList = new java.util.ArrayList<>();
         for (JobRecord job : stream.toList()) {
-            if (!first) sb.append(",\n");
-            first = false;
-            sb.append(String.format("  {\"id\": \"%s\", \"state\": \"%s\"}", job.getSpec().getJobId(), job.getState().name()));
+            java.util.Map<String, Object> jMap = new java.util.LinkedHashMap<>();
+            jMap.put("id", job.getSpec().getJobId());
+            jMap.put("state", job.getState().name());
+            jobsList.add(jMap);
         }
-        sb.append("\n]");
-        return sb.toString();
+        return com.aegisos.core.util.JsonBuilder.array(jobsList);
     }
 
     private String buildJobJson(String jobId) {
@@ -591,38 +606,29 @@ server.createContext("/raft/metrics", exchange -> {
         if (maybeJob.isEmpty()) return null;
         JobRecord job = maybeJob.get();
         
-        StringBuilder eventsJson = new StringBuilder();
-        eventsJson.append("[");
+        java.util.List<java.util.Map<String, Object>> events = new java.util.ArrayList<>();
         if (node.timelineRegistry() != null) {
             java.util.Optional<com.aegisos.core.observability.JobTimeline> maybeTimeline = node.timelineRegistry().getTimeline(jobId);
             if (maybeTimeline.isPresent()) {
-                boolean firstEvent = true;
                 for (com.aegisos.core.observability.JobTimelineEvent e : maybeTimeline.get().getEvents()) {
-                    if (!firstEvent) eventsJson.append(", ");
-                    firstEvent = false;
-                    eventsJson.append(String.format("{\"timestamp\": %d, \"type\": \"%s\", \"node\": %s, \"details\": \"%s\"}",
-                            e.timestampMs(), e.type().name(),
-                            e.nodeId() == null ? "null" : "\"" + e.nodeId() + "\"",
-                            escapeJson(e.details())));
+                    java.util.Map<String, Object> eMap = new java.util.LinkedHashMap<>();
+                    eMap.put("timestamp", e.timestampMs());
+                    eMap.put("type", e.type().name());
+                    eMap.put("node", e.nodeId());
+                    eMap.put("details", e.details());
+                    events.add(eMap);
                 }
             }
         }
-        eventsJson.append("]");
 
-        return String.format("""
-                {
-                  "id": "%s",
-                  "state": "%s",
-                  "assignedNode": %s,
-                  "error": "%s",
-                  "timeline": %s
-                }
-                """,
-                job.getSpec().getJobId(),
-                job.getState().name(),
-                job.getAssignedNodeId().isEmpty() ? "null" : "\"" + job.getAssignedNodeId().toStringUtf8() + "\"",
-                escapeJson(job.getError()),
-                eventsJson.toString());
+        java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
+        map.put("id", job.getSpec().getJobId());
+        map.put("state", job.getState().name());
+        map.put("assignedNode", job.getAssignedNodeId().isEmpty() ? null : com.aegisos.core.identity.NodeId.of(job.getAssignedNodeId().toByteArray()).shortId());
+        map.put("error", job.getError());
+        map.put("timeline", events);
+
+        return com.aegisos.core.util.JsonBuilder.object(map);
     }
 
     private static String escapeJson(String s) {

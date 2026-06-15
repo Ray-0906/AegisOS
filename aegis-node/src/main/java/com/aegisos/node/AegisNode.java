@@ -237,6 +237,10 @@ public final class AegisNode implements AutoCloseable {
         return metricsRegistry;
     }
 
+    public com.aegisos.core.observability.TimelineRegistry timelineRegistry() {
+        return timelineRegistry;
+    }
+
     public DiscoveryService discovery() {
         return discovery;
     }
@@ -249,13 +253,6 @@ public final class AegisNode implements AutoCloseable {
         return fileSystem;
     }
 
-    public com.aegisos.core.observability.MetricsRegistry metricsRegistry() {
-        return metricsRegistry;
-    }
-
-    public com.aegisos.core.observability.TimelineRegistry timelineRegistry() {
-        return timelineRegistry;
-    }
 
     public ArtifactRegistry artifactRegistry() {
         return artifactRegistry;
