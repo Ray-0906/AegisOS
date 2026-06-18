@@ -70,12 +70,7 @@ public class LeaderFailoverDuringRecoveryTest {
                     nodes.stream().allMatch(n -> n.discovery().membership().aliveCount() == 5)
                             && nodes.stream().anyMatch(n -> n.consensus().isLeader())));
 
-            AegisNode tempLeader = null;
-            while (tempLeader == null) {
-                tempLeader = nodes.stream().filter(n -> n.consensus().isLeader()).findFirst().orElse(null);
-                if (tempLeader == null) Thread.sleep(10);
-            }
-            final AegisNode leader = tempLeader;
+            final AegisNode leader = nodes.stream().filter(n -> n.consensus().isLeader()).findFirst().orElseThrow();
 
             // Use 30s sleep to prevent the job from finishing before failover happens.
             JobHandle handle = leader.api().getProcessManager().submit(new SleepJob(30_000), 1, 128);

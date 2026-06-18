@@ -121,3 +121,23 @@ ENV-001
 Compiler, IDE, filesystem, and build cache corruption
 are environment failures, not test outcomes.
 Discard the run entirely.
+
+REF-002
+Do not replace an existing invariant with a weaker one unless
+you can prove the stronger invariant is unnecessary.
+
+REF-003
+100/100 reliability is not sufficient justification for refactoring.
+A refactor requires at least one of:
+- arbitrary sleep
+- hidden contract
+- subsystem leakage
+- duplicated synchronization logic
+- overly strong invariant proven unnecessary
+
+Otherwise, close the work item.
+
+REF-004
+Do not create framework primitives preemptively.
+A new awaiter requires evidence of reuse or necessity.
+One test != one awaiter.
