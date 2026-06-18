@@ -505,6 +505,79 @@ public final class ClientCommands {
 
 
 
+    static int runCluster(List<String> seeds) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis cluster: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                try {
+                    Thread.sleep(500); // allow raft catch-up
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+
+                String leaderIdHex = node.consensus().leaderId() != null 
+                        ? com.aegisos.core.util.HexUtil.shortId(node.consensus().leaderId().toBytes()) 
+                        : "NONE";
+                long term = node.consensus().raftNode().currentTerm();
+
+                System.out.println("Cluster");
+                System.out.println("-------");
+                System.out.println("Leader: " + leaderIdHex);
+                System.out.println("Term: " + term);
+                System.out.println("\nNodes");
+                System.out.println("-----");
+
+                java.util.Set<com.aegisos.core.identity.NodeId> voters = node.consensus().clusterConfiguration().voters();
+                int aliveVoters = 0;
+
+                for (com.aegisos.proto.PeerEntry p : node.discovery().membership().allPeers()) {
+                    com.aegisos.core.identity.NodeId peerId = com.aegisos.core.identity.NodeId.of(p.getNodeId().toByteArray());
+                    if (!voters.contains(peerId)) {
+                        continue; // Only print cluster members (voters) for clarity, skip transient clients
+                    }
+                    String idStr = peerId.shortId();
+                    String roleStr = peerId.equals(node.consensus().leaderId()) ? "LEADER" : "FOLLOWER";
+                    
+                    if (p.getStatus() == com.aegisos.proto.PeerStatus.ALIVE) {
+                        aliveVoters++;
+                    }
+                    System.out.printf("%-10s %-10s %s%n", idStr, roleStr, p.getStatus());
+                }
+
+                System.out.println("\nQuorum: " + aliveVoters + "/" + voters.size());
+                return 0;
+            });
+        } catch (Exception e) {
+            System.err.println("aegis cluster failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    static int runHealth(List<String> seeds) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis health: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                com.aegisos.api.HealthSnapshot health = node.health();
+                System.out.printf("%-11s %s%n", "Discovery", health.discoveryOk() ? "OK" : "DEGRADED");
+                System.out.printf("%-11s %s%n", "Consensus", health.consensusOk() ? "OK" : "DEGRADED");
+                System.out.printf("%-11s %s%n", "Scheduler", health.schedulerOk() ? "OK" : "DEGRADED");
+                System.out.printf("%-11s %s%n", "Runtime", health.runtimeOk() ? "OK" : "DEGRADED");
+                System.out.printf("%-11s %s%n", "Storage", health.storageOk() ? "OK" : "DEGRADED");
+                System.out.println("\nOverall: " + (health.isHealthy() ? "HEALTHY" : "DEGRADED"));
+                return 0;
+            });
+        } catch (Exception e) {
+            System.err.println("aegis health failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
     private static int notReady(String cmd) {
         System.err.println("aegis " + cmd + ": not available in this build");
         return 2;

@@ -141,3 +141,31 @@ REF-004
 Do not create framework primitives preemptively.
 A new awaiter requires evidence of reuse or necessity.
 One test != one awaiter.
+
+REF-005
+A completed refactor wave is immutable.
+Do not re-open a wave to "look for more opportunities".
+New refactors require an explicit trigger:
+- historical flake
+- production bug
+- repeated code pattern (>=3 occurrences)
+- reliability freeze violation
+- architectural ADR
+Otherwise, stop.
+
+REL-001
+Do not automatically commit after successful verification.
+A successful staircase proves correctness.
+The user decides when a checkpoint becomes a commit.
+
+## Observability Rules
+
+OBS-001
+Every observability feature must answer a real operational question.
+Bad: "Expose all metrics."
+Good: "Who is leader?" "Why is this job stuck?" "Is the cluster healthy?"
+
+OBS-002
+Observability must be read-only.
+Observability features must never alter system state.
+Commands may inspect, aggregate, and report, but never mutate.

@@ -80,3 +80,10 @@ The following rules guard against premature abstraction and over-refactoring.
 
 *   **REL-001**: Do not automatically commit after successful verification. A successful staircase proves correctness. The user decides when a checkpoint becomes a commit.
 *   **ENV-001**: Compiler, IDE, filesystem, and build cache corruption are environment failures, not test outcomes. Discard the run entirely.
+
+---
+
+## 6. Observability Rules
+
+*   **OBS-001**: Every observability feature must answer a real operational question (e.g. "Who is leader?", "Why is this job stuck?").
+*   **OBS-002**: Observability must be read-only. Observability features must never alter system state. Commands may inspect, aggregate, and report, but never mutate.

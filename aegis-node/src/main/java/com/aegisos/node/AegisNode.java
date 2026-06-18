@@ -323,6 +323,19 @@ public final class AegisNode implements AutoCloseable {
         return isReady() && consensus() != null && consensus().leaderId() != null;
     }
 
+    public com.aegisos.api.HealthSnapshot health() {
+        if (!started) {
+            return new com.aegisos.api.HealthSnapshot(false, false, false, false, false);
+        }
+        boolean discOk = discovery != null && discovery.membership().allPeers().size() > 0;
+        boolean consOk = consensus != null && consensus.leaderId() != null;
+        boolean schedOk = scheduler != null; // Scheduler doesn't have an explicit isStarted hook, but existence in started node implies OK
+        boolean runtimeOk = runtimeAgent != null;
+        boolean storageOk = fileSystem != null;
+        
+        return new com.aegisos.api.HealthSnapshot(discOk, consOk, schedOk, runtimeOk, storageOk);
+    }
+
     @Override
     public synchronized void close() {
         if (!started) {
