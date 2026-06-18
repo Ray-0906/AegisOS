@@ -1,5 +1,10 @@
 # AegisOS v0.95 Architecture Diagrams
 
+> [!WARNING]
+> **Historical Document**
+> This file is preserved as an Architecture Decision Record (ADR) representing the v0.95 snapshot. It is NOT the active source of truth.
+> - For active static topology, see `../ARCHITECTURE.md`.
+> - For active temporal behaviors, see `LIFECYCLE.md`.
 ---
 
 ## Table of Contents
