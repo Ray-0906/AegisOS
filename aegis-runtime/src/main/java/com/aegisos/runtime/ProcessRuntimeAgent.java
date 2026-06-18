@@ -372,6 +372,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 log.info("Execution {} of job {} exited after cancellation; preserving CANCELLED state", executionId, jobId);
             } else if (!isSuperseded(jobId, executionId)) {
                 log.error("Container job {} FAILED", jobId, e);
+                System.err.println("INSTRUMENT: JOB_FAILED_EMIT");
                 update(jobId, executionId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
             }
         } finally {
@@ -429,7 +430,9 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 try {
                     restoreState = fileSystem.read(record.getCheckpointFileId());
                 } catch (Exception e) {
+                    System.err.println("INSTRUMENT: CHECKPOINT_DESERIALIZE_FAIL at " + System.currentTimeMillis());
                     log.error("Failed to load checkpoint for job {}, marking FAILED", jobId, e);
+                    System.err.println("INSTRUMENT: JOB_FAILED_EMIT");
                     update(jobId, executionId, JobState.FAILED, null, "Failed to load checkpoint: " + e.getMessage());
                     return;
                 }
@@ -579,6 +582,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             } else {
                 if (!isSuperseded(jobId, executionId)) {
                     log.error("Job {} FAILED", jobId, e);
+                    System.err.println("INSTRUMENT: JOB_FAILED_EMIT");
                     // Commit terminal state BEFORE non-essential work
                     if (update(jobId, executionId, JobState.FAILED, null,
                             e.getMessage() == null ? "error" : e.getMessage())) {
@@ -613,34 +617,22 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 .setPayload(b.build().toByteString())
                 .build();
 
-        long deadline = System.currentTimeMillis() + UPDATE_RETRY_WINDOW_MS;
-        Exception lastFailure = null;
-        while (!shuttingDown && System.currentTimeMillis() < deadline) {
-            if (isSuperseded(jobId, executionId)) {
-                log.info("Skipping {} update for superseded execution {} of job {}", state, executionId, jobId);
-                return false;
-            }
-            try {
-                consensus.propose(cmd).get(10, TimeUnit.SECONDS);
-                return true;
-            } catch (Exception e) {
-                lastFailure = e;
-                try {
-                    Thread.sleep(UPDATE_RETRY_DELAY_MS);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    lastFailure = interrupted;
-                    break;
-                }
-            }
-        }
         if (shuttingDown) {
             log.debug("Skipping {} update for job {} execution {} during shutdown", state, jobId, executionId);
             return false;
         }
-        log.error("Failed to commit {} for job {} execution {} after retries",
-                state, jobId, executionId, lastFailure);
-        return false;
+        if (isSuperseded(jobId, executionId)) {
+            log.info("Skipping {} update for superseded execution {} of job {}", state, executionId, jobId);
+            return false;
+        }
+
+        try {
+            consensus.propose(cmd).get(10, TimeUnit.SECONDS);
+            return true;
+        } catch (Exception e) {
+            log.debug("Failed to commit {} for job {} execution {}: {}", state, jobId, executionId, e.getMessage());
+            return false;
+        }
     }
 
     /**

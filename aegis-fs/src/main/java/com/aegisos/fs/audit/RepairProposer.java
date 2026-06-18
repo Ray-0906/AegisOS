@@ -111,10 +111,15 @@ public final class RepairProposer {
                     .build();
 
             try {
-                consensus.propose(stateCmd).get(5, TimeUnit.SECONDS);
+                consensus.propose(stateCmd).whenComplete((idx, e) -> {
+                    if (e != null) {
+                        log.warn("Failed to propose REPAIR_CHUNK for chunk {}: {}", chunkIdHex, e.toString());
+                    } else {
+                        log.info("Successfully proposed REPAIR_CHUNK for chunk {} with repairId {}", chunkIdHex, repairId);
+                    }
+                });
                 proposedRepairIds.add(repairId);
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.REPAIR_PROPOSED, "REPAIR_CHUNK proposed and committed", repairId));
-                log.info("Successfully proposed REPAIR_CHUNK for chunk {} with repairId {}", chunkIdHex, repairId);
+                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.REPAIR_PROPOSED, "REPAIR_CHUNK proposed", repairId));
             } catch (java.util.concurrent.RejectedExecutionException e) {
                 outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Raft executor shutting down", repairId));
                 log.debug("Failed to propose REPAIR_CHUNK for chunk {} (node shutting down)", chunkIdHex);
@@ -217,10 +222,15 @@ public final class RepairProposer {
                     .build();
 
             try {
-                consensus.propose(stateCmd).get(5, TimeUnit.SECONDS);
+                consensus.propose(stateCmd).whenComplete((idx, e) -> {
+                    if (e != null) {
+                        log.warn("Failed to propose REPAIR_COMPLETE for chunk {}: {}", chunkIdHex, e.toString());
+                    } else {
+                        log.info("Successfully completed repair for chunk {}, target: {}", chunkIdHex, target.shortId());
+                    }
+                });
                 proposedRepairIds.remove(task.repairId());
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.COPY_SUCCEEDED, "REPAIR_COMPLETE proposed and committed", task.repairId()));
-                log.info("Successfully completed repair for chunk {}, target: {}", chunkIdHex, target.shortId());
+                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.COPY_SUCCEEDED, "REPAIR_COMPLETE proposed", task.repairId()));
             } catch (java.util.concurrent.RejectedExecutionException e) {
                 outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Raft executor shutting down", task.repairId()));
                 log.debug("Failed to propose REPAIR_COMPLETE for chunk {} (node shutting down)", chunkIdHex);

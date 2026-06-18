@@ -49,7 +49,17 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     private final HandshakeHandler handshakeHandler;
     private final TcpConnectionPool pool = new TcpConnectionPool();
     private final Map<MessageType, MessageHandler> handlers = new ConcurrentHashMap<>();
-    private final Map<Long, CompletableFuture<AegisMessage>> pending = new ConcurrentHashMap<>();
+    private static class PendingRequest {
+        final NodeId target;
+        final CompletableFuture<AegisMessage> future;
+        
+        PendingRequest(NodeId target, CompletableFuture<AegisMessage> future) {
+            this.target = target;
+            this.future = future;
+        }
+    }
+
+    private final Map<Long, PendingRequest> pending = new ConcurrentHashMap<>();
     private final AtomicLong correlationCounter = new AtomicLong(1);
 
     private static volatile java.util.function.BiPredicate<NodeId, NodeId> messageFilter = (from, to) -> true;
@@ -232,7 +242,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         }
         long correlation = correlationCounter.getAndIncrement();
         CompletableFuture<AegisMessage> future = new CompletableFuture<>();
-        pending.put(correlation, future);
+        pending.put(correlation, new PendingRequest(nodeId, future));
         try {
             conn.get().send(type, payload, correlation, false);
         } catch (IOException e) {
@@ -257,9 +267,9 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         // This is always safe: future.complete() is non-blocking.
         // ----------------------------------------------------------------
         if (correlation != 0 && isResponse) {
-            CompletableFuture<AegisMessage> waiting = pending.remove(correlation);
-            if (waiting != null) {
-                waiting.complete(message);
+            PendingRequest req = pending.remove(correlation);
+            if (req != null) {
+                req.future.complete(message);
                 return;
             }
         }
@@ -314,8 +324,23 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     @Override
     public void onConnectionClosed(PeerConnection connection) {
+        NodeId remote = connection.remoteNodeId();
         if (pool.isWinner(connection)) {
-            pool.remove(connection.remoteNodeId());
+            pool.remove(remote);
+        }
+        
+        java.util.List<Long> toFail = new java.util.ArrayList<>();
+        pending.forEach((corr, req) -> {
+            if (req.target.equals(remote)) {
+                toFail.add(corr);
+            }
+        });
+        
+        for (Long corr : toFail) {
+            PendingRequest req = pending.remove(corr);
+            if (req != null) {
+                req.future.completeExceptionally(new IOException("Connection to " + remote.shortId() + " closed"));
+            }
         }
     }
 
@@ -339,7 +364,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
             server.close();
         }
         pool.closeAll();
-        pending.values().forEach(f -> f.completeExceptionally(new IOException("network closed")));
+        pending.values().forEach(req -> req.future.completeExceptionally(new IOException("network closed")));
         pending.clear();
     }
 

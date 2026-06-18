@@ -60,7 +60,7 @@ public final class AegisFS implements AutoCloseable {
         this.replicationFactor = replicationFactor;
         this.cipher = new ChunkCipher(clusterKey);
         this.store = new ChunkStore(chunkDir);
-        this.replicator = new ChunkReplicator(network, store, self);
+        this.replicator = new ChunkReplicator(network, store, self, discovery);
         this.placement = new ChunkPlacement(discovery, self);
         
         this.localHealth = new LocalHealthStore(chunkDir);

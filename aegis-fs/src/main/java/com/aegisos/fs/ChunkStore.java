@@ -34,7 +34,7 @@ public final class ChunkStore {
 
     public void put(byte[] chunkId, byte[] data) {
         try {
-            Path tmp = dir.resolve(HexUtil.encode(chunkId) + ".tmp");
+            Path tmp = dir.resolve(HexUtil.encode(chunkId) + "." + java.util.UUID.randomUUID() + ".tmp");
             Files.write(tmp, data);
             Files.move(tmp, pathFor(chunkId), java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                     java.nio.file.StandardCopyOption.ATOMIC_MOVE);

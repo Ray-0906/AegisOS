@@ -45,6 +45,9 @@ public final class StorageAuditScheduler implements AutoCloseable {
     private final java.util.function.BooleanSupplier isLeader;
     private final AuditReportStore store;
     private final AtomicLong scanCounter = new AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicBoolean isScanning = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final java.util.concurrent.ExecutorService workerExecutor = java.util.concurrent.Executors.newThreadPerTaskExecutor(
+            Thread.ofVirtual().name("aegis-audit-worker-", 0).factory());
 
     private volatile List<VerificationResult> currentVerifications = Collections.emptyList();
     private volatile List<RepairRecommendation> currentRecommendations = Collections.emptyList();
@@ -81,11 +84,19 @@ public final class StorageAuditScheduler implements AutoCloseable {
     }
 
     private void runOnceSafe() {
-        try {
-            runOnce();
-        } catch (Exception e) {
-            log.warn("Storage audit cycle error: {}", e.toString());
+        if (!isScanning.compareAndSet(false, true)) {
+            log.debug("Skipping audit cycle: previous scan still running");
+            return;
         }
+        workerExecutor.submit(() -> {
+            try {
+                runOnce();
+            } catch (Exception e) {
+                log.warn("Storage audit cycle error: {}", e.toString());
+            } finally {
+                isScanning.set(false);
+            }
+        });
     }
 
     /**

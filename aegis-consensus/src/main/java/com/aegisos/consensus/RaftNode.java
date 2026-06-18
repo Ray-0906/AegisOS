@@ -276,6 +276,10 @@ public final class RaftNode {
 
     // --- client submission ----------------------------------------------
 
+    public int getPendingCount() {
+        return pending.size();
+    }
+
     /** Leader-only: appends a command and completes when it is committed. */
     public CompletableFuture<Long> submit(byte[] command) {
         CompletableFuture<Long> future;

@@ -59,3 +59,40 @@ Every quarantined test must have an owner and a target milestone for resolution.
 
 **INV-016: Tests must synchronize on observable events, never on elapsed time.**
 Do not use time-based sleeps. All waits must be predicated on explicit cluster state changes, replications, or log appends.
+
+## Distributed RPC Liveness
+
+**INV-017: Distributed RPCs must fail fast.**
+Subsystems must not wait on nodes known to be dead. Dead node detection or connection closure must immediately fail pending RPC futures. (See ADR-024.)
+
+**INV-018: Runtime worker threads must never block attempting to repair consensus failures.**
+Execution threads (e.g. `ProcessRuntimeAgent`) and periodic schedulers must not wrap consensus proposals in internal retry loops (`Thread.sleep()`). They must fail fast and defer retries to the next natural execution cadence.
+
+**INV-019: Periodic schedulers are best-effort systems.**
+Missing one cycle is acceptable. Blocking a scheduler thread is forbidden. Examples of best-effort schedulers include `RepairProposer`, `ObservedStateCollector`, and `HealthMonitor`.
+
+## Test Timing
+
+**INV-020: Test timeouts must be derived from production timing contracts.**
+Timeouts cannot be increased to eliminate flakes. Every test timeout must have a documented derivation from system-level bounds. If a timeout cannot be mathematically derived from known invariants, it is suspicious and must be investigated.
+
+Example derivation:
+```
+LongRunningCheckpointChaosTest
+
+10s lease expiration
++ 5s supervisor tick
++ 10s leader election bound
++ 10s replication bound
+= 35s
+→ Use 45s (1.3x headroom)
+```
+
+**INV-021: No architectural work is allowed while a reliability freeze is open.**
+A reliability freeze is a hard gate. While it is open, no production code changes, no new awaiters, no new ADRs, and no broad test refactoring are permitted. Only investigation and measurement of the blocking issue is allowed. This prevents blast radius expansion from cascading fix-break-fix cycles.
+
+**INV-022: Repair execution must not depend on gossip DEAD detection.**
+Repair execution may depend on repair eligibility, lease expiration, or under-replication detection. Discovery convergence (gossip DEAD detection) is an independent concern and must not act as a precondition for subsystem execution. Tests verifying these subsystems must measure and assert them independently.
+
+**INV-023: Tests must synchronize against the owning subsystem clock.**
+Tests must synchronize against the owning subsystem clock. Raft assertions -> Raft events, Repair assertions -> Repair events, Discovery assertions -> Discovery events. Cross-subsystem synchronization is forbidden unless explicitly documented.

@@ -24,6 +24,11 @@ public final class ClusterHarness implements AutoCloseable {
     private int replicationFactor = 3;
     private int snapshotEntryThreshold = 1000;
     private int workspaceCleanupDelaySeconds = 300; // default 5m
+    private int repairTaskTimeoutSeconds = 300; // default 5m
+
+    public void setRepairTaskTimeoutSeconds(int seconds) {
+        this.repairTaskTimeoutSeconds = seconds;
+    }
 
     public void setWorkspaceCleanupDelaySeconds(int delay) {
         this.workspaceCleanupDelaySeconds = delay;
@@ -73,7 +78,8 @@ public final class ClusterHarness implements AutoCloseable {
                 .jobSupervisorEnabled(jobSupervisorEnabled)
                 .repairEnabled(repairEnabled)
                 .auditIntervalSeconds(2)
-                .workspaceCleanupDelaySeconds(workspaceCleanupDelaySeconds);
+                .workspaceCleanupDelaySeconds(workspaceCleanupDelaySeconds)
+                .repairTaskTimeoutSeconds(repairTaskTimeoutSeconds);
 
         boolean isBootstrap = nodes.isEmpty() && seedEndpoint == null;
         config.bootstrap(isBootstrap);
@@ -192,6 +198,80 @@ public final class ClusterHarness implements AutoCloseable {
         return false;
     }
 
+    public boolean hasCheckpoint(String jobId, int minSequence) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var chk = leader.runtimeAgent().registry().getCheckpoint(jobId);
+            return chk.isPresent() && chk.get().metadata().getSequence() >= minSequence;
+        }
+        return false;
+    }
+
+    public boolean hasPendingRepair(String repairId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            return leader.fileSystem().repairTaskStore().pendingByRepairId(repairId).isPresent();
+        }
+        return false;
+    }
+
+    public boolean hasRepairTask(String repairId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            return leader.fileSystem().repairTaskStore().all().stream()
+                    .anyMatch(t -> t.repairId().equals(repairId));
+        }
+        return false;
+    }
+
+    public boolean hasCheckpoint(String jobId, long minSeq) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var chk = leader.runtimeAgent().registry().getCheckpoint(jobId);
+            return chk.isPresent() && chk.get().metadata().getSequence() >= minSeq;
+        }
+        return false;
+    }
+
+    public boolean isArtifactReadable(AegisNode node, String sha256) {
+        try {
+            return node.api().getProcessManager().downloadArtifact(sha256) != null;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public boolean isJobRecovered(String jobId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var record = leader.runtimeAgent().registry().get(jobId).orElse(null);
+            if (record != null) {
+                boolean isRunningOrCompleted = record.getState() == com.aegisos.proto.JobState.RUNNING 
+                                            || record.getState() == com.aegisos.proto.JobState.COMPLETED;
+                return isRunningOrCompleted && record.getExecutionId() >= 2;
+            }
+        }
+        return false;
+    }
+
+    public boolean isRepairComplete(String repairId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var all = leader.fileSystem().repairTaskStore().all();
+            boolean match = all.stream()
+                    .anyMatch(t -> t.repairId().equals(repairId) && 
+                            t.status() == com.aegisos.fs.audit.RepairTaskStore.TaskStatus.COMPLETE);
+            if (!match) {
+                System.out.println("isRepairComplete FALSE. Current tasks on leader " + leader.identity().nodeId().shortId() + ":");
+                for (var t : all) {
+                    System.out.println("  - " + t.repairId() + " " + t.status());
+                }
+            }
+            return match;
+        }
+        return false;
+    }
+
     public boolean isArtifactReplicated(String artifactId) {
         for (AegisNode node : nodes) {
             boolean hasIt = node.artifactRegistry().listAll().stream()
@@ -286,6 +366,7 @@ public final class ClusterHarness implements AutoCloseable {
                 .jobSupervisorEnabled(oldConfig.jobSupervisorEnabled())
                 .repairEnabled(oldConfig.repairEnabled())
                 .auditIntervalSeconds(oldConfig.auditIntervalSeconds())
+                .repairTaskTimeoutSeconds(oldConfig.repairTaskTimeoutSeconds())
                 .bootstrap(oldConfig.bootstrap()));
         
         if (!newNode.config().bootstrap()) {

@@ -43,4 +43,32 @@ public class ClusterAwaiter {
     public void awaitNodeDeath(NodeId nodeId, Duration timeout) throws TimeoutException, InterruptedException {
         new EventAwaiter().withTimeout(timeout).await(() -> harness.isNodeDead(nodeId));
     }
+
+    public void awaitCheckpointCreated(String jobId, int minSequence, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.hasCheckpoint(jobId, minSequence));
+    }
+
+    public void awaitPendingRepair(String repairId, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.hasPendingRepair(repairId));
+    }
+
+    public void awaitRepairTaskVisible(String repairId, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.hasRepairTask(repairId));
+    }
+
+    public void awaitCheckpointVisible(String jobId, long minSeq, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.hasCheckpoint(jobId, minSeq));
+    }
+
+    public void awaitArtifactReadable(AegisNode node, String sha256, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.isArtifactReadable(node, sha256));
+    }
+
+    public void awaitJobRecovered(String jobId, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.isJobRecovered(jobId));
+    }
+
+    public void awaitRepairCompletion(String repairId, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(() -> harness.isRepairComplete(repairId));
+    }
 }

@@ -28,13 +28,15 @@ public final class ChunkReplicator {
     private final NetworkLayer network;
     private final ChunkStore store;
     private final NodeId self;
+    private final com.aegisos.discovery.DiscoveryService discovery;
     private final java.util.concurrent.ConcurrentMap<String, java.util.concurrent.atomic.AtomicLong> transientFailureLogAt =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    public ChunkReplicator(NetworkLayer network, ChunkStore store, NodeId self) {
+    public ChunkReplicator(NetworkLayer network, ChunkStore store, NodeId self, com.aegisos.discovery.DiscoveryService discovery) {
         this.network = network;
         this.store = store;
         this.self = self;
+        this.discovery = discovery;
     }
 
     public void start() {
@@ -47,6 +49,11 @@ public final class ChunkReplicator {
         if (target.equals(self)) {
             store.put(chunkId, data);
             return true;
+        }
+        com.aegisos.proto.PeerStatus status = discovery.membership().statusOf(target);
+        if (status != com.aegisos.proto.PeerStatus.ALIVE) {
+            log.debug("Target {} is not ALIVE (status={}), refusing to store chunk", target.shortId(), status);
+            return false;
         }
         try {
             StoreChunk req = StoreChunk.newBuilder()
@@ -70,6 +77,11 @@ public final class ChunkReplicator {
     public byte[] fetchFrom(NodeId source, byte[] chunkId) {
         if (source.equals(self) && store.has(chunkId)) {
             return store.get(chunkId);
+        }
+        com.aegisos.proto.PeerStatus status = discovery.membership().statusOf(source);
+        if (status != com.aegisos.proto.PeerStatus.ALIVE) {
+            log.debug("Source {} is not ALIVE (status={}), refusing to fetch chunk", source.shortId(), status);
+            return null;
         }
         try {
             FetchChunk req = FetchChunk.newBuilder().setChunkId(ByteString.copyFrom(chunkId)).build();

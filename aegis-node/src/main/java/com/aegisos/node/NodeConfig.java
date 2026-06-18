@@ -38,7 +38,7 @@ public final class NodeConfig {
     private boolean jobSupervisorEnabled = true;
     /** When false, RepairProposer is not started, so divergences are audited but not automatically repaired. */
     private boolean repairEnabled = true;
-    private long auditIntervalSeconds = 60;
+    private long auditIntervalSeconds = Long.getLong("aegis.audit.interval.seconds", 60);
     
     // Sprint 9: Workspaces
     private int workspaceCleanupDelaySeconds = 300; // 5 minutes

@@ -225,44 +225,70 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         return false;
     }
 
+    private NodeId currentRoutableLeader() {
+        NodeId leader = raftNode.leaderId();
+        if (leader == null) {
+            return null;
+        }
+        com.aegisos.proto.PeerStatus status = peerStatusSupplier.apply(leader);
+        if (status != com.aegisos.proto.PeerStatus.ALIVE) {
+            log.debug("Leader {} is known, but not ALIVE (status={}), refusing to route", leader.shortId(), status);
+            return null;
+        }
+        return leader;
+    }
+
     /**
      * Proposes a command to the cluster. If this node is the leader it submits directly,
      * otherwise it forwards to the known leader. Completes when the command is committed.
      */
     public CompletableFuture<Long> propose(StateCommand command) {
+        long t0 = System.currentTimeMillis();
+        String cmdType = command.getType().name();
+        
+        CompletableFuture<Long> future;
         if (raftNode.isLeader()) {
             try {
                 validateMembershipChange(command);
+                byte[] bytes = command.toByteArray();
+                future = raftNode.submit(bytes);
             } catch (Exception e) {
-                return CompletableFuture.failedFuture(e);
+                future = CompletableFuture.failedFuture(e);
             }
+        } else {
             byte[] bytes = command.toByteArray();
-            return raftNode.submit(bytes);
-        }
-        byte[] bytes = command.toByteArray();
-        NodeId leader = raftNode.leaderId();
-        if (leader == null) {
-            return CompletableFuture.failedFuture(new NotLeaderException(null));
-        }
-
-        return network.request(leader, MessageType.CLIENT_COMMAND, bytes, COMMIT_TIMEOUT_MS + 5_000)
-                .thenApply(reply -> {
-                    try {
-                        ClientCommandResult result = ClientCommandResult.parseFrom(reply.payload());
-                        if (!result.getSuccess()) {
-                            if ("not leader".equals(result.getError()) || !result.getLeaderId().isEmpty()) {
-                                throw new NotLeaderException(parseLeaderId(result.getLeaderId()));
-                            } else {
-                                throw new IllegalStateException(result.getError() != null && !result.getError().isEmpty() ? result.getError() : "Unknown error");
+            NodeId leader = currentRoutableLeader();
+            if (leader == null) {
+                future = CompletableFuture.failedFuture(new NotLeaderException(raftNode.leaderId()));
+            } else {
+                future = network.request(leader, MessageType.CLIENT_COMMAND, bytes, COMMIT_TIMEOUT_MS + 5_000)
+                        .thenApply(reply -> {
+                            try {
+                                ClientCommandResult result = ClientCommandResult.parseFrom(reply.payload());
+                                if (!result.getSuccess()) {
+                                    if ("not leader".equals(result.getError()) || !result.getLeaderId().isEmpty()) {
+                                        throw new NotLeaderException(parseLeaderId(result.getLeaderId()));
+                                    } else {
+                                        throw new IllegalStateException(result.getError() != null && !result.getError().isEmpty() ? result.getError() : "Unknown error");
+                                    }
+                                }
+                                return result.getIndex();
+                            } catch (CompletionException ce) {
+                                throw ce;
+                            } catch (Exception e) {
+                                throw new CompletionException(e);
                             }
-                        }
-                        return result.getIndex();
-                    } catch (CompletionException ce) {
-                        throw ce;
-                    } catch (Exception e) {
-                        throw new CompletionException(e);
-                    }
-                });
+                        });
+            }
+        }
+        
+        return future.whenComplete((idx, err) -> {
+            long duration = System.currentTimeMillis() - t0;
+            String status = err == null ? "SUCCESS" : "FAILURE (" + err.getClass().getSimpleName() + ")";
+            int qDepth = raftNode.getPendingCount();
+            System.out.printf("[%tT] %-20s queue_depth=%-3d duration=%dms %s\n",
+                    new java.util.Date(), cmdType, qDepth, duration, status);
+        });
     }
 
     private NodeId parseLeaderId(ByteString leaderId) {

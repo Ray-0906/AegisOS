@@ -5,6 +5,7 @@ import com.aegisos.cluster.jobs.CheckpointableSum;
 import com.aegisos.core.identity.NodeId;
 import com.aegisos.node.AegisNode;
 import com.aegisos.proto.JobRecord;
+import com.aegisos.testing.ClusterAwaiter;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -35,19 +36,19 @@ public class LongRunningCheckpointChaosTest {
             long deadline = System.currentTimeMillis() + 45_000;
             boolean finished = false;
 
+            ClusterAwaiter awaiter = new ClusterAwaiter(harness);
+
+            int targetSequence = 5;
+            awaiter.awaitCheckpointCreated(jobId, targetSequence, java.time.Duration.ofSeconds(45));
+
             for (int i = 0; i < 3; i++) {
-                // Wait for job to progress
-                Thread.sleep(3000);
-                
-                // Check if it already finished unexpectedly fast
-                if (submitter.runtimeAgent().registry().isTerminal(jobId)) {
+                com.aegisos.proto.JobState state = harness.getJobState(jobId);
+                if (state == com.aegisos.proto.JobState.COMPLETED || state == com.aegisos.proto.JobState.FAILED || state == com.aegisos.proto.JobState.CANCELLED) {
                     break;
                 }
 
-                // Inject Chaos: Find the executor and kill it, OR find the leader and kill it
                 AegisNode target = null;
                 if (i % 2 == 0) {
-                    // Kill executor
                     NodeId executorId = submitter.runtimeAgent().registry().get(jobId)
                             .map(JobRecord::getAssignedNodeId)
                             .filter(b -> !b.isEmpty())
@@ -60,7 +61,6 @@ public class LongRunningCheckpointChaosTest {
                                 .orElse(null);
                     }
                 } else {
-                    // Kill leader
                     target = harness.nodes().stream()
                             .filter(n -> n.consensus().isLeader())
                             .findFirst()
@@ -68,17 +68,30 @@ public class LongRunningCheckpointChaosTest {
                 }
 
                 if (target != null) {
+                    long t0 = System.currentTimeMillis();
                     System.out.println("Injecting chaos: killing node " + target.identity().nodeId().shortId());
                     harness.stop(target);
-                }
 
-                // Add a replacement node
-                System.out.println("Adding replacement node to cluster");
-                AegisNode replacement = harness.addNode();
-                
-                // Use the replacement as the new point of contact if the submitter was killed
-                if (submitter == target) {
-                    submitter = replacement;
+                    System.out.println("Adding replacement node to cluster");
+                    AegisNode replacement = harness.addNode();
+                    if (submitter == target) submitter = replacement;
+
+                    awaiter.awaitLeaderElection(java.time.Duration.ofSeconds(45));
+                    long t1 = System.currentTimeMillis();
+
+                    awaiter.awaitJobState(jobId, com.aegisos.proto.JobState.RUNNING, java.time.Duration.ofSeconds(45));
+                    long t2 = System.currentTimeMillis();
+
+                    targetSequence += 5; // wait for 5 more checkpoints to be generated
+                    awaiter.awaitCheckpointCreated(jobId, targetSequence, java.time.Duration.ofSeconds(45));
+                    long t3 = System.currentTimeMillis();
+
+                    System.out.println("--- TIMING RUN " + i + " ---");
+                    System.out.println("leader_election_ms: " + (t1 - t0));
+                    System.out.println("reassignment_ms: " + (t2 - t1));
+                    System.out.println("checkpoint_generation_ms: " + (t3 - t2));
+                    System.out.println("total_ms: " + (t3 - t0));
+                    System.out.println("----------------------");
                 }
             }
 
