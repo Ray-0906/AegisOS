@@ -39,8 +39,10 @@ public class ArtifactRestartRecoveryTest {
         cluster.setReplicationFactor(1);
         cluster.start(1);
         
-        Thread.sleep(2000);
         AegisNode node = cluster.node(0);
+        ClusterAwaiter awaiter = new ClusterAwaiter(cluster);
+        awaiter.awaitWriteReady(node, Duration.ofSeconds(10));
+        
         ProcessManager pm = node.api().getProcessManager();
 
         byte[] data = new byte[]{1, 2, 3};
@@ -61,7 +63,7 @@ public class ArtifactRestartRecoveryTest {
         node.close();
 
         AegisNode newNode = cluster.restartNode(node);
-        ClusterAwaiter awaiter = new ClusterAwaiter(cluster);
+        // ClusterAwaiter already instantiated
         
         // Wait for the data plane to recover and serve the artifact
         awaiter.awaitArtifactReadable(newNode, sha256, Duration.ofSeconds(10));

@@ -92,3 +92,32 @@ Escalation:
 If H0 is falsified, close the investigation.
 
 Do not debug ghosts.
+
+# Wave 1 Refactoring Rules
+
+1. **Never wait for a stronger system invariant than the test actually needs.**
+2. **Passing tests are evidence; historical failures are not evidence.**
+3. **Wait for readiness, not implementation details.**
+
+## Refactor staircase rule:
+
+If code semantics are unchanged and only synchronization primitives changed:
+
+1 -> 10 -> 25 -> stop
+
+100 only if:
+- new awaiter is introduced AND
+- a historical flake existed OR
+- a production invariant changed
+
+## System Invariants and Constraints
+
+INV-024
+Removing a sleep must expose the hidden contract the sleep was satisfying.
+Do not replace sleeps mechanically.
+Derive the dependency the sleep was masking.
+
+ENV-001
+Compiler, IDE, filesystem, and build cache corruption
+are environment failures, not test outcomes.
+Discard the run entirely.

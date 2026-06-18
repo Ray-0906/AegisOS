@@ -315,6 +315,14 @@ public final class AegisNode implements AutoCloseable {
         return started;
     }
 
+    public boolean isReady() {
+        return isStarted() && api() != null;
+    }
+
+    public boolean isWriteReady() {
+        return isReady() && consensus() != null && consensus().leaderId() != null;
+    }
+
     @Override
     public synchronized void close() {
         if (!started) {

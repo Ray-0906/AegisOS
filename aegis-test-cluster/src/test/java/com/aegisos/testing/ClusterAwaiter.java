@@ -60,6 +60,14 @@ public class ClusterAwaiter {
         new EventAwaiter().withTimeout(timeout).await(() -> harness.hasCheckpoint(jobId, minSeq));
     }
 
+    public void awaitNodeReady(AegisNode node, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(node::isReady);
+    }
+
+    public void awaitWriteReady(AegisNode node, Duration timeout) throws TimeoutException, InterruptedException {
+        new EventAwaiter().withTimeout(timeout).await(node::isWriteReady);
+    }
+
     public void awaitArtifactReadable(AegisNode node, String sha256, Duration timeout) throws TimeoutException, InterruptedException {
         new EventAwaiter().withTimeout(timeout).await(() -> harness.isArtifactReadable(node, sha256));
     }
