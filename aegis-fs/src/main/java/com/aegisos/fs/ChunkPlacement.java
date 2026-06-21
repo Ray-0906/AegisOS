@@ -34,24 +34,20 @@ public final class ChunkPlacement {
         for (NodeId n : discovery.router().findClosest(key, replicationFactor * 3)) {
             boolean isStorage = discovery.membership().storagePeerIds().contains(n) || 
                     (n.equals(self) && discovery.membership().selfRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER);
-            if (isStorage) {
+            boolean isAlive = n.equals(self) || discovery.membership().statusOf(n) == com.aegisos.proto.PeerStatus.ALIVE;
+            if (isStorage && isAlive) {
                 selected.add(n);
-                if (selected.size() >= replicationFactor) {
-                    break;
-                }
             }
         }
         // 2) Top up with alive peers and self.
-        if (selected.size() < replicationFactor) {
-            List<NodeId> candidates = new ArrayList<>(discovery.membership().storagePeerIds());
-            if (discovery.membership().selfRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER) {
-                candidates.add(self);
-            }
-            for (NodeId n : candidates) {
+        List<NodeId> candidates = new ArrayList<>(discovery.membership().storagePeerIds());
+        if (discovery.membership().selfRole() == com.aegisos.proto.NodeRole.CLUSTER_MEMBER) {
+            candidates.add(self);
+        }
+        for (NodeId n : candidates) {
+            boolean isAlive = n.equals(self) || discovery.membership().statusOf(n) == com.aegisos.proto.PeerStatus.ALIVE;
+            if (isAlive) {
                 selected.add(n);
-                if (selected.size() >= replicationFactor) {
-                    break;
-                }
             }
         }
         // Ensure self can host at least one replica in a tiny cluster (if it is a storage node).

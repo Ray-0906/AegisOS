@@ -27,24 +27,5 @@ public final class MetricsRegistry {
         return gauges.computeIfAbsent(name, Gauge::new);
     }
 
-    /**
-     * Exports all counters and gauges in the Prometheus/OpenMetrics text format.
-     */
-    public String exportPrometheus() {
-        StringBuilder sb = new StringBuilder();
-        
-        // Export gauges
-        for (Gauge gauge : gauges.values()) {
-            sb.append("# TYPE ").append(gauge.getName()).append(" gauge\n");
-            sb.append(gauge.getName()).append(" ").append(gauge.get()).append("\n\n");
-        }
-        
-        // Export counters
-        for (Counter counter : counters.values()) {
-            sb.append("# TYPE ").append(counter.getName()).append(" counter\n");
-            sb.append(counter.getName()).append(" ").append(counter.get()).append("\n\n");
-        }
-        
-        return sb.toString();
-    }
+
 }

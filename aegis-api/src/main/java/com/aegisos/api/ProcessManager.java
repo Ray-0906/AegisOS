@@ -210,6 +210,9 @@ public final class ProcessManager {
             }
             Thread.sleep(50);
         }
+        Optional<JobRecord> finalRecord = agent.registry().get(handle.jobId());
+        String finalState = finalRecord.isPresent() ? finalRecord.get().getState().toString() : "MISSING";
+        System.out.println("AWAIT_RESULT_STATE=" + finalState);
         throw new java.util.concurrent.TimeoutException("job " + handle.jobId() + " did not finish in time");
     }
 

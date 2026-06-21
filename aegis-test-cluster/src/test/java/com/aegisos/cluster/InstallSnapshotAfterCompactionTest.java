@@ -56,7 +56,7 @@ public class InstallSnapshotAfterCompactionTest {
 
             // Partition follower so it falls behind
             NodeId followerId = follower.identity().nodeId();
-            NetworkLayer.setMessageFilter((from, to) -> {
+            NetworkLayer.setMessageFilter((from, to, type, payload) -> {
                 if (from.equals(followerId) || to.equals(followerId)) {
                     return false;
                 }

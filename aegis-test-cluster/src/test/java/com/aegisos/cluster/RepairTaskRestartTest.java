@@ -186,6 +186,10 @@ public class RepairTaskRestartTest {
 
         // Verify a PENDING repair task exists
         List<RepairTaskStore.RepairTask> tasks = A.fileSystem().repairTaskStore().all();
+        System.out.println("DEBUG: tasks.size() = " + tasks.size());
+        for (RepairTaskStore.RepairTask t : tasks) {
+            System.out.println("DEBUG: task = " + t.repairId() + " status=" + t.status());
+        }
         assertFalse(tasks.isEmpty(), "Phase 2: Repair task store must have at least one task");
 
         // Find the PENDING task

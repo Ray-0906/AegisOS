@@ -199,15 +199,41 @@ public final class ClientCommands {
         }
         try {
             return withClient(seeds, node -> {
-                for (int i = 0; i < 60 && node.api().getProcessManager().status(jobId)
-                        == com.aegisos.proto.JobState.JOB_UNKNOWN; i++) {
+                // Wait for job registry to replicate
+                for (int i = 0; i < 60 && node.runtimeAgent().registry().get(jobId).isEmpty(); i++) {
                     try {
                         Thread.sleep(100);
                     } catch (InterruptedException ignored) {
                         Thread.currentThread().interrupt();
                     }
                 }
-                System.out.println("Job " + jobId + ": " + node.api().getProcessManager().status(jobId));
+                
+                java.util.Optional<com.aegisos.proto.JobRecord> optionalRecord = node.runtimeAgent().registry().get(jobId);
+                if (optionalRecord.isEmpty()) {
+                    System.out.println("Job " + jobId + " not found.");
+                    return 0;
+                }
+                
+                com.aegisos.proto.JobRecord record = optionalRecord.get();
+                String assignedNode = record.getAssignedNodeId().isEmpty() ? "None" 
+                        : com.aegisos.core.identity.NodeId.of(record.getAssignedNodeId().toByteArray()).shortId();
+                
+                System.out.println("Job");
+                System.out.println("---");
+                System.out.println("ID:         " + record.getSpec().getJobId());
+                System.out.println("State:      " + record.getState());
+                System.out.println("Execution:  " + record.getExecutionId());
+                System.out.println("Node:       " + assignedNode);
+                
+                if (!record.getError().isEmpty()) {
+                    System.out.println("Error:      " + record.getError());
+                }
+                
+                System.out.println("\nResources");
+                System.out.println("---------");
+                System.out.println("CPU:        " + record.getSpec().getResources().getCpuCores());
+                System.out.println("Memory:     " + record.getSpec().getResources().getMemoryMb() + " MB");
+                
                 return 0;
             });
         } catch (Exception e) {
@@ -574,6 +600,38 @@ public final class ClientCommands {
             });
         } catch (Exception e) {
             System.err.println("aegis health failed: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    static int runMetrics(List<String> seeds) {
+        if (seeds.isEmpty()) {
+            System.err.println("aegis metrics: at least one --seed is required");
+            return 2;
+        }
+        try {
+            return withClient(seeds, node -> {
+                com.aegisos.core.observability.MetricsSnapshot snapshot = node.metrics();
+                
+                System.out.println("====== CLUSTER ======");
+                System.out.printf("Alive Nodes : %d%n", snapshot.cluster().aliveNodes().value());
+                System.out.printf("Dead Nodes  : %d%n", snapshot.cluster().deadNodes().value());
+                System.out.println();
+                System.out.println("====== JOBS ======");
+                System.out.printf("Queued      : %d%n", snapshot.jobs().queued().value());
+                System.out.printf("Running     : %d%n", snapshot.jobs().running().value());
+                System.out.printf("Completed   : %d%n", snapshot.jobs().completedTotal().value());
+                System.out.printf("Failed      : %d%n", snapshot.jobs().failedTotal().value());
+                System.out.println();
+                System.out.println("====== EVENTS ======");
+                System.out.printf("Leader Changes         : %d%n", snapshot.events().leaderChanges().value());
+                System.out.printf("Scheduler Assignments  : %d%n", snapshot.events().schedulerAssignments().value());
+                System.out.printf("Checkpoint Recoveries  : %d%n", snapshot.events().checkpointRecoveries().value());
+                
+                return 0;
+            });
+        } catch (Exception e) {
+            System.err.println("aegis metrics failed: " + e.getMessage());
             return 1;
         }
     }

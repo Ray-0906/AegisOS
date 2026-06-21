@@ -46,7 +46,7 @@ public class PartitionSafetyTest {
             Set<NodeId> majority = java.util.Set.of(leaderId, nonLeaders.get(2), nonLeaders.get(3));
 
             System.out.println("Applying network partition: {A, B} | {C, D, E}");
-            NetworkLayer.setMessageFilter((from, to) -> {
+            NetworkLayer.setMessageFilter((from, to, type, payload) -> {
                 boolean fromMinority = minority.contains(from);
                 boolean toMinority = minority.contains(to);
                 boolean fromMajority = majority.contains(from);

@@ -37,11 +37,11 @@ public final class DiscoveryService implements AutoCloseable {
     private final RoutingTable routingTable;
     private final KademliaRouter router;
     private final ScheduledExecutorService maintenance =
-            Executors.newSingleThreadScheduledExecutor(r -> {
+            com.aegisos.core.ExecutorRegistry.register("discoveryMaint", Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "aegis-discovery-maint");
                 t.setDaemon(true);
                 return t;
-            });
+            }));
 
     public DiscoveryService(NetworkLayer network, IdentityService identity, String selfAddress, com.aegisos.proto.NodeRole role) {
         this.network = network;
@@ -63,7 +63,7 @@ public final class DiscoveryService implements AutoCloseable {
             connectToSeed(seed);
         }
         maintenance.scheduleAtFixedRate(this::syncRoutingTable,
-                DEFAULT_INTERVAL_MS, DEFAULT_INTERVAL_MS, TimeUnit.MILLISECONDS);
+                com.aegisos.core.SchedulerJitter.jitter(DEFAULT_INTERVAL_MS, DEFAULT_INTERVAL_MS), DEFAULT_INTERVAL_MS, TimeUnit.MILLISECONDS);
         log.info("Discovery started with {} seed(s)", seeds.size());
     }
 

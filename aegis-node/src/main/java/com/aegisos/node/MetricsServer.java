@@ -55,18 +55,10 @@ public final class MetricsServer implements AutoCloseable {
         server = HttpServer.create(
                 new InetSocketAddress("0.0.0.0", port), 10);
 
-        server.createContext("/metrics", exchange -> {
-            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                exchange.sendResponseHeaders(405, -1);
-                return;
-            }
-            byte[] body = node.metricsRegistry().exportPrometheus().getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
-            exchange.sendResponseHeaders(200, body.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(body);
-            }
-        });
+        com.aegisos.core.observability.MetricsExporter exporter = 
+            new com.aegisos.core.observability.PrometheusMetricsExporter(() -> node.metrics());
+        MetricsHttpServer metricsHttpServer = new MetricsHttpServer(exporter);
+        metricsHttpServer.register(server);
         
         server.createContext("/topology", exchange -> {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -448,7 +440,7 @@ server.createContext("/raft/metrics", exchange -> {
             }
         });
 
-        executor = Executors.newVirtualThreadPerTaskExecutor();
+        executor = com.aegisos.core.ExecutorRegistry.register("metricsServer", Executors.newVirtualThreadPerTaskExecutor());
         server.setExecutor(executor);
         server.start();
         log.info("Metrics server listening on http://0.0.0.0:{}/ (endpoints: /metrics, /health)", port);

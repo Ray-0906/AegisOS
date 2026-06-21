@@ -189,6 +189,9 @@ public final class AegisFS implements AutoCloseable {
                 if (replicator.storeOn(target, chunkId, enc.ciphertext())) {
                     storedOn.add(ByteString.copyFrom(target.toBytes()));
                 }
+                if (storedOn.size() >= replicationFactor) {
+                    break;
+                }
             }
             if (storedOn.size() < replicationFactor) {
                 int available = discovery.membership().storageNodeCount();

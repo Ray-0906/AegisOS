@@ -26,6 +26,20 @@ public final class ClusterHarness implements AutoCloseable {
     private int workspaceCleanupDelaySeconds = 300; // default 5m
     private int repairTaskTimeoutSeconds = 300; // default 5m
 
+    public ClusterHarness() {
+        // H6 instrumentation: set current test name for event correlation
+        String testName = "unknown";
+        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+            if (frame.getClassName().endsWith("Test") && !frame.getClassName().equals(getClass().getName())) {
+                testName = frame.getClassName().substring(frame.getClassName().lastIndexOf('.') + 1);
+                break;
+            }
+        }
+        com.aegisos.consensus.RaftLagMonitor.currentTestName = testName;
+        StatsTracker.dump("TEST_BEGIN", java.util.Collections.emptyList());
+        System.out.println("BEGIN_TIMESTAMP=" + System.currentTimeMillis());
+    }
+
     public void setRepairTaskTimeoutSeconds(int seconds) {
         this.repairTaskTimeoutSeconds = seconds;
     }
@@ -44,9 +58,43 @@ public final class ClusterHarness implements AutoCloseable {
 
     /** Starts {@code n} nodes and returns them. The first node is the seed. */
     public List<AegisNode> start(int n) throws IOException {
+        long t0 = System.currentTimeMillis();
+        Thread monitor = new Thread(() -> {
+            long leaderTime = -1;
+            long discoverTime = -1;
+            while (leaderTime == -1 || discoverTime == -1) {
+                if (leaderTime == -1 && currentLeader() != null) {
+                    leaderTime = System.currentTimeMillis() - t0;
+                    System.out.println("LEADER_ELECTED=" + leaderTime);
+                }
+                if (discoverTime == -1) {
+                    try {
+                        boolean all = nodes.size() == n;
+                        if (all) {
+                            for (AegisNode node : nodes) {
+                                if (node.discovery().membership().aliveCount() < n) {
+                                    all = false; break;
+                                }
+                            }
+                            if (all) {
+                                discoverTime = System.currentTimeMillis() - t0;
+                                System.out.println("ALL_NODES_DISCOVERED=" + discoverTime);
+                            }
+                        }
+                    } catch (java.util.ConcurrentModificationException ignored) {}
+                }
+                try { Thread.sleep(10); } catch (Exception e) { break; }
+            }
+        });
+        monitor.start();
+
         for (int i = 0; i < n; i++) {
             addNode();
         }
+
+        System.out.println("BOOT_DURATION=" + (System.currentTimeMillis() - t0));
+        
+        try { monitor.join(1000); } catch (Exception e){}
         return List.copyOf(nodes);
     }
 
@@ -95,6 +143,7 @@ public final class ClusterHarness implements AutoCloseable {
         }
 
         AegisNode node = new AegisNode(config);
+        StatsTracker.NODE_COUNT.incrementAndGet();
         node.start();
         if (seedEndpoint == null) {
             // Record the first node's address as the canonical bootstrap seed
@@ -453,6 +502,8 @@ public final class ClusterHarness implements AutoCloseable {
 
     @Override
     public void close() {
+        System.out.println("END_TIMESTAMP=" + System.currentTimeMillis());
+        StatsTracker.dump("TEST_END", nodes);
         for (AegisNode node : nodes) {
             try {
                 node.close();
@@ -461,19 +512,53 @@ public final class ClusterHarness implements AutoCloseable {
         }
         nodes.clear();
         for (Path dir : tempDirs) {
-            deleteRecursive(dir.toFile());
+            System.out.println("DELETE_ATTEMPT: " + dir.toAbsolutePath());
+            
+            // Print aegis threads
+            System.out.println("Live 'aegis' threads:");
+            for (Thread t : Thread.getAllStackTraces().keySet()) {
+                if (t.getName().contains("aegis")) {
+                    System.out.println("  " + t.getName() + " (state: " + t.getState() + ")");
+                }
+            }
+            
+            boolean success = deleteRecursive(dir.toFile());
+            if (success) {
+                System.out.println("DELETE_SUCCESS: " + dir.toAbsolutePath());
+            } else {
+                System.out.println("DELETE_FAILED: " + dir.toAbsolutePath());
+                System.out.println("Remaining files:");
+                printRemainingFiles(dir.toFile(), "");
+            }
         }
         tempDirs.clear();
     }
 
-    private static void deleteRecursive(java.io.File f) {
+    private static void printRemainingFiles(java.io.File f, String indent) {
+        if (!f.exists()) return;
+        System.out.println(indent + "- " + f.getName() + (f.isDirectory() ? "/" : ""));
+        if (f.isDirectory()) {
+            java.io.File[] children = f.listFiles();
+            if (children != null) {
+                for (java.io.File c : children) {
+                    printRemainingFiles(c, indent + "  ");
+                }
+            }
+        }
+    }
+
+    private static boolean deleteRecursive(java.io.File f) {
+        if (!f.exists()) {
+            return true;
+        }
+        boolean success = true;
         java.io.File[] children = f.listFiles();
         if (children != null) {
             for (java.io.File c : children) {
-                deleteRecursive(c);
+                success &= deleteRecursive(c);
             }
         }
-        //noinspection ResultOfMethodCallIgnored
-        f.delete();
+        boolean deleted = f.delete();
+        return success && deleted;
     }
 }

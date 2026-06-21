@@ -30,6 +30,44 @@ public class StaleCheckpointFenceTest {
             JobHandle handle = submitter.api().getProcessManager().submit(new CheckpointableSum(100, 100), 1, 128);
             String jobId = handle.jobId();
 
+            System.out.println("JOB_SUBMITTED");
+            
+            // Background thread to trace states
+            Thread tracer = new Thread(() -> {
+                long lastExecId = -1;
+                JobState lastState = null;
+                long lastSeq = -1;
+                while (!Thread.currentThread().isInterrupted()) {
+                    try {
+                        var jobOpt = submitter.runtimeAgent().registry().get(jobId);
+                        if (jobOpt.isPresent()) {
+                            JobRecord jr = jobOpt.get();
+                            if (jr.getExecutionId() != lastExecId) {
+                                lastExecId = jr.getExecutionId();
+                                System.out.println("JOB_ASSIGNED executionId=" + lastExecId);
+                            }
+                            if (jr.getState() != lastState) {
+                                lastState = jr.getState();
+                                if (lastState == JobState.RUNNING) System.out.println("JOB_STARTED executionId=" + lastExecId);
+                                if (lastState == JobState.COMPLETED) System.out.println("JOB_COMPLETED executionId=" + lastExecId);
+                            }
+                        }
+                        var chkOpt = submitter.runtimeAgent().registry().getCheckpoint(jobId);
+                        if (chkOpt.isPresent()) {
+                            long seq = chkOpt.get().metadata().getSequence();
+                            if (seq > lastSeq) {
+                                lastSeq = seq;
+                                System.out.println("CHECKPOINT_CREATED executionId=" + chkOpt.get().executionId() + " seq=" + seq);
+                            }
+                        }
+                        Thread.sleep(100);
+                    } catch (Exception e) {
+                        break;
+                    }
+                }
+            });
+            tracer.start();
+
             assertTrue(ClusterHarness.await(10_000, () -> {
                 var chk = submitter.runtimeAgent().registry().getCheckpoint(jobId);
                 return chk.isPresent() && chk.get().metadata().getSequence() >= 1;
@@ -46,7 +84,8 @@ public class StaleCheckpointFenceTest {
                     .orElseThrow();
 
             // Isolate executor
-            com.aegisos.network.NetworkLayer.setMessageFilter((from, to) -> {
+            System.out.println("Isolating executor: " + executorId.shortId());
+            com.aegisos.network.NetworkLayer.setMessageFilter((from, to, type, payload) -> {
                 if (from.equals(executorId) || to.equals(executorId)) return false;
                 return true;
             });
@@ -75,10 +114,21 @@ public class StaleCheckpointFenceTest {
             var latestSeq = aliveNode.runtimeAgent().registry().getCheckpoint(jobId).get().metadata().getSequence();
 
             // Reconnect the old executor
+            System.out.println("Reconnecting executor: " + executorId.shortId());
             com.aegisos.network.NetworkLayer.clearMessageFilter();
 
             // Wait for job to finish
-            aliveNode.api().getProcessManager().awaitResult(handle, 90_000);
+            try {
+                aliveNode.api().getProcessManager().awaitResult(handle, 90_000);
+            } catch (Exception e) {
+                System.out.println("AWAIT_FAILED: " + e.getMessage());
+                // Dump current job state
+                var job = aliveNode.runtimeAgent().registry().get(jobId);
+                System.out.println("FINAL_JOB_STATE: " + (job.isPresent() ? job.get().getState() + " exec=" + job.get().getExecutionId() : "missing"));
+                throw e;
+            } finally {
+                tracer.interrupt();
+            }
 
             // The last checkpoint must belong to the new execution (executionId >= 2)
             var finalChk = aliveNode.runtimeAgent().registry().getCheckpoint(jobId).get();

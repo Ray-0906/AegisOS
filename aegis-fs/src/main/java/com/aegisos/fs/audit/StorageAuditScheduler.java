@@ -46,8 +46,8 @@ public final class StorageAuditScheduler implements AutoCloseable {
     private final AuditReportStore store;
     private final AtomicLong scanCounter = new AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicBoolean isScanning = new java.util.concurrent.atomic.AtomicBoolean(false);
-    private final java.util.concurrent.ExecutorService workerExecutor = java.util.concurrent.Executors.newThreadPerTaskExecutor(
-            Thread.ofVirtual().name("aegis-audit-worker-", 0).factory());
+    private final java.util.concurrent.ExecutorService workerExecutor = com.aegisos.core.ExecutorRegistry.register("auditWorker", java.util.concurrent.Executors.newThreadPerTaskExecutor(
+            Thread.ofVirtual().name("aegis-audit-worker-", 0).factory()));
 
     private volatile List<VerificationResult> currentVerifications = Collections.emptyList();
     private volatile List<RepairRecommendation> currentRecommendations = Collections.emptyList();
@@ -56,11 +56,11 @@ public final class StorageAuditScheduler implements AutoCloseable {
     private final List<RepairOutcome> historicalRepairOutcomes = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> {
+            com.aegisos.core.ExecutorRegistry.register("auditScheduler", Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = Thread.ofVirtual().unstarted(r);
                 t.setName("aegis-audit-scheduler");
                 return t;
-            });
+            }));
 
     public StorageAuditScheduler(AegisFS fileSystem, DiscoveryService discovery,
                                  NetworkLayer network, NodeId self,
@@ -79,7 +79,7 @@ public final class StorageAuditScheduler implements AutoCloseable {
      * Starts periodic audit scanning.
      */
     public void start() {
-        scheduler.scheduleWithFixedDelay(this::runOnceSafe, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+        scheduler.scheduleWithFixedDelay(this::runOnceSafe, com.aegisos.core.SchedulerJitter.jitter(intervalSeconds, intervalSeconds), intervalSeconds, TimeUnit.SECONDS);
         log.info("Storage audit scheduler started (interval {}s)", intervalSeconds);
     }
 
@@ -111,13 +111,23 @@ public final class StorageAuditScheduler implements AutoCloseable {
      *   <li>Replace current verifications and recommendations atomically.</li>
      * </ol>
      */
+    private volatile boolean wasLeader = false;
+
     public void runOnce() {
-        if (!isLeader.getAsBoolean()) {
+        boolean leaderNow = isLeader.getAsBoolean();
+        if (!leaderNow) {
+            wasLeader = false;
             currentVerifications = Collections.emptyList();
             currentRecommendations = Collections.emptyList();
             currentRepairOutcomes = Collections.emptyList();
             log.debug("Skip audit scan: not the consensus leader");
             return;
+        }
+
+        if (!wasLeader) {
+            log.info("Transitioned to LEADER. Clearing transient audit history.");
+            store.clear();
+            wasLeader = true;
         }
         long scanId = scanCounter.incrementAndGet();
         long timestamp = System.currentTimeMillis();
@@ -202,9 +212,17 @@ public final class StorageAuditScheduler implements AutoCloseable {
         currentRecommendations = Collections.unmodifiableList(newRecommendations);
 
         // Step 7 & 8: Propose and execute repairs
+        System.out.println("DEBUG: Reached Step 7. repairProposer=" + (repairProposer != null) + " isLeader=" + isLeader.getAsBoolean());
         if (repairProposer != null && isLeader.getAsBoolean()) {
-            List<RepairOutcome> phaseA = repairProposer.proposeRepairs();
-            List<RepairOutcome> phaseB = repairProposer.executeAndComplete();
+            java.util.List<java.util.concurrent.CompletableFuture<RepairOutcome>> phaseAFutures = repairProposer.proposeRepairs();
+            System.out.println("DEBUG: phaseAFutures.size() = " + phaseAFutures.size());
+            java.util.concurrent.CompletableFuture.allOf(phaseAFutures.toArray(new java.util.concurrent.CompletableFuture[0])).join();
+            List<RepairOutcome> phaseA = phaseAFutures.stream().map(java.util.concurrent.CompletableFuture::join).collect(java.util.stream.Collectors.toList());
+
+            java.util.List<java.util.concurrent.CompletableFuture<RepairOutcome>> phaseBFutures = repairProposer.executeAndComplete();
+            java.util.concurrent.CompletableFuture.allOf(phaseBFutures.toArray(new java.util.concurrent.CompletableFuture[0])).join();
+            List<RepairOutcome> phaseB = phaseBFutures.stream().map(java.util.concurrent.CompletableFuture::join).collect(java.util.stream.Collectors.toList());
+
             List<RepairOutcome> merged = new ArrayList<>(phaseA);
             merged.addAll(phaseB);
             currentRepairOutcomes = Collections.unmodifiableList(merged);

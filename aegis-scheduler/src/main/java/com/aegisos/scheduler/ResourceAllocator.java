@@ -35,13 +35,13 @@ public class ResourceAllocator implements AutoCloseable {
     private final Map<String, SoftReservation> softReservations = new ConcurrentHashMap<>();
     private final Map<String, ResourceRequest> hardAllocations = new ConcurrentHashMap<>();
 
-    private final ScheduledExecutorService reaper = Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+    private final ScheduledExecutorService reaper = com.aegisos.core.ExecutorRegistry.register("resourceAllocator", Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r)));
 
     public ResourceAllocator(int totalCpuCores, long totalMemoryMb, int maxConcurrentReservations) {
         this.totalCpuCores = totalCpuCores;
         this.totalMemoryMb = totalMemoryMb;
         this.maxConcurrentReservations = maxConcurrentReservations;
-        reaper.scheduleAtFixedRate(this::reapSoftReservations, 5, 5, TimeUnit.SECONDS);
+        reaper.scheduleAtFixedRate(this::reapSoftReservations, com.aegisos.core.SchedulerJitter.jitter(5, 5), 5, TimeUnit.SECONDS);
     }
 
     public synchronized String tryReserve(String jobId, long schedulerEpoch, ResourceRequest request) {

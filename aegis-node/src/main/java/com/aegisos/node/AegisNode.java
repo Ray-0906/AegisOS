@@ -147,7 +147,7 @@ public final class AegisNode implements AutoCloseable {
         int cores = Runtime.getRuntime().availableProcessors();
         resourceAllocator = new ResourceAllocator(cores, maxMem, config.maxConcurrentReservations());
 
-        scheduler = new Scheduler(network, discovery, consensus, resourcesView, resourceAllocator, identity.nodeId());
+        scheduler = new Scheduler(network, discovery, consensus, resourcesView, resourceAllocator, identity.nodeId(), metricsRegistry);
         scheduler.setAcceptProbe(runtimeAgent::canAccept);
         scheduler.setLocalityProvider(runtimeAgent);
 
@@ -229,8 +229,17 @@ public final class AegisNode implements AutoCloseable {
         return network;
     }
 
-    public MetricsServer metrics() {
+    private MetricsAssembler metricsAssembler;
+
+    public MetricsServer metricsServer() {
         return metricsServer;
+    }
+
+    public com.aegisos.core.observability.MetricsSnapshot metrics() {
+        if (metricsAssembler == null) {
+            metricsAssembler = new MetricsAssembler(metricsRegistry, discovery, consensus);
+        }
+        return metricsAssembler.snapshot();
     }
 
     public com.aegisos.core.observability.MetricsRegistry metricsRegistry() {

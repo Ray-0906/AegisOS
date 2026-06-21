@@ -29,11 +29,11 @@ public final class AntiEntropyManager implements AutoCloseable {
     private final NodeId self;
     private final ConsensusModule consensus;
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> {
+            com.aegisos.core.ExecutorRegistry.register("antiEntropy", Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "aegis-anti-entropy");
                 t.setDaemon(true);
                 return t;
-            });
+            }));
 
     public AntiEntropyManager(AegisFS fs, LocalHealthStore localHealth, NodeId self, ConsensusModule consensus) {
         this.fs = fs;
@@ -43,7 +43,7 @@ public final class AntiEntropyManager implements AutoCloseable {
     }
 
     public void start() {
-        scheduler.scheduleWithFixedDelay(this::reconcileSafe, 30, 30, TimeUnit.SECONDS);
+        scheduler.scheduleWithFixedDelay(this::reconcileSafe, com.aegisos.core.SchedulerJitter.jitter(30, 30), 30, TimeUnit.SECONDS);
         log.info("AntiEntropyManager started");
     }
 

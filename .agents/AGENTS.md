@@ -117,6 +117,43 @@ Removing a sleep must expose the hidden contract the sleep was satisfying.
 Do not replace sleeps mechanically.
 Derive the dependency the sleep was masking.
 
+INV-025
+Every runnable execution attempt must be uniquely identified by `(jobId, executionId)`.
+Once executionId=N is superseded, executionId<N+1 must NEVER:
+- start
+- resume
+- checkpoint
+- commit state
+- emit COMPLETED
+- emit FAILED
+
+INV-029
+Workload reality is authoritative.
+Metadata publication is eventually consistent.
+Corollary: A workload may exist before RUNNING is published. RUNNING must never exist before a workload exists.
+
+INV-030
+ProcessRuntimeAgent is the sole authority on workload existence.
+JobRegistry is the sole authority on job lifecycle visibility.
+
+INV-031
+Unknown is a first-class state.
+Timeout != failure. Missing acknowledgement != rejection.
+
+INV-032
+Every execution decision must have one owner.
+Packet acceptance: ProcessRuntimeAgent
+Workload existence: ProcessRuntimeAgent
+Lifecycle visibility: JobRegistry
+Recovery: JobSupervisor
+
+INV-036
+Execution completion and metadata durability are independent responsibilities.
+
+INV-037
+Workers must never become schedulers.
+A worker should never retry, sleep, poll, or scan after its workload has finished.
+
 ENV-001
 Compiler, IDE, filesystem, and build cache corruption
 are environment failures, not test outcomes.
@@ -169,3 +206,41 @@ OBS-002
 Observability must be read-only.
 Observability features must never alter system state.
 Commands may inspect, aggregate, and report, but never mutate.
+
+OBS-004
+Commands have ownership.
+One operational question -> one canonical command.
+Avoid aliases that represent different domains.
+
+OBS-005
+Metrics must be owned by the subsystem that creates the event.
+MetricsSnapshot may aggregate metrics.
+MetricsSnapshot may never derive historical events retroactively.
+
+OBS-006
+MetricsSnapshot must explicitly distinguish gauges from counters.
+A gauge represents current state.
+A counter represents accumulated events.
+Never expose counters as gauges.
+
+OBS-007
+Observability metrics describe AegisOS behavior, not host machine behavior.
+JVM/OS metrics are infrastructure metrics.
+
+OBS-008
+Transports may not traverse subsystems.
+Transports consume exporters.
+Exporters consume snapshots.
+Snapshots consume subsystem state.
+
+## Documentation Rules
+
+DOC-001
+SCORECARD is the single source of truth for project state.
+Only SCORECARD may define:
+ACTIVE
+FROZEN
+LOCKED
+COMPLETED
+
+Other documents may reference but never redefine them.

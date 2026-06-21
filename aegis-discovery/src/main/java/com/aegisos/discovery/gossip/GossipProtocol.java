@@ -33,11 +33,11 @@ public final class GossipProtocol implements AutoCloseable {
     private final int fanout;
     private final long intervalMs;
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> {
+            com.aegisos.core.ExecutorRegistry.register("gossipProtocol", Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "aegis-gossip");
                 t.setDaemon(true);
                 return t;
-            });
+            }));
 
     public GossipProtocol(NetworkLayer network, MembershipList membership, int fanout, long intervalMs) {
         this.network = network;
@@ -48,7 +48,7 @@ public final class GossipProtocol implements AutoCloseable {
 
     public void start() {
         network.registerHandler(MessageType.GOSSIP_SYN, this::onSyn);
-        scheduler.scheduleAtFixedRate(this::cycleSafe, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::cycleSafe, com.aegisos.core.SchedulerJitter.jitter(intervalMs, intervalMs), intervalMs, TimeUnit.MILLISECONDS);
         log.info("Gossip started (fanout={}, interval={}ms)", fanout, intervalMs);
     }
 

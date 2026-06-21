@@ -36,7 +36,7 @@ public final class JobRegistry implements SnapshotParticipant {
     static {
         Map<JobState, Set<JobState>> m = new EnumMap<>(JobState.class);
         m.put(JobState.PENDING,   EnumSet.of(JobState.QUEUED));
-        m.put(JobState.QUEUED,    EnumSet.of(JobState.RESTORING, JobState.RUNNING, JobState.LOST));
+        m.put(JobState.QUEUED,    EnumSet.of(JobState.RESTORING, JobState.RUNNING, JobState.FAILED, JobState.LOST));
         m.put(JobState.RESTORING, EnumSet.of(JobState.RUNNING, JobState.FAILED, JobState.LOST));
         m.put(JobState.RUNNING,   EnumSet.of(JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.LOST));
         m.put(JobState.LOST,      EnumSet.of(JobState.QUEUED));
@@ -218,6 +218,9 @@ public final class JobRegistry implements SnapshotParticipant {
         }
         if (newState == JobState.COMPLETED) {
             metricsRegistry.counter("aegis_jobs_completed_total").increment();
+        }
+        if (newState == JobState.FAILED) {
+            metricsRegistry.counter("aegis_jobs_failed_total").increment();
         }
     }
 

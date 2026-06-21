@@ -50,7 +50,7 @@ public class MembershipVisibilityTest {
     @Test
     void testMembershipVisibilityAndIsolation() throws Exception {
         AegisNode targetNode = nodes.get(0);
-        int apiPort = targetNode.metrics().boundPort();
+        int apiPort = targetNode.metricsServer().boundPort();
         String url = "http://127.0.0.1:" + apiPort + "/membership";
 
         // Query the membership endpoint directly before any client connects

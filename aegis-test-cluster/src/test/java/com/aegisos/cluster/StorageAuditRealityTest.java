@@ -83,7 +83,7 @@ public class StorageAuditRealityTest {
     }
     
     private String fetchAudit(AegisNode node) throws Exception {
-        int port = node.metrics().boundPort();
+        int port = node.metricsServer().boundPort();
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:" + port + "/audit/storage"))
                 .GET()

@@ -91,6 +91,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
 
     public void start() {
         network.registerHandler(MessageType.REQUEST_VOTE, this::onRequestVote);
+        network.registerHandler(MessageType.PRE_VOTE, this::onPreVote);
         network.registerHandler(MessageType.APPEND_ENTRIES, this::onAppendEntries);
         network.registerHandler(MessageType.CLIENT_COMMAND, this::onClientCommand);
         network.registerHandler(MessageType.INSTALL_SNAPSHOT, this::onInstallSnapshot);
@@ -314,6 +315,16 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         }
     }
 
+    private AegisMessage onPreVote(AegisMessage msg) {
+        try {
+            RequestVoteResult result = raftNode.handlePreVote(RequestVote.parseFrom(msg.payload()));
+            return new AegisMessage(null, msg.sender(), MessageType.PRE_VOTE_RESULT, result.toByteArray());
+        } catch (Exception e) {
+            log.warn("Bad PreVote: {}", e.toString());
+            return null;
+        }
+    }
+
     private AegisMessage onAppendEntries(AegisMessage msg) {
         try {
             AppendEntriesResult result = raftNode.handleAppendEntries(AppendEntries.parseFrom(msg.payload()));
@@ -363,6 +374,12 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
     @Override
     public CompletableFuture<RequestVoteResult> sendRequestVote(NodeId peer, RequestVote request) {
         return network.request(peer, MessageType.REQUEST_VOTE, request.toByteArray(), 1_000)
+                .thenApply(msg -> parse(msg.payload(), RequestVoteResult::parseFrom));
+    }
+
+    @Override
+    public CompletableFuture<RequestVoteResult> sendPreVote(NodeId peer, RequestVote request) {
+        return network.request(peer, MessageType.PRE_VOTE, request.toByteArray(), 1_000)
                 .thenApply(msg -> parse(msg.payload(), RequestVoteResult::parseFrom));
     }
 

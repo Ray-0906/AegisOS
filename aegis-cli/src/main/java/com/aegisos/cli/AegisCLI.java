@@ -35,7 +35,8 @@ import picocli.CommandLine;
                 RaftCommand.class,
                 JobsCommand.class,
                 com.aegisos.cli.commands.ClusterCommand.class,
-                com.aegisos.cli.commands.HealthCommand.class
+                com.aegisos.cli.commands.HealthCommand.class,
+                com.aegisos.cli.commands.MetricsCommand.class
         })
 // NOTE: all subcommands are wired now; their implementations are completed across phases.
 public final class AegisCLI implements Runnable {

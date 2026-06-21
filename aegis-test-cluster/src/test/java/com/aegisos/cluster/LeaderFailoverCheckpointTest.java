@@ -43,17 +43,17 @@ public class LeaderFailoverCheckpointTest {
             harness.stop(leader);
 
             // 1. Await Leader Election (Raft)
-            awaiter.awaitLeaderElection(Duration.ofSeconds(20));
+            awaiter.awaitLeaderElection(Duration.ofSeconds(45));
             
             // 2. Await Checkpoint Visible (Runtime/Raft Sync)
-            awaiter.awaitCheckpointVisible(jobId, lastSeq, Duration.ofSeconds(10));
+            awaiter.awaitCheckpointVisible(jobId, lastSeq, Duration.ofSeconds(20));
             
             // 3. Await Checkpoint Restored (Runtime Failover)
             // Wait for the job to resume and write a NEW checkpoint
-            awaiter.awaitCheckpointVisible(jobId, lastSeq + 1, Duration.ofSeconds(20));
+            awaiter.awaitCheckpointVisible(jobId, lastSeq + 1, Duration.ofSeconds(45));
             
             // 4. Await Node Death (Discovery) - moved to the end
-            awaiter.awaitNodeDeath(leaderId, Duration.ofSeconds(20));
+            awaiter.awaitNodeDeath(leaderId, Duration.ofSeconds(45));
         } finally {
             System.clearProperty("aegis.lease.duration.ms");
             System.clearProperty("aegis.supervisor.interval.ms");

@@ -5,7 +5,7 @@
 > root causes found, fixes applied, and what still deserves follow-up.
 
 **Branch:** `v1.0-dev`
-**Last updated:** 2026-06-14
+**Last updated:** 2026-06-21
 
 > **Key lesson:** The final stability work did not primarily involve making tests less strict; it involved correcting tests whose observation points no longer matched the distributed system's actual authority and ownership model after failover or migration.
 
@@ -502,3 +502,40 @@ Discovered a severe bug in `aegis-network` where RPC correlation IDs were strict
 **Fix applied:**
 1. Modified `aegis.proto` to add `bool is_response = 9;` to `MessageHeader`.
 2. Updated `NetworkLayer.java` and `PeerConnection.java` to serialize and verify the `is_response` boolean, ensuring that inbound requests do not complete pending futures.
+
+---
+
+## 14. Phase 2 Stabilization (2026-06-20 to 2026-06-21)
+
+This phase tackled two major architectural issues causing cluster instability during network partitions and worker thread delays.
+
+### H14: Raft PreVote & Election Storm Prevention (RESOLVED)
+
+**Symptom:** During network partitions, minority nodes would spin in election loops, rapidly inflating their term number. Upon reconnection, this inflated term forced healthy leaders to step down immediately, causing a cluster-wide "election storm" and significant leaderless windows.
+
+**Fix Applied:**
+1. Implemented **Pre-Vote**: A node must successfully gather a majority of "PreVotes" from peers *before* it increments its actual term and becomes a `CANDIDATE`. This strictly prevents isolated nodes from disrupting the cluster.
+2. Added `lastLeaderMessageTick` check: Nodes will reject `RequestVote` and `RequestPreVote` RPCs if they have recently heard from a healthy leader, preventing disruptive elections from partitioned nodes.
+3. Verified via 100/100 pass rate on `StaleCheckpointFenceTest`.
+
+### H15: Asynchronous Terminal State Publication (RESOLVED)
+
+**Symptom:** Worker threads (`ProcessRuntimeAgent`) and leader jobs (`JobSupervisor`) were treating `COMPLETED` and `LOST` metadata publication as synchronous, inline obligations with arbitrary retry loops. This effectively turned worker threads into mini-schedulers. If consensus was unstable, workers would hang up to 71 seconds doing exponential retries to publish state.
+
+**Fix Applied:**
+1. Introduced `TerminalPublicationScheduler`, backed by a `DelayQueue`.
+2. Moved terminal state (`COMPLETED`, `FAILED`, `CANCELLED`, `LOST`) publishing to this single background thread with robust exponential backoff.
+3. Stripped all retry/wait logic from worker execution blocks. Workers now simply enqueue the result and cleanly exit (`INV-037`).
+4. `JobSupervisor`'s `LOST` emission became fully asynchronous.
+
+### Test Suite Suite Certification (RESOLVED)
+
+**Symptom:** The introduction of H14 (PreVote) broke `VoterPromotionTest`, which explicitly waited for a node to become `CANDIDATE` when the leader was killed (a 1-node partition). The introduction of H15 slightly altered timing in `Phase6Test`.
+
+**Fix Applied:**
+1. Modified `VoterPromotionTest` to assert against a newly exposed `getPreVoteStarts()` metric, correctly reflecting the new `PreVote` consensus behavior.
+2. Verified `Phase6Test.runningJobSurvivesNodeDeath` with the asynchronous `LOST` transitions.
+3. **Full Suite Certification:** Ran `mvn clean verify` across all modules. 84/84 tests passed successfully with 0 errors.
+
+**Remaining Execution Consistency Tasks (H7, H8, H9, H10):**
+With consensus (H14) and publication (H15) hardened, future agents should investigate the remaining execution thread timing contracts and potential duplicate execution holes (e.g. `SEMANTIC_CONTRACT_001.md`).

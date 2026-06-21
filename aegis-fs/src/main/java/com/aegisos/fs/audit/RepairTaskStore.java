@@ -71,6 +71,7 @@ public final class RepairTaskStore implements SnapshotParticipant {
             TaskStatus.PENDING
         );
         tasks.put(repairId, task);
+        System.out.println("REPAIR_TASK_CREATED: " + repairId);
     }
 
     /** Applied when REPAIR_COMPLETE is committed. */
@@ -151,6 +152,7 @@ public final class RepairTaskStore implements SnapshotParticipant {
                 out.writeInt(task.status().ordinal());
             }
             out.flush();
+            System.out.println("REPAIR_TASK_PERSISTED: " + tasks.size() + " tasks");
             return baos.toByteArray();
         } catch (IOException e) {
             throw new SnapshotException("Failed to snapshot RepairTaskStore", e);
@@ -176,6 +178,7 @@ public final class RepairTaskStore implements SnapshotParticipant {
                 TaskStatus status = TaskStatus.values()[in.readInt()];
                 tasks.put(repairId, new RepairTask(repairId, chunkIdHex, scans, verifiedAt, committedAt, status));
             }
+            System.out.println("REPAIR_TASK_RESTORED: " + count + " tasks");
         } catch (IOException e) {
             throw new SnapshotException("Failed to restore RepairTaskStore", e);
         }

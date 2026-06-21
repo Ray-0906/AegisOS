@@ -107,7 +107,14 @@ public final class PeerConnection implements AutoCloseable {
         byte[] aad = header.toByteArray();
         byte[] cipherText = session.cipher().encrypt(nonce, payload, aad);
         Envelope env = EnvelopeCodec.build(header, cipherText, identity::sign);
+        int size = outbound.size();
+        if (size > 200) {
+            System.out.printf("HIGH_QUEUE timestamp=%d remoteNode=%s messageType=%s queueSize=%d%n",
+                    System.currentTimeMillis(), remoteNodeId().shortId(), type, size);
+        }
+        
         if (!outbound.offer(env.toByteArray())) {
+            System.out.printf("QUEUE_FULL remoteNode=%s messageType=%s%n", remoteNodeId().shortId(), type);
             closeQuietly();
             throw new IOException("outbound queue full for " + remoteNodeId().shortId());
         }

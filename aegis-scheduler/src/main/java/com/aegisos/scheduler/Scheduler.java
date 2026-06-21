@@ -41,28 +41,31 @@ public final class Scheduler implements AutoCloseable {
     private final NodeId self;
     private final PlacementAlgorithm placement = new PlacementAlgorithm();
     private final ResourceAllocator allocator;
-    private final java.util.concurrent.ExecutorService probeExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+    private final java.util.concurrent.ExecutorService probeExecutor = com.aegisos.core.ExecutorRegistry.register("schedulerProbe", java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
     private final java.util.concurrent.atomic.AtomicLong schedulerEpoch = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalDownloadBytesSaved = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicInteger localityWins = new java.util.concurrent.atomic.AtomicInteger(0);
     private final java.util.concurrent.ConcurrentMap<String, ByteString> activeJobAssignments = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<ByteString, java.util.concurrent.atomic.AtomicInteger> assignmentLoad = new java.util.concurrent.ConcurrentHashMap<>();
     private final Object placementLock = new Object();
-
     private volatile BooleanSupplier acceptProbe = () -> true;
     private volatile LocalityProvider localityProvider = new LocalityProvider() {
         public long getDownloadBytesSaved(List<String> a, String c) { return 0; }
         public int getRunningJobs() { return 0; }
     };
+    private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
 
     public Scheduler(NetworkLayer network, DiscoveryService discovery, ConsensusModule consensus,
-                     NodeResourcesView view, ResourceAllocator allocator, NodeId self) {
+                     NodeResourcesView view, ResourceAllocator allocator, NodeId self,
+                     com.aegisos.core.observability.MetricsRegistry metricsRegistry) {
         this.network = network;
         this.discovery = discovery;
         this.consensus = consensus;
         this.view = view;
         this.allocator = allocator;
         this.self = self;
+        this.metricsRegistry = metricsRegistry;
+
     }
 
     public long getTotalDownloadBytesSaved() {
@@ -322,6 +325,9 @@ public final class Scheduler implements AutoCloseable {
         }
         if (previous == null || !previous.equals(nodeId)) {
             assignmentLoad.computeIfAbsent(nodeId, ignored -> new java.util.concurrent.atomic.AtomicInteger()).incrementAndGet();
+            if (metricsRegistry != null) {
+                metricsRegistry.counter("aegis_scheduler_assignments_total").increment();
+            }
         }
     }
 

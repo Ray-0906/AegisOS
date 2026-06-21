@@ -86,6 +86,33 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     public final java.util.concurrent.atomic.AtomicLong logUploadsSucceeded = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong logUploadsFailed = new java.util.concurrent.atomic.AtomicLong(0);
 
+    public enum OwnershipDecision {
+        GRANTED,
+        DENIED
+    }
+
+    public enum PublicationResult {
+        ACKNOWLEDGED,
+        UNKNOWN
+    }
+
+    public enum ExecutionKind {
+        CONTAINER,
+        JVM
+    }
+
+    public record LocalExecution(
+            long executionId,
+            ExecutionKind kind,
+            java.time.Instant startedAt,
+            boolean runningAcknowledged
+    ) {}
+
+    private final java.util.concurrent.ConcurrentMap<String, LocalExecution> activeLocalWorkloads =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private final TerminalPublicationScheduler terminalScheduler;
+
     private volatile boolean shuttingDown = false;
     private final java.nio.file.Path workspaceRoot;
     private final int workspaceCleanupDelaySeconds;
@@ -109,6 +136,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         this.imageRegistry = new com.aegisos.runtime.container.MemoryImageRegistry();
         this.dockerBackend = new com.aegisos.runtime.container.DockerRuntimeBackend(this.containerEngine, this.imageRegistry);
         this.fileSystem = fileSystem;
+        this.terminalScheduler = new TerminalPublicationScheduler(consensus, this::isSuperseded);
 
         // Startup crash cleanup
         try {
@@ -158,6 +186,8 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         }
         try {
             RunJob runJob = RunJob.parseFrom(msg.payload());
+            System.out.println("INSTRUMENT: AGENT_RECEIVED_ASSIGNMENT jobId=" + runJob.getRecord().getSpec().getJobId());
+            System.out.println("INSTRUMENT: ASSIGNMENT_EXECUTION_ID=" + runJob.getRecord().getExecutionId());
             dispatchLocal(runJob.getRecord());
         } catch (Exception e) {
             log.error("Failed to parse or dispatch RUN_JOB", e);
@@ -167,20 +197,29 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
 
     /** Starts executing an assigned job on a virtual thread (also used for self-assignment). */
     public void dispatchLocal(JobRecord record) {
+        String jobId = record.getSpec().getJobId();
+        long executionId = record.getExecutionId();
         if (shuttingDown) {
-            log.info("Agent is shutting down, dropping dispatch for job {}", record.getSpec().getJobId());
+            log.info("Agent is shutting down, dropping dispatch for job {}", jobId);
             return;
         }
-        Thread.ofVirtual().name("aegis-job-" + record.getSpec().getJobId())
+
+        // Packet Fence: Cheap rejection of obviously stale RUN_JOB packets.
+        if (isSuperseded(jobId, executionId)) {
+            fencingDrops.incrementAndGet();
+            log.warn("Packet Fence: dropping stale RUN_JOB for job {} executionId={}", jobId, executionId);
+            return;
+        }
+
+        Thread.ofVirtual().name("aegis-job-" + jobId)
                 .start(() -> executeJob(record));
     }
     
     public void cancelJob(String jobId) {
         registry.get(jobId).ifPresentOrElse(job -> {
             if (!registry.isTerminal(jobId)) {
-                if (update(jobId, job.getExecutionId(), JobState.CANCELLED, null, "user-cancelled")) {
-                    jobsCancelled.incrementAndGet();
-                }
+                terminalScheduler.enqueue(jobId, job.getExecutionId(), JobState.CANCELLED, null, "user-cancelled");
+                jobsCancelled.incrementAndGet();
             }
             NodeId assignedNode = NodeId.of(job.getAssignedNodeId().toByteArray());
             if (self.equals(assignedNode)) {
@@ -276,6 +315,11 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     }
 
     private void executeJob(JobRecord record) {
+        System.out.println("INSTRUMENT: AGENT_START_EXECUTION jobId=" + record.getSpec().getJobId());
+        System.out.println("INSTRUMENT: START_EXECUTION_ID=" + record.getExecutionId());
+        long currentRegId = registry.get(record.getSpec().getJobId()).map(com.aegisos.proto.JobRecord::getExecutionId).orElse(-1L);
+        System.out.println("INSTRUMENT: REGISTRY_EXECUTION_ID=" + currentRegId);
+
         com.aegisos.proto.RuntimeType runtime = record.getSpec().getRuntime();
         if (runtime == com.aegisos.proto.RuntimeType.RUNTIME_CONTAINER) {
             executeContainerJob(record);
@@ -306,24 +350,35 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                         network.sendAsync(leader, com.aegisos.core.message.MessageType.JOB_HEARTBEAT, hb.toByteArray());
                     }
                 } catch (Exception e) {}
-            }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
+            }, com.aegisos.core.SchedulerJitter.jitter(0, 5), 5, java.util.concurrent.TimeUnit.SECONDS);
         } catch (java.util.concurrent.RejectedExecutionException e) {
             running.decrementAndGet();
             return;
         }
 
         try {
-            if (!update(jobId, executionId, JobState.RUNNING, null, null)) {
-                if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
-                log.warn("Execution {} of job {} failed to transition to RUNNING, discarding", executionId, jobId);
+            // 1. Workload Fence (Gate B)
+            if (validateOwnershipBeforeSideEffect(jobId, executionId, "container-start") == OwnershipDecision.DENIED) {
                 return;
             }
-            jobsStarted.incrementAndGet();
 
             java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
             java.nio.file.Files.createDirectories(execRoot);
 
+            // 2. Workload Reality
             ExecutionHandle handle = dockerBackend.start(jobId, executionId, record, execRoot);
+            activeLocalWorkloads.put(jobId, new LocalExecution(executionId, ExecutionKind.CONTAINER, java.time.Instant.now(), false));
+            jobsStarted.incrementAndGet();
+
+            // 3. Metadata Publication
+            PublicationResult pub = publishState(jobId, executionId, JobState.RUNNING, null, null);
+            if (pub == PublicationResult.ACKNOWLEDGED) {
+                activeLocalWorkloads.computeIfPresent(jobId, (k, v) ->
+                        new LocalExecution(v.executionId(), v.kind(), v.startedAt(), true));
+                if (metricsRegistry != null) metricsRegistry.counter("aegis_running_acknowledged").increment();
+            } else {
+                if (metricsRegistry != null) metricsRegistry.counter("aegis_running_unknown").increment();
+            }
 
             while (!shuttingDown) {
                 RuntimeStatus status = dockerBackend.status(handle);
@@ -337,47 +392,42 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                         return;
                     }
 
-                    java.util.Optional<ExecutionResult> resultOpt = dockerBackend.tryCollect(handle);
+                    java.util.Optional<com.aegisos.runtime.ExecutionResult> resultOpt = dockerBackend.tryCollect(handle);
                     if (resultOpt.isPresent()) {
-                        ExecutionResult res = resultOpt.get();
+                        com.aegisos.runtime.ExecutionResult res = resultOpt.get();
                         if (status == RuntimeStatus.COMPLETED) {
-                            if (update(jobId, executionId, JobState.COMPLETED, null, null)) {
-                                jobsCompleted.incrementAndGet();
-                                log.info("Container job {} COMPLETED", jobId);
-                            }
+                            terminalScheduler.enqueue(jobId, executionId, JobState.COMPLETED, null, null);
+                            jobsCompleted.incrementAndGet();
+                            log.info("Container job {} COMPLETED (queued for publication)", jobId);
                         } else {
                             if (isCurrentState(jobId, executionId, JobState.CANCELLED)) {
                                 log.info("Execution {} of job {} exited after cancellation; preserving CANCELLED state", executionId, jobId);
                             } else {
-                                if (update(jobId, executionId, JobState.FAILED, null, new String(res.stderr()))) {
-                                    jobsFailed.incrementAndGet();
-                                    log.info("Container job {} FAILED", jobId);
-                                }
+                                terminalScheduler.enqueue(jobId, executionId, JobState.FAILED, null, new String(res.stderr()));
+                                jobsFailed.incrementAndGet();
+                                log.info("Container job {} FAILED (queued for publication)", jobId);
                             }
                         }
                     } else {
                         if (!isCurrentState(jobId, executionId, JobState.CANCELLED)) {
-                            update(jobId, executionId, JobState.FAILED, null, "Failed to collect container result");
+                            terminalScheduler.enqueue(jobId, executionId, JobState.FAILED, null, "Failed to collect container result");
+                            jobsFailed.incrementAndGet();
                         }
                     }
+                    
                     uploadJobLogsBestEffort(jobId, executionId);
                     return;
                 }
                 Thread.sleep(100);
             }
         } catch (Exception e) {
-            if (shuttingDown) {
-                log.info("Container job {} aborted due to node shutdown.", jobId);
-            } else if (isCurrentState(jobId, executionId, JobState.CANCELLED)) {
-                log.info("Execution {} of job {} exited after cancellation; preserving CANCELLED state", executionId, jobId);
-            } else if (!isSuperseded(jobId, executionId)) {
-                log.error("Container job {} FAILED", jobId, e);
-                System.err.println("INSTRUMENT: JOB_FAILED_EMIT");
-                update(jobId, executionId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
-            }
+            log.error("Error monitoring docker job {}", jobId, e);
+            terminalScheduler.enqueue(jobId, executionId, JobState.FAILED, null, e.getMessage() == null ? "error" : e.getMessage());
+            jobsFailed.incrementAndGet();
         } finally {
             heartbeatTask.cancel(true);
             running.decrementAndGet();
+            activeLocalWorkloads.remove(jobId);
             cleanupJobFiles(jobId, executionId);
         }
     }
@@ -406,7 +456,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 } catch (Exception e) {
                     log.debug("Failed to send heartbeat for job {}: {}", jobId, e.getMessage());
                 }
-            }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
+            }, com.aegisos.core.SchedulerJitter.jitter(0, 5), 5, java.util.concurrent.TimeUnit.SECONDS);
         } catch (RejectedExecutionException e) {
             running.decrementAndGet();
             if (shuttingDown) {
@@ -430,20 +480,32 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 try {
                     restoreState = fileSystem.read(record.getCheckpointFileId());
                 } catch (Exception e) {
-                    System.err.println("INSTRUMENT: CHECKPOINT_DESERIALIZE_FAIL at " + System.currentTimeMillis());
-                    log.error("Failed to load checkpoint for job {}, marking FAILED", jobId, e);
-                    System.err.println("INSTRUMENT: JOB_FAILED_EMIT");
-                    update(jobId, executionId, JobState.FAILED, null, "Failed to load checkpoint: " + e.getMessage());
+                    log.error("Failed to load state for {}", jobId, e);
+                    terminalScheduler.enqueue(jobId, executionId, JobState.FAILED, null, "Failed to load checkpoint: " + e.getMessage());
+                    jobsFailed.incrementAndGet();
                     return;
                 }
             }
 
-            if (!update(jobId, executionId, JobState.RUNNING, null, null)) {
-                if (metricsRegistry != null) metricsRegistry.counter("aegis_execution_fencing_total").increment();
-                log.warn("Execution {} of job {} failed to transition to RUNNING (likely superseded), discarding", executionId, jobId);
+            // 1. Workload Fence (Gate B)
+            if (validateOwnershipBeforeSideEffect(jobId, executionId, "jvm-start") == OwnershipDecision.DENIED) {
                 return;
             }
+
+            // 2. Workload Reality Context
+            activeLocalWorkloads.put(jobId, new LocalExecution(executionId, ExecutionKind.JVM, java.time.Instant.now(), false));
             jobsStarted.incrementAndGet();
+
+            // 3. Metadata Publication
+            // Since JVM execution is synchronous, we publish RUNNING immediately before the blocking execution.
+            PublicationResult pub = publishState(jobId, executionId, JobState.RUNNING, null, null);
+            if (pub == PublicationResult.ACKNOWLEDGED) {
+                activeLocalWorkloads.computeIfPresent(jobId, (k, v) ->
+                        new LocalExecution(v.executionId(), v.kind(), v.startedAt(), true));
+                if (metricsRegistry != null) metricsRegistry.counter("aegis_running_acknowledged").increment();
+            } else {
+                if (metricsRegistry != null) metricsRegistry.counter("aegis_running_unknown").increment();
+            }
 
             byte[] result;
             int memoryMb = (int) record.getSpec().getResources().getMemoryMb();
@@ -568,10 +630,10 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 return;
             }
             // Commit terminal state BEFORE non-essential work
-            if (update(jobId, executionId, JobState.COMPLETED, result, null)) {
-                jobsCompleted.incrementAndGet();
-                log.info("Job {} COMPLETED", jobId);
-            }
+            terminalScheduler.enqueue(jobId, executionId, JobState.COMPLETED, result, null);
+            jobsCompleted.incrementAndGet();
+            log.info("Job {} COMPLETED (queued for publication)", jobId);
+            
             // Gate B: upload job logs to AegisFS (best effort)
             uploadJobLogsBestEffort(jobId, executionId);
         } catch (Exception e) {
@@ -583,12 +645,9 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 if (!isSuperseded(jobId, executionId)) {
                     log.error("Job {} FAILED", jobId, e);
                     System.err.println("INSTRUMENT: JOB_FAILED_EMIT");
-                    // Commit terminal state BEFORE non-essential work
-                    if (update(jobId, executionId, JobState.FAILED, null,
-                            e.getMessage() == null ? "error" : e.getMessage())) {
-                        jobsFailed.incrementAndGet();
-                    }
-                    // Best-effort log upload
+                    terminalScheduler.enqueue(jobId, executionId, JobState.FAILED, null,
+                            e.getMessage() == null ? "error" : e.getMessage());
+                    jobsFailed.incrementAndGet();
                     uploadJobLogsBestEffort(jobId, executionId);
                 } else {
                     fencingDrops.incrementAndGet();
@@ -600,8 +659,53 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         } finally {
             heartbeatTask.cancel(true);
             running.decrementAndGet();
+            activeLocalWorkloads.remove(jobId);
             cleanupJobFiles(jobId, executionId);
         }
+    }
+
+    private PublicationResult publishState(String jobId, long executionId, JobState state, byte[] result, String error) {
+        if (shuttingDown) {
+            log.debug("Skipping {} publication for job {} execution {} during shutdown", state, jobId, executionId);
+            return PublicationResult.UNKNOWN;
+        }
+
+        JobUpdate.Builder b = JobUpdate.newBuilder()
+                .setJobId(jobId)
+                .setExecutionId(executionId)
+                .setState(state);
+        if (result != null) b.setResult(ByteString.copyFrom(result));
+        if (error != null) b.setError(error);
+
+        StateCommand cmd = StateCommand.newBuilder()
+                .setType(CommandType.UPDATE_JOB)
+                .setPayload(b.build().toByteString())
+                .build();
+
+        try {
+            consensus.propose(cmd).get(10, TimeUnit.SECONDS);
+            return PublicationResult.ACKNOWLEDGED;
+        } catch (java.util.concurrent.TimeoutException e) {
+            log.debug("Timeout publishing {} for job {} execution {}: {}", state, jobId, executionId, e.getMessage());
+            return PublicationResult.UNKNOWN;
+        } catch (Exception e) {
+            log.debug("Failed publishing {} for job {} execution {}: {}", state, jobId, executionId, e.getMessage());
+            return PublicationResult.UNKNOWN;
+        }
+    }
+
+    private OwnershipDecision validateOwnershipBeforeSideEffect(String jobId, long executionId, String phase) {
+        if (isSuperseded(jobId, executionId)) {
+            fencingDrops.incrementAndGet(); // Also serves as our OWNERSHIP_DENIED proxy metric
+            
+            // Log authoritative execution IDs for debugging
+            long registryExecId = registry.get(jobId).map(JobRecord::getExecutionId).orElse(-1L);
+            log.warn("Workload Fence denied: job={} attempt={} registry={} phase={}", 
+                    jobId, executionId, registryExecId, phase);
+            
+            return OwnershipDecision.DENIED;
+        }
+        return OwnershipDecision.GRANTED;
     }
 
     private boolean update(String jobId, long executionId, JobState state, byte[] result, String error) {

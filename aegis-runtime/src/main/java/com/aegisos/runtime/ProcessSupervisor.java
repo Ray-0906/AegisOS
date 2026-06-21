@@ -200,6 +200,7 @@ public class ProcessSupervisor {
                 log.info("[{}] Process exited with code {}", jobId, exitCode);
                 if (exitCode != 0) {
                     logWorkerStderr(stderrFile);
+                    System.out.println("PROCESS_EXITED");
                     throw new RuntimeException("Process exited abruptly with code " + exitCode);
                 }
             }

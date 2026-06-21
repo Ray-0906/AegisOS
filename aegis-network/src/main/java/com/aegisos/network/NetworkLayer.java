@@ -62,14 +62,18 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     private final Map<Long, PendingRequest> pending = new ConcurrentHashMap<>();
     private final AtomicLong correlationCounter = new AtomicLong(1);
 
-    private static volatile java.util.function.BiPredicate<NodeId, NodeId> messageFilter = (from, to) -> true;
+    public interface MessageFilter {
+        boolean test(NodeId from, NodeId to, MessageType type, byte[] payload);
+    }
 
-    public static void setMessageFilter(java.util.function.BiPredicate<NodeId, NodeId> filter) {
-        messageFilter = filter != null ? filter : (from, to) -> true;
+    private static volatile MessageFilter messageFilter = (from, to, type, payload) -> true;
+
+    public static void setMessageFilter(MessageFilter filter) {
+        messageFilter = filter != null ? filter : (from, to, type, payload) -> true;
     }
 
     public static void clearMessageFilter() {
-        messageFilter = (from, to) -> true;
+        messageFilter = (from, to, type, payload) -> true;
     }
 
     /**
@@ -103,7 +107,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
      * block gracefully on I/O, and impose no artificial parallelism limit.
      */
     private final ExecutorService handlerExecutor =
-            Executors.newVirtualThreadPerTaskExecutor();
+            com.aegisos.core.ExecutorRegistry.register("networkLayer", Executors.newVirtualThreadPerTaskExecutor());
 
     private volatile Function<NodeId, Optional<Endpoint>> addressResolver = id -> Optional.empty();
     private TcpServer server;
@@ -209,7 +213,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     /** Fire-and-forget send. Returns false if the peer is unreachable. */
     public boolean sendAsync(NodeId nodeId, MessageType type, byte[] payload) {
-        if (!messageFilter.test(localNodeId(), nodeId)) {
+        if (!messageFilter.test(localNodeId(), nodeId, type, payload)) {
             return false;
         }
         Optional<PeerConnection> conn = ensureConnected(nodeId);
@@ -233,7 +237,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     public CompletableFuture<AegisMessage> request(NodeId nodeId, MessageType type,
                                                    byte[] payload, long timeoutMs) {
-        if (!messageFilter.test(localNodeId(), nodeId)) {
+        if (!messageFilter.test(localNodeId(), nodeId, type, payload)) {
             return CompletableFuture.failedFuture(new IOException("partitioned from " + nodeId.shortId()));
         }
         Optional<PeerConnection> conn = ensureConnected(nodeId);
@@ -256,7 +260,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     @Override
     public void onMessage(PeerConnection connection, AegisMessage message, long correlation, boolean isResponse) {
-        if (!messageFilter.test(message.sender(), localNodeId())) {
+        if (!messageFilter.test(message.sender(), localNodeId(), message.type(), message.payload())) {
             log.debug("Partition dropped inbound message from {} to {}", message.sender().shortId(), localNodeId().shortId());
             return;
         }

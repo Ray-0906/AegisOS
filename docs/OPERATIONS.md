@@ -87,3 +87,24 @@ The following rules guard against premature abstraction and over-refactoring.
 
 *   **OBS-001**: Every observability feature must answer a real operational question (e.g. "Who is leader?", "Why is this job stuck?").
 *   **OBS-002**: Observability must be read-only. Observability features must never alter system state. Commands may inspect, aggregate, and report, but never mutate.
+*   **OBS-004**: Commands have ownership. One operational question -> one canonical command. Avoid aliases that represent different domains.
+*   ### OBS-005: Event Ownership
+Metrics must be owned by the subsystem that creates the event.
+`MetricsSnapshot` may aggregate metrics.
+`MetricsSnapshot` may never derive historical events retroactively.
+
+### OBS-006: Metric Types
+`MetricsSnapshot` must explicitly distinguish gauges from counters.
+A gauge represents current state.
+A counter represents accumulated events.
+Never expose counters as gauges.
+
+### OBS-007: Domain Scope
+Observability metrics describe AegisOS behavior, not host machine behavior.
+JVM/OS metrics are infrastructure metrics.
+
+### OBS-008: Transport Boundaries
+Transports may not traverse subsystems.
+Transports consume exporters.
+Exporters consume snapshots.
+Snapshots consume subsystem state.

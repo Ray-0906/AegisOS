@@ -56,12 +56,10 @@ public class HotArtifactSpreadTest {
         com.google.protobuf.ByteString nodeWithCache = primerRec.getAssignedNodeId();
 
         // 3. Submit 30 jobs concurrently that use the same artifact
-        // Fill Node With Cache's soft reservations manually to guarantee it hits maxConcurrentReservations (10)
+        // Permanently fill Node With Cache's hard allocations to guarantee it rejects new jobs
         AegisNode targetNode = harness.nodes().stream().filter(n -> com.google.protobuf.ByteString.copyFrom(n.identity().nodeId().toBytes()).equals(nodeWithCache)).findFirst().orElseThrow();
         com.aegisos.scheduler.ResourceAllocator allocator = targetNode.scheduler().allocator();
-        for (int i = 0; i < 10; i++) {
-            allocator.tryReserve("dummy-" + i, 0, com.aegisos.proto.ResourceRequest.newBuilder().build());
-        }
+        allocator.commitHardAllocation("dummy-blocker", com.aegisos.proto.ResourceRequest.newBuilder().setCpuCores(99999).build());
 
         // Now submit 5 jobs. Node 0 will reject them in the probe phase, so they MUST spill over.
         int totalJobs = 5;

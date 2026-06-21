@@ -15,6 +15,8 @@ public interface RaftTransport {
 
     CompletableFuture<RequestVoteResult> sendRequestVote(NodeId peer, RequestVote request);
 
+    CompletableFuture<RequestVoteResult> sendPreVote(NodeId peer, RequestVote request);
+
     CompletableFuture<AppendEntriesResult> sendAppendEntries(NodeId peer, AppendEntries request);
 
     CompletableFuture<InstallSnapshotResponse> sendInstallSnapshot(NodeId peer, InstallSnapshot request);

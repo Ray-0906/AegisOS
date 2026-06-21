@@ -36,11 +36,11 @@ public final class ResourceReporter implements AutoCloseable {
     private final IntSupplier runningJobs;
     private final long intervalMs;
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> {
+            com.aegisos.core.ExecutorRegistry.register("resourceReporter", Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "aegis-resource-reporter");
                 t.setDaemon(true);
                 return t;
-            });
+            }));
 
     public ResourceReporter(NetworkLayer network, DiscoveryService discovery, NodeId self,
                             Path storageDir, NodeResourcesView view, IntSupplier runningJobs,
@@ -56,7 +56,7 @@ public final class ResourceReporter implements AutoCloseable {
 
     public void start() {
         network.registerHandler(MessageType.RESOURCES, this::onResources);
-        scheduler.scheduleAtFixedRate(this::reportSafe, 0, intervalMs, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::reportSafe, com.aegisos.core.SchedulerJitter.jitter(0, intervalMs), intervalMs, TimeUnit.MILLISECONDS);
         log.info("Resource reporter started (interval {}ms)", intervalMs);
     }
 

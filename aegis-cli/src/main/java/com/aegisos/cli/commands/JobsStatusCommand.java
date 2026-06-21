@@ -5,8 +5,8 @@ import picocli.CommandLine;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-@CommandLine.Command(name = "status", description = "Show the status of a submitted job.")
-public final class StatusCommand implements Callable<Integer> {
+@CommandLine.Command(name = "status", description = "Show the detailed status of a specific job.")
+public final class JobsStatusCommand implements Callable<Integer> {
 
     @CommandLine.Parameters(index = "0", description = "Job id.")
     String jobId;
@@ -16,7 +16,6 @@ public final class StatusCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        System.err.println("[DEPRECATED] Use: aegis jobs status " + jobId + "\n");
         return ClientCommands.runStatus(seeds, jobId);
     }
 }

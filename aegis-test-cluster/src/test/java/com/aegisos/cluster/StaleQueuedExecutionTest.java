@@ -36,25 +36,38 @@ public class StaleQueuedExecutionTest {
             
             // We want to capture the RUN_JOB message and prevent it from reaching the target initially.
             java.util.concurrent.atomic.AtomicReference<byte[]> capturedRunJob = new java.util.concurrent.atomic.AtomicReference<>();
-            com.aegisos.network.NetworkLayer.setMessageFilter((from, to) -> {
-                return true; // We don't drop at the network layer, we'll just test dispatchLocal
+            com.aegisos.network.NetworkLayer.setMessageFilter((from, to, type, payload) -> {
+                if (to.equals(target.identity().nodeId()) && type == com.aegisos.core.message.MessageType.RUN_JOB) {
+                    return false; // Drop RUN_JOB to simulate delayed packet
+                }
+                return true; 
             });
 
-            // Submit job
-            JobHandle handle = submitter.api().getProcessManager().submit(new SleepJob(10_000), 1, 128);
-            String jobId = handle.jobId();
-
-            // Wait for it to be QUEUED (this guarantees ASSIGN_JOB has committed and executionId is 1)
-            assertTrue(ClusterHarness.await(10_000, () -> {
-                Optional<JobRecord> r = submitter.runtimeAgent().registry().get(jobId);
-                return r.isPresent() && r.get().getExecutionId() == 1 && 
-                       (r.get().getState() == JobState.QUEUED || r.get().getState() == JobState.RUNNING);
-            }), "Job should be assigned");
-            
-            JobRecord record1 = submitter.runtimeAgent().registry().get(jobId).get().toBuilder()
-                    .setExecutionId(1L)
-                    .setState(JobState.QUEUED)
+            // Manually inject the job assigned to target to bypass random scheduler assignment
+            String jobId = java.util.UUID.randomUUID().toString();
+            com.aegisos.proto.JobSpec spec = com.aegisos.proto.JobSpec.newBuilder()
+                    .setJobId(jobId)
+                    .setClassName(SleepJob.class.getName())
+                    .setArgs(com.google.protobuf.ByteString.copyFrom(new byte[0]))
                     .build();
+
+            JobRecord record1 = JobRecord.newBuilder()
+                    .setSpec(spec)
+                    .setState(JobState.QUEUED)
+                    .setExecutionId(1L)
+                    .setAssignedNodeId(com.google.protobuf.ByteString.copyFrom(target.identity().nodeId().toBytes()))
+                    .build();
+
+            leader.consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
+                    .setType(com.aegisos.proto.CommandType.ASSIGN_JOB)
+                    .setPayload(record1.toByteString())
+                    .build()).get();
+
+            // Wait for it to be QUEUED in the target's registry
+            assertTrue(ClusterHarness.await(10_000, () -> {
+                Optional<JobRecord> r = target.runtimeAgent().registry().get(jobId);
+                return r.isPresent() && r.get().getExecutionId() == 1 && r.get().getState() == JobState.QUEUED;
+            }), "Job should be assigned to target");
 
             // Now manually propose LOST for executionId 1 to force a requeue.
             // This simulates JobSupervisor deciding the node died or the lease expired.
@@ -68,9 +81,9 @@ public class StaleQueuedExecutionTest {
                     .setPayload(lostUpdate.toByteString())
                     .build()).get();
 
-            // Wait for the leader to requeue it (executionId >= 2)
+            // Wait for the target to requeue it (executionId >= 2)
             assertTrue(ClusterHarness.await(25_000, () -> {
-                Optional<JobRecord> rec = submitter.runtimeAgent().registry().get(jobId);
+                Optional<JobRecord> rec = target.runtimeAgent().registry().get(jobId);
                 return rec.isPresent() && rec.get().getExecutionId() > 1;
             }), "Job should be requeued");
 
