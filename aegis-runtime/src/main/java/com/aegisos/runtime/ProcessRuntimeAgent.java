@@ -699,10 +699,16 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             fencingDrops.incrementAndGet(); // Also serves as our OWNERSHIP_DENIED proxy metric
             
             // Log authoritative execution IDs for debugging
-            long registryExecId = registry.get(jobId).map(JobRecord::getExecutionId).orElse(-1L);
+            long registryExecId = registry.get(jobId).map(com.aegisos.proto.JobRecord::getExecutionId).orElse(-1L);
             log.warn("Workload Fence denied: job={} attempt={} registry={} phase={}", 
                     jobId, executionId, registryExecId, phase);
             
+            return OwnershipDecision.DENIED;
+        }
+        if (registry.isTerminal(jobId)) {
+            fencingDrops.incrementAndGet();
+            log.warn("Workload Fence denied: job={} attempt={} phase={} (already terminal)", 
+                    jobId, executionId, phase);
             return OwnershipDecision.DENIED;
         }
         return OwnershipDecision.GRANTED;

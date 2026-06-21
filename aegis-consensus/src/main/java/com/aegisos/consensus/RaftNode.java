@@ -350,7 +350,7 @@ public final class RaftNode {
         AtomicInteger votes = new AtomicInteger(1); // pre-vote for self
 
         preVoteStarts.incrementAndGet();
-        System.out.println("RAFT_DIAG event=PRE_VOTE_STARTED node=" + self.shortId() + " preVoteTerm=" + preVoteTerm + " cluster=" + clusterSize);
+        log.debug("RAFT_DIAG event=PRE_VOTE_STARTED node={} preVoteTerm={} cluster={}", self.shortId(), preVoteTerm, clusterSize);
 
         RequestVote req = RequestVote.newBuilder()
                 .setTerm(preVoteTerm)
@@ -382,23 +382,23 @@ public final class RaftNode {
         try {
             // If our term changed since we sent the pre-vote, discard
             if (metadata.currentTerm() + 1 != preVoteTerm) {
-                System.out.println("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_TERM node=" + self.shortId());
+                log.debug("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_TERM node={}", self.shortId());
                 return;
             }
             // If we're already leader, discard
             if (role == RaftRole.LEADER) {
-                System.out.println("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_ROLE node=" + self.shortId());
+                log.debug("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_ROLE node={}", self.shortId());
                 return;
             }
             // Do NOT step down on higher term — this is pre-vote
             if (result.getVoteGranted()) {
-                System.out.println("RAFT_DIAG event=PRE_VOTE_RESP_GRANTED node=" + self.shortId() + " from=peer votes=" + (votes.get()+1) + "/" + majority);
+                log.debug("RAFT_DIAG event=PRE_VOTE_RESP_GRANTED node={} from=peer votes={}/{}", self.shortId(), (votes.get()+1), majority);
                 if (votes.incrementAndGet() >= majority) {
-                    System.out.println("RAFT_DIAG event=PRE_VOTE_GRANTED node=" + self.shortId() + " preVoteTerm=" + preVoteTerm);
+                    log.debug("RAFT_DIAG event=PRE_VOTE_GRANTED node={} preVoteTerm={}", self.shortId(), preVoteTerm);
                     startElection();
                 }
             } else {
-                System.out.println("RAFT_DIAG event=PRE_VOTE_RESP_REJECTED node=" + self.shortId() + " respTerm=" + result.getTerm());
+                log.debug("RAFT_DIAG event=PRE_VOTE_RESP_REJECTED node={} respTerm={}", self.shortId(), result.getTerm());
             }
         } finally {
             lock.unlock();
@@ -424,7 +424,7 @@ public final class RaftNode {
         int majority = clusterSize / 2 + 1;
         AtomicInteger votes = new AtomicInteger(1); // vote for self
 
-        System.out.println("RAFT_DIAG event=ELECTION_STARTED node=" + self.shortId() + " term=" + newTerm + " cluster=" + clusterSize);
+        log.debug("RAFT_DIAG event=ELECTION_STARTED node={} term={} cluster={}", self.shortId(), newTerm, clusterSize);
         log.info("Node {} starting election for term {} (cluster {}, majority {})",
                 self.shortId(), newTerm, clusterSize, majority);
 
@@ -474,7 +474,7 @@ public final class RaftNode {
         if (role != RaftRole.LEADER && metricsRegistry != null) {
             metricsRegistry.counter("aegis_raft_leader_changes_total").increment();
         }
-        System.out.println("RAFT_DIAG event=LEADER_ELECTED node=" + self.shortId() + " term=" + metadata.currentTerm());
+        log.debug("RAFT_DIAG event=LEADER_ELECTED node={} term={}", self.shortId(), metadata.currentTerm());
         role = RaftRole.LEADER;
         leaderId = self;
         electionTimer.stop();
@@ -742,7 +742,7 @@ public final class RaftNode {
     private void stepDown(long newTerm) {
         log.debug("TRANSITION: {} -> FOLLOWER", role);
         long current = metadata.currentTerm();
-        System.out.println("RAFT_DIAG event=STEPDOWN node=" + self.shortId() + " oldRole=" + role + " oldTerm=" + current + " newTerm=" + newTerm);
+        log.debug("RAFT_DIAG event=STEPDOWN node={} oldRole={} oldTerm={} newTerm={}", self.shortId(), role, current, newTerm);
         if (newTerm > current) {
             metadata.setCurrentTerm(newTerm);
             if (metricsRegistry != null) {
@@ -772,7 +772,7 @@ public final class RaftNode {
                 return voteResult(term, false);
             }
             if (req.getTerm() > term) {
-                System.out.println("RAFT_DIAG event=VOTE_HIGHER_TERM node=" + self.shortId() + " from=" + candidate.shortId() + " reqTerm=" + req.getTerm() + " myTerm=" + term);
+                log.debug("RAFT_DIAG event=VOTE_HIGHER_TERM node={} from={} reqTerm={} myTerm={}", self.shortId(), candidate.shortId(), req.getTerm(), term);
                 stepDown(req.getTerm());
                 term = req.getTerm();
             }
@@ -798,20 +798,20 @@ public final class RaftNode {
 
             // Reject if candidate's hypothetical term is not higher than ours
             if (req.getTerm() <= term) {
-                System.out.println("RAFT_DIAG event=PRE_VOTE_REJECT_TERM node=" + self.shortId() + " reqTerm=" + req.getTerm() + " myTerm=" + term);
+                log.debug("RAFT_DIAG event=PRE_VOTE_REJECT_TERM node={} reqTerm={} myTerm={}", self.shortId(), req.getTerm(), term);
                 return voteResult(term, false);
             }
 
             // Reject if we believe a leader is alive (received heartbeat recently)
             long timeSinceLeaderMsg = System.currentTimeMillis() - lastLeaderMessageTick;
             if (leaderId != null && timeSinceLeaderMsg < ELECTION_MIN_MS) {
-                System.out.println("RAFT_DIAG event=PRE_VOTE_REJECT_LIVENESS node=" + self.shortId() + " leaderId=" + leaderId.shortId() + " time=" + timeSinceLeaderMsg);
+                log.debug("RAFT_DIAG event=PRE_VOTE_REJECT_LIVENESS node={} leaderId={} time={}", self.shortId(), leaderId.shortId(), timeSinceLeaderMsg);
                 return voteResult(term, false);
             }
 
             // Grant if candidate's log is at least as up-to-date as ours
             boolean upToDate = raftLog.isUpToDate(req.getLastLogIndex(), req.getLastLogTerm());
-            System.out.println("RAFT_DIAG event=PRE_VOTE_UPTODATE_CHECK node=" + self.shortId() + " upToDate=" + upToDate);
+            log.debug("RAFT_DIAG event=PRE_VOTE_UPTODATE_CHECK node={} upToDate={}", self.shortId(), upToDate);
             return voteResult(term, upToDate);
         } finally {
             lock.unlock();
@@ -824,7 +824,7 @@ public final class RaftNode {
             log.debug("RaftNode received AppendEntries: prevLogIndex={}, entries={}, leaderCommit={}", req.getPrevLogIndex(), req.getEntriesCount(), req.getLeaderCommit());
             long term = metadata.currentTerm();
             if (req.getTerm() < term) {
-                System.out.println("RAFT_DIAG event=AE_REJECTED node=" + self.shortId() + " leaderTerm=" + req.getTerm() + " myTerm=" + term);
+                log.debug("RAFT_DIAG event=AE_REJECTED node={} leaderTerm={} myTerm={}", self.shortId(), req.getTerm(), term);
                 return appendResult(term, false, raftLog.lastIndex());
             }
             if (req.getTerm() > term) {
@@ -855,7 +855,7 @@ public final class RaftNode {
             long nowHb = System.currentTimeMillis();
             if (nowHb - lastHeartbeatDiag > 1000) {
                 lastHeartbeatDiag = nowHb;
-                System.out.println("RAFT_DIAG event=HEARTBEAT_ACCEPTED node=" + self.shortId() + " leaderTerm=" + term + " leader=" + leaderId.shortId());
+                log.debug("RAFT_DIAG event=HEARTBEAT_ACCEPTED node={} leaderTerm={} leader={}", self.shortId(), term, leaderId.shortId());
             }
             return appendResult(term, true, raftLog.lastIndex());
         } finally {

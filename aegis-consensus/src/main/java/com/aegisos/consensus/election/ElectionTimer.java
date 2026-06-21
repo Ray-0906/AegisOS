@@ -12,6 +12,8 @@ import java.util.concurrent.TimeUnit;
  */
 public final class ElectionTimer {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ElectionTimer.class);
+
     private final ScheduledExecutorService scheduler;
     private final Runnable onTimeout;
     private final long minMs;
@@ -37,11 +39,15 @@ public final class ElectionTimer {
         }
         long delay = ThreadLocalRandom.current().nextLong(minMs, maxMs + 1);
         try {
-            System.out.println("RAFT_TASK_ENQUEUED=ELECTION_TIMEOUT");
+            if (log.isTraceEnabled()) {
+                log.trace("RAFT_TASK_ENQUEUED=ELECTION_TIMEOUT");
+            }
             long expectedRunTime = System.currentTimeMillis() + delay;
             pending = scheduler.schedule(() -> {
                 long now = System.currentTimeMillis();
-                System.out.println("RAFT_TASK_STARTED=ELECTION_TIMEOUT");
+                if (log.isTraceEnabled()) {
+                    log.trace("RAFT_TASK_STARTED=ELECTION_TIMEOUT");
+                }
                 com.aegisos.consensus.RaftLagMonitor.record("ELECTION_TIMEOUT", now - expectedRunTime);
                 this.fire();
             }, delay, TimeUnit.MILLISECONDS);

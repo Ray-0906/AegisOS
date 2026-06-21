@@ -35,11 +35,11 @@ public final class JobRegistry implements SnapshotParticipant {
     private static final Map<JobState, Set<JobState>> VALID_TRANSITIONS;
     static {
         Map<JobState, Set<JobState>> m = new EnumMap<>(JobState.class);
-        m.put(JobState.PENDING,   EnumSet.of(JobState.QUEUED));
-        m.put(JobState.QUEUED,    EnumSet.of(JobState.RESTORING, JobState.RUNNING, JobState.FAILED, JobState.LOST));
-        m.put(JobState.RESTORING, EnumSet.of(JobState.RUNNING, JobState.FAILED, JobState.LOST));
+        m.put(JobState.PENDING,   EnumSet.of(JobState.QUEUED, JobState.CANCELLED));
+        m.put(JobState.QUEUED,    EnumSet.of(JobState.RESTORING, JobState.RUNNING, JobState.COMPLETED, JobState.FAILED, JobState.LOST, JobState.CANCELLED));
+        m.put(JobState.RESTORING, EnumSet.of(JobState.RUNNING, JobState.COMPLETED, JobState.FAILED, JobState.LOST, JobState.CANCELLED));
         m.put(JobState.RUNNING,   EnumSet.of(JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED, JobState.LOST));
-        m.put(JobState.LOST,      EnumSet.of(JobState.QUEUED));
+        m.put(JobState.LOST,      EnumSet.of(JobState.QUEUED, JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED));
         VALID_TRANSITIONS = Map.copyOf(m);
     }
 
@@ -87,10 +87,16 @@ public final class JobRegistry implements SnapshotParticipant {
             try {
                 JobRecord record = JobRecord.parseFrom(cmd.getPayload());
                 jobs.compute(record.getSpec().getJobId(), (id, existing) -> {
-                    if (existing != null && existing.getExecutionId() >= record.getExecutionId()) {
-                        log.warn("Fencing rejected ASSIGN_JOB for {}: current execId {}, new execId {}",
-                                id, existing.getExecutionId(), record.getExecutionId());
-                        return existing;
+                    if (existing != null) {
+                        if (existing.getExecutionId() >= record.getExecutionId()) {
+                            log.warn("Fencing rejected ASSIGN_JOB for {}: current execId {}, new execId {}",
+                                    id, existing.getExecutionId(), record.getExecutionId());
+                            return existing;
+                        }
+                        if (isTerminalState(existing.getState())) {
+                            log.warn("Fencing rejected ASSIGN_JOB for {}: job is already in terminal state {}", id, existing.getState());
+                            return existing;
+                        }
                     }
                     return record;
                 });
