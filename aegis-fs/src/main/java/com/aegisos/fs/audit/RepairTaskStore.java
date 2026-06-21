@@ -5,6 +5,8 @@ import com.aegisos.consensus.SnapshotParticipant;
 import com.aegisos.proto.RepairChunk;
 import com.aegisos.proto.RepairComplete;
 import com.aegisos.core.util.HexUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -14,6 +16,8 @@ import java.util.Map;
 import java.util.Optional;
 
 public final class RepairTaskStore implements SnapshotParticipant {
+
+    private static final Logger log = LoggerFactory.getLogger(RepairTaskStore.class);
 
     public enum TaskStatus { PENDING, COMPLETE, EXPIRED }
 
@@ -71,7 +75,7 @@ public final class RepairTaskStore implements SnapshotParticipant {
             TaskStatus.PENDING
         );
         tasks.put(repairId, task);
-        System.out.println("REPAIR_TASK_CREATED: " + repairId);
+        log.debug("Repair task created: {}", repairId);
     }
 
     /** Applied when REPAIR_COMPLETE is committed. */
@@ -152,7 +156,7 @@ public final class RepairTaskStore implements SnapshotParticipant {
                 out.writeInt(task.status().ordinal());
             }
             out.flush();
-            System.out.println("REPAIR_TASK_PERSISTED: " + tasks.size() + " tasks");
+            log.debug("Persisted {} repair tasks", tasks.size());
             return baos.toByteArray();
         } catch (IOException e) {
             throw new SnapshotException("Failed to snapshot RepairTaskStore", e);
@@ -178,7 +182,7 @@ public final class RepairTaskStore implements SnapshotParticipant {
                 TaskStatus status = TaskStatus.values()[in.readInt()];
                 tasks.put(repairId, new RepairTask(repairId, chunkIdHex, scans, verifiedAt, committedAt, status));
             }
-            System.out.println("REPAIR_TASK_RESTORED: " + count + " tasks");
+            log.debug("Restored {} repair tasks", count);
         } catch (IOException e) {
             throw new SnapshotException("Failed to restore RepairTaskStore", e);
         }

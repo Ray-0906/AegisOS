@@ -67,11 +67,11 @@ public class ProcessSupervisor {
             // Try symlink, fallback to copy
             try {
                 java.nio.file.Files.createSymbolicLink(targetPath, java.nio.file.Paths.get(localCachePath));
-                log.info("Symlinked artifact {} to {}", localCachePath, targetPath);
+                log.debug("Symlinked artifact {} to {}", localCachePath, targetPath);
             } catch (Exception e) {
                 log.debug("Failed to create symlink for {}, falling back to copy: {}", mountPath, e.getMessage());
                 java.nio.file.Files.copy(java.nio.file.Paths.get(localCachePath), targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                log.info("Copied artifact {} to {}", localCachePath, targetPath);
+                log.debug("Copied artifact {} to {}", localCachePath, targetPath);
             }
         }
     }
@@ -96,7 +96,7 @@ public class ProcessSupervisor {
         for (Object o : jobArgs) {
             sb.append(o == null ? "null" : o.getClass().getName()).append(", ");
         }
-        log.info(sb.toString());
+        log.trace(sb.toString());
 
         ProcessBuilder pb = new ProcessBuilder(
             javaBin,
@@ -112,7 +112,7 @@ public class ProcessSupervisor {
         pb.redirectOutput(stdoutFile);
         pb.redirectError(stderrFile);
 
-        log.info("Supervisor starting Worker process for job {}", jobId);
+        log.debug("Supervisor starting Worker process for job {}", jobId);
         process = pb.start();
 
         AtomicBoolean completed = new AtomicBoolean(false);
@@ -124,7 +124,7 @@ public class ProcessSupervisor {
             try {
                 serverSocket.setSoTimeout(10000); // 10 seconds to connect
                 clientSocket = serverSocket.accept();
-                log.info("[{}] Worker connected to control socket", jobId);
+                log.debug("[{}] Worker connected to control socket", jobId);
                 // Do NOT set a read timeout on the client socket.
                 // Scanner treats SocketTimeoutException as end-of-input,
                 // which silently kills the acceptor loop.
@@ -141,7 +141,7 @@ public class ProcessSupervisor {
                             }
                             Thread.sleep(2000);
                         }
-                        log.info("[{}] Pinger exiting: completed={} processAlive={}", jobId, completed.get(), process.isAlive());
+                        log.trace("[{}] Pinger exiting: completed={} processAlive={}", jobId, completed.get(), process.isAlive());
                     } catch (Exception e) {
                         log.debug("[{}] Pinger exception: {}", jobId, e.getMessage());
                     }
@@ -175,9 +175,9 @@ public class ProcessSupervisor {
                         }
                     }
                 }
-                log.info("[{}] Acceptor loop exited: completed={}", jobId, completed.get());
+                log.debug("[{}] Acceptor loop exited: completed={}", jobId, completed.get());
             } catch (Exception e) {
-                log.info("[{}] Acceptor exception: {}", jobId, e.getMessage());
+                log.debug("[{}] Acceptor exception: {}", jobId, e.getMessage());
                 if (!completed.get()) {
                     controlError.set("Socket error: " + e.getMessage());
                 }
@@ -187,20 +187,19 @@ public class ProcessSupervisor {
         acceptor.start();
 
         try {
-            log.info("[{}] Main thread waiting for process or latch", jobId);
+            log.trace("[{}] Main thread waiting for process or latch", jobId);
             // Wait for either the latch (COMPLETE/FAIL message) or process death
             while (!completed.get() && process.isAlive()) {
                 if (latch.await(1, TimeUnit.SECONDS)) {
                     break;
                 }
             }
-            log.info("[{}] Main thread unblocked: completed={} processAlive={}", jobId, completed.get(), process.isAlive());
+            log.trace("[{}] Main thread unblocked: completed={} processAlive={}", jobId, completed.get(), process.isAlive());
             if (!completed.get()) {
                 int exitCode = process.exitValue();
-                log.info("[{}] Process exited with code {}", jobId, exitCode);
+                log.debug("[{}] Process exited with code {}", jobId, exitCode);
                 if (exitCode != 0) {
                     logWorkerStderr(stderrFile);
-                    System.out.println("PROCESS_EXITED");
                     throw new RuntimeException("Process exited abruptly with code " + exitCode);
                 }
             }
@@ -226,13 +225,13 @@ public class ProcessSupervisor {
         if (!killed.compareAndSet(false, true)) {
             return;
         }
-        log.info("ProcessSupervisor.kill() called for job {}", jobId);
+        log.debug("ProcessSupervisor.kill() called for job {}", jobId);
         if (process == null) {
             log.debug("Cannot kill process for job {} because process is null", jobId);
         } else if (!process.isAlive()) {
             log.debug("Cannot kill process for job {} because process is no longer alive", jobId);
         } else {
-            log.info("Killing process tree for job {}", jobId);
+            log.debug("Killing process tree for job {}", jobId);
             process.descendants().forEach(ProcessHandle::destroyForcibly);
             process.destroyForcibly();
             try {

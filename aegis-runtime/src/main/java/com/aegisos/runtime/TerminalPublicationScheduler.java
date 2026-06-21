@@ -47,7 +47,7 @@ public class TerminalPublicationScheduler {
                 if (shuttingDown) break;
 
                 if (isSuperseded.test(task.jobId(), task.executionId())) {
-                    log.info("Dropping terminal publication {} for superseded execution {} of job {}", task.state(), task.executionId(), task.jobId());
+                    log.warn("Dropping terminal publication {} for superseded execution {} of job {}", task.state(), task.executionId(), task.jobId());
                     continue; // Drop task
                 }
 
@@ -60,7 +60,7 @@ public class TerminalPublicationScheduler {
                     log.debug("Requeueing {} publication for job {} execution {}, next attempt in {}s", task.state(), task.jobId(), task.executionId(), backoffSeconds);
                     queue.add(new TerminalPublicationTask(task.jobId(), task.executionId(), task.state(), task.result(), task.error(), nextAttempt, nextTime));
                 } else {
-                    log.info("Durably published {} for job {} execution {}", task.state(), task.jobId(), task.executionId());
+                    log.debug("Durably published {} for job {} execution {}", task.state(), task.jobId(), task.executionId());
                 }
 
             } catch (InterruptedException e) {

@@ -201,7 +201,7 @@ public final class Scheduler implements AutoCloseable {
         }
 
         if (System.getProperty("aegis.test.kill_after_probe") != null) {
-            log.info("TEST HOOK: Killing leader after probe! Reservation leaked on {}", bestNode.shortId());
+            log.debug("TEST HOOK: Killing leader after probe! Reservation leaked on {}", bestNode.shortId());
             System.exit(1);
         }
 

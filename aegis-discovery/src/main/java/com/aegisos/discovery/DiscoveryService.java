@@ -64,11 +64,11 @@ public final class DiscoveryService implements AutoCloseable {
         }
         maintenance.scheduleAtFixedRate(this::syncRoutingTable,
                 com.aegisos.core.SchedulerJitter.jitter(DEFAULT_INTERVAL_MS, DEFAULT_INTERVAL_MS), DEFAULT_INTERVAL_MS, TimeUnit.MILLISECONDS);
-        log.info("Discovery started with {} seed(s)", seeds.size());
+        log.debug("Discovery started with {} seed(s)", seeds.size());
     }
 
     private void connectToSeed(Endpoint seed) {
-        log.info("DISCOVERY START: Connecting to seed {}", seed);
+        log.debug("Connecting to seed {}", seed);
         try {
             NodeId peerId = network.connect(seed);
             Optional<byte[]> key = identity.getPublicKey(peerId);
@@ -76,7 +76,7 @@ public final class DiscoveryService implements AutoCloseable {
                 membership.observe(peerId, k, seed);
                 routingTable.add(peerId);
             });
-            log.info("Connected to seed {} ({})", seed, peerId.shortId());
+            log.debug("Connected to seed {} ({})", seed, peerId.shortId());
         } catch (IOException e) {
             log.warn("DISCOVERY FAIL: Could not reach seed {}: {}", seed, e.getMessage());
         }

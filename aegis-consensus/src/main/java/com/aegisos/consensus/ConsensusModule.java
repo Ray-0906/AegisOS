@@ -32,6 +32,7 @@ import java.util.function.Supplier;
 public final class ConsensusModule implements RaftTransport, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(ConsensusModule.class);
+    private static final boolean DIAG = Boolean.getBoolean("aegis.diag");
     private static final long COMMIT_TIMEOUT_MS = 25_000;
 
     private final NetworkLayer network;
@@ -76,7 +77,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                             .setPayload(ByteString.copyFrom(self.toBytes()))
                             .build();
                     raftLog.append(0, initCmd.toByteArray());
-                    log.info("Appended genesis ADD_VOTER for self ({}) at index 1", self.shortId());
+                    log.debug("Appended genesis ADD_VOTER for self ({}) at index 1", self.shortId());
                 } catch (Exception e) {
                     log.error("Failed to append genesis configuration", e);
                 }
@@ -96,7 +97,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         network.registerHandler(MessageType.CLIENT_COMMAND, this::onClientCommand);
         network.registerHandler(MessageType.INSTALL_SNAPSHOT, this::onInstallSnapshot);
         raftNode.start();
-        log.info("Consensus module started");
+        log.debug("Consensus module started");
     }
 
     public RaftNode raftNode() {
@@ -284,11 +285,13 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         }
         
         return future.whenComplete((idx, err) -> {
-            long duration = System.currentTimeMillis() - t0;
-            String status = err == null ? "SUCCESS" : "FAILURE (" + err.getClass().getSimpleName() + ")";
-            int qDepth = raftNode.getPendingCount();
-            System.out.printf("[%tT] %-20s queue_depth=%-3d duration=%dms %s\n",
-                    new java.util.Date(), cmdType, qDepth, duration, status);
+            if (DIAG && log.isDebugEnabled()) {
+                long duration = System.currentTimeMillis() - t0;
+                String status = err == null ? "SUCCESS" : "FAILURE (" + err.getClass().getSimpleName() + ")";
+                int qDepth = raftNode.getPendingCount();
+                log.debug("RAFT_DIAG event=CLIENT_COMMAND_RESULT type={} queueDepth={} durationMs={} status={}",
+                        cmdType, qDepth, duration, status);
+            }
         });
     }
 
@@ -354,8 +357,10 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                 result.setLeaderId(ByteString.copyFrom(leader.toBytes()));
             }
             result.setError("not leader");
-            log.error("[DIAG] Rejecting command. role={}, leaderId={}, term={}", 
-                raftNode.role(), leader == null ? "null" : leader.shortId(), raftNode.currentTerm());
+            if (DIAG && log.isDebugEnabled()) {
+                log.debug("RAFT_DIAG event=CLIENT_COMMAND_REJECTED role={} leaderId={} term={}",
+                        raftNode.role(), leader == null ? "null" : leader.shortId(), raftNode.currentTerm());
+            }
         } else {
             try {
                 StateCommand cmd = StateCommand.parseFrom(msg.payload());

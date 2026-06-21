@@ -512,39 +512,9 @@ public final class ClusterHarness implements AutoCloseable {
         }
         nodes.clear();
         for (Path dir : tempDirs) {
-            System.out.println("DELETE_ATTEMPT: " + dir.toAbsolutePath());
-            
-            // Print aegis threads
-            System.out.println("Live 'aegis' threads:");
-            for (Thread t : Thread.getAllStackTraces().keySet()) {
-                if (t.getName().contains("aegis")) {
-                    System.out.println("  " + t.getName() + " (state: " + t.getState() + ")");
-                }
-            }
-            
-            boolean success = deleteRecursive(dir.toFile());
-            if (success) {
-                System.out.println("DELETE_SUCCESS: " + dir.toAbsolutePath());
-            } else {
-                System.out.println("DELETE_FAILED: " + dir.toAbsolutePath());
-                System.out.println("Remaining files:");
-                printRemainingFiles(dir.toFile(), "");
-            }
+            deleteRecursive(dir.toFile());
         }
         tempDirs.clear();
-    }
-
-    private static void printRemainingFiles(java.io.File f, String indent) {
-        if (!f.exists()) return;
-        System.out.println(indent + "- " + f.getName() + (f.isDirectory() ? "/" : ""));
-        if (f.isDirectory()) {
-            java.io.File[] children = f.listFiles();
-            if (children != null) {
-                for (java.io.File c : children) {
-                    printRemainingFiles(c, indent + "  ");
-                }
-            }
-        }
     }
 
     private static boolean deleteRecursive(java.io.File f) {

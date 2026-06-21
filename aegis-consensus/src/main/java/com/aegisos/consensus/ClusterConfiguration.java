@@ -35,7 +35,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
         this.version = 0;
         this.voters.clear();
         this.observers.clear();
-        log.info("Initialized join ClusterConfiguration with empty voters (version 0)");
+        log.debug("Initialized join ClusterConfiguration with empty voters (version 0)");
     }
 
     public long version() {
@@ -62,7 +62,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
         try {
             NodeId nodeId = NodeId.of(cmd.getPayload().toByteArray());
             if (voters.contains(nodeId)) {
-                log.info("ADD_VOTER at index {} ignored: {} is already a voter", index, nodeId.shortId());
+                log.debug("ADD_VOTER at index {} ignored: {} is already a voter", index, nodeId.shortId());
                 return; // idempotent
             }
             voters.add(nodeId);
@@ -78,7 +78,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
         try {
             NodeId nodeId = NodeId.of(cmd.getPayload().toByteArray());
             if (!voters.contains(nodeId)) {
-                log.info("REMOVE_VOTER at index {} ignored: {} is not a voter", index, nodeId.shortId());
+                log.debug("REMOVE_VOTER at index {} ignored: {} is not a voter", index, nodeId.shortId());
                 return; // idempotent
             }
             voters.remove(nodeId);
@@ -133,7 +133,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
                 in.readFully(id);
                 observers.add(NodeId.of(id));
             }
-            log.info("Restored ClusterConfiguration: {} voters, {} observers, version {}",
+            log.debug("Restored ClusterConfiguration: {} voters, {} observers, version {}",
                     voters.size(), observers.size(), version);
         } catch (IOException e) {
             throw new SnapshotException("Failed to restore ClusterConfiguration", e);

@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class PeerConnection implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(PeerConnection.class);
+    private static final boolean DIAG = Boolean.getBoolean("aegis.diag");
     private static final int OUTBOUND_QUEUE_CAPACITY = 256;
 
     public interface InboundHandler {
@@ -108,13 +109,13 @@ public final class PeerConnection implements AutoCloseable {
         byte[] cipherText = session.cipher().encrypt(nonce, payload, aad);
         Envelope env = EnvelopeCodec.build(header, cipherText, identity::sign);
         int size = outbound.size();
-        if (size > 200) {
-            System.out.printf("HIGH_QUEUE timestamp=%d remoteNode=%s messageType=%s queueSize=%d%n",
+        if (DIAG && size > 200 && log.isDebugEnabled()) {
+            log.debug("HIGH_QUEUE timestamp={} remoteNode={} messageType={} queueSize={}",
                     System.currentTimeMillis(), remoteNodeId().shortId(), type, size);
         }
-        
+
         if (!outbound.offer(env.toByteArray())) {
-            System.out.printf("QUEUE_FULL remoteNode=%s messageType=%s%n", remoteNodeId().shortId(), type);
+            log.warn("QUEUE_FULL remoteNode={} messageType={}", remoteNodeId().shortId(), type);
             closeQuietly();
             throw new IOException("outbound queue full for " + remoteNodeId().shortId());
         }

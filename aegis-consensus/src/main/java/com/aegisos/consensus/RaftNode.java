@@ -36,6 +36,7 @@ import java.util.function.Supplier;
 public final class RaftNode {
 
     private static final Logger log = LoggerFactory.getLogger(RaftNode.class);
+    private static final boolean DIAG = Boolean.getBoolean("aegis.diag");
 
     private static final long ELECTION_MIN_MS = 150;
     private static final long ELECTION_MAX_MS = 300;
@@ -124,7 +125,7 @@ public final class RaftNode {
     public void start() {
         electionTimer.reset();
         scheduler.scheduleAtFixedRate(this::heartbeatTick, HEARTBEAT_MS, HEARTBEAT_MS, TimeUnit.MILLISECONDS);
-        log.info("Raft node {} started as FOLLOWER (term {}, snapshotIndex={})",
+        log.debug("Raft node {} started as FOLLOWER (term {}, snapshotIndex={})",
                 self.shortId(), metadata.currentTerm(), raftLog.snapshotIndex());
     }
 
@@ -161,7 +162,7 @@ public final class RaftNode {
                         snapshotLoader.load(snapshotData);
                         lastApplied = raftLog.snapshotIndex();
                         commitIndex = raftLog.snapshotIndex();
-                        log.info("Loaded snapshot on startup: lastApplied={}, commitIndex={}",
+                        log.debug("Loaded snapshot on startup: lastApplied={}, commitIndex={}",
                                 lastApplied, commitIndex);
                     } catch (Exception e) {
                         log.warn("Failed to load snapshot, falling back to full log replay: {}", e.toString());
@@ -180,10 +181,10 @@ public final class RaftNode {
             long lastOnDisk = raftLog.lastIndex();
             long uncommitted = lastOnDisk - lastApplied;
             if (uncommitted > 0) {
-                log.info("Raft node {} has {} uncommitted log entries on disk (from {} to {}). Waiting for leader to advance commitIndex.",
+                log.debug("Raft node {} has {} uncommitted log entries on disk (from {} to {}). Waiting for leader to advance commitIndex.",
                         self.shortId(), uncommitted, lastApplied + 1, lastOnDisk);
             } else {
-                log.info("Raft node {} startup complete. No uncommitted entries. (lastApplied={}, commitIndex={})", 
+                log.debug("Raft node {} startup complete. No uncommitted entries. (lastApplied={}, commitIndex={})",
                         self.shortId(), lastApplied, commitIndex);
             }
         } finally {
@@ -350,7 +351,7 @@ public final class RaftNode {
         AtomicInteger votes = new AtomicInteger(1); // pre-vote for self
 
         preVoteStarts.incrementAndGet();
-        log.debug("RAFT_DIAG event=PRE_VOTE_STARTED node={} preVoteTerm={} cluster={}", self.shortId(), preVoteTerm, clusterSize);
+        diag("RAFT_DIAG event=PRE_VOTE_STARTED node={} preVoteTerm={} cluster={}", self.shortId(), preVoteTerm, clusterSize);
 
         RequestVote req = RequestVote.newBuilder()
                 .setTerm(preVoteTerm)
@@ -382,23 +383,23 @@ public final class RaftNode {
         try {
             // If our term changed since we sent the pre-vote, discard
             if (metadata.currentTerm() + 1 != preVoteTerm) {
-                log.debug("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_TERM node={}", self.shortId());
+                diag("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_TERM node={}", self.shortId());
                 return;
             }
             // If we're already leader, discard
             if (role == RaftRole.LEADER) {
-                log.debug("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_ROLE node={}", self.shortId());
+                diag("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_ROLE node={}", self.shortId());
                 return;
             }
             // Do NOT step down on higher term — this is pre-vote
             if (result.getVoteGranted()) {
-                log.debug("RAFT_DIAG event=PRE_VOTE_RESP_GRANTED node={} from=peer votes={}/{}", self.shortId(), (votes.get()+1), majority);
+                diag("RAFT_DIAG event=PRE_VOTE_RESP_GRANTED node={} from=peer votes={}/{}", self.shortId(), (votes.get()+1), majority);
                 if (votes.incrementAndGet() >= majority) {
-                    log.debug("RAFT_DIAG event=PRE_VOTE_GRANTED node={} preVoteTerm={}", self.shortId(), preVoteTerm);
+                    diag("RAFT_DIAG event=PRE_VOTE_GRANTED node={} preVoteTerm={}", self.shortId(), preVoteTerm);
                     startElection();
                 }
             } else {
-                log.debug("RAFT_DIAG event=PRE_VOTE_RESP_REJECTED node={} respTerm={}", self.shortId(), result.getTerm());
+                diag("RAFT_DIAG event=PRE_VOTE_RESP_REJECTED node={} respTerm={}", self.shortId(), result.getTerm());
             }
         } finally {
             lock.unlock();
@@ -424,7 +425,7 @@ public final class RaftNode {
         int majority = clusterSize / 2 + 1;
         AtomicInteger votes = new AtomicInteger(1); // vote for self
 
-        log.debug("RAFT_DIAG event=ELECTION_STARTED node={} term={} cluster={}", self.shortId(), newTerm, clusterSize);
+        diag("RAFT_DIAG event=ELECTION_STARTED node={} term={} cluster={}", self.shortId(), newTerm, clusterSize);
         log.info("Node {} starting election for term {} (cluster {}, majority {})",
                 self.shortId(), newTerm, clusterSize, majority);
 
@@ -474,7 +475,7 @@ public final class RaftNode {
         if (role != RaftRole.LEADER && metricsRegistry != null) {
             metricsRegistry.counter("aegis_raft_leader_changes_total").increment();
         }
-        log.debug("RAFT_DIAG event=LEADER_ELECTED node={} term={}", self.shortId(), metadata.currentTerm());
+        diag("RAFT_DIAG event=LEADER_ELECTED node={} term={}", self.shortId(), metadata.currentTerm());
         role = RaftRole.LEADER;
         leaderId = self;
         electionTimer.stop();
@@ -714,7 +715,7 @@ public final class RaftNode {
                 return; // already have a snapshot at or past this index
             }
 
-            log.info("Triggering snapshot at index={}, term={}", snapIndex, snapTerm);
+            log.debug("Triggering snapshot at index={}, term={}", snapIndex, snapTerm);
             byte[] snapshotData = snapshotTaker.take(snapIndex, snapTerm);
 
             // Atomic write: tmp -> rename
@@ -730,7 +731,7 @@ public final class RaftNode {
             snapshotCreatedCount.incrementAndGet();
             lastSnapshotDurationMs.set(System.currentTimeMillis() - start);
 
-            log.info("Snapshot complete: index={}, term={}, size={} bytes, remaining log entries={}",
+            log.debug("Snapshot complete: index={}, term={}, size={} bytes, remaining log entries={}",
                     snapIndex, snapTerm, snapshotData.length, raftLog.entryCount());
         } catch (Exception e) {
             log.error("Failed to create snapshot: {}", e.toString(), e);
@@ -742,7 +743,7 @@ public final class RaftNode {
     private void stepDown(long newTerm) {
         log.debug("TRANSITION: {} -> FOLLOWER", role);
         long current = metadata.currentTerm();
-        log.debug("RAFT_DIAG event=STEPDOWN node={} oldRole={} oldTerm={} newTerm={}", self.shortId(), role, current, newTerm);
+        diag("RAFT_DIAG event=STEPDOWN node={} oldRole={} oldTerm={} newTerm={}", self.shortId(), role, current, newTerm);
         if (newTerm > current) {
             metadata.setCurrentTerm(newTerm);
             if (metricsRegistry != null) {
@@ -772,7 +773,7 @@ public final class RaftNode {
                 return voteResult(term, false);
             }
             if (req.getTerm() > term) {
-                log.debug("RAFT_DIAG event=VOTE_HIGHER_TERM node={} from={} reqTerm={} myTerm={}", self.shortId(), candidate.shortId(), req.getTerm(), term);
+                diag("RAFT_DIAG event=VOTE_HIGHER_TERM node={} from={} reqTerm={} myTerm={}", self.shortId(), candidate.shortId(), req.getTerm(), term);
                 stepDown(req.getTerm());
                 term = req.getTerm();
             }
@@ -798,20 +799,20 @@ public final class RaftNode {
 
             // Reject if candidate's hypothetical term is not higher than ours
             if (req.getTerm() <= term) {
-                log.debug("RAFT_DIAG event=PRE_VOTE_REJECT_TERM node={} reqTerm={} myTerm={}", self.shortId(), req.getTerm(), term);
+                diag("RAFT_DIAG event=PRE_VOTE_REJECT_TERM node={} reqTerm={} myTerm={}", self.shortId(), req.getTerm(), term);
                 return voteResult(term, false);
             }
 
             // Reject if we believe a leader is alive (received heartbeat recently)
             long timeSinceLeaderMsg = System.currentTimeMillis() - lastLeaderMessageTick;
             if (leaderId != null && timeSinceLeaderMsg < ELECTION_MIN_MS) {
-                log.debug("RAFT_DIAG event=PRE_VOTE_REJECT_LIVENESS node={} leaderId={} time={}", self.shortId(), leaderId.shortId(), timeSinceLeaderMsg);
+                diag("RAFT_DIAG event=PRE_VOTE_REJECT_LIVENESS node={} leaderId={} time={}", self.shortId(), leaderId.shortId(), timeSinceLeaderMsg);
                 return voteResult(term, false);
             }
 
             // Grant if candidate's log is at least as up-to-date as ours
             boolean upToDate = raftLog.isUpToDate(req.getLastLogIndex(), req.getLastLogTerm());
-            log.debug("RAFT_DIAG event=PRE_VOTE_UPTODATE_CHECK node={} upToDate={}", self.shortId(), upToDate);
+            diag("RAFT_DIAG event=PRE_VOTE_UPTODATE_CHECK node={} upToDate={}", self.shortId(), upToDate);
             return voteResult(term, upToDate);
         } finally {
             lock.unlock();
@@ -824,7 +825,7 @@ public final class RaftNode {
             log.debug("RaftNode received AppendEntries: prevLogIndex={}, entries={}, leaderCommit={}", req.getPrevLogIndex(), req.getEntriesCount(), req.getLeaderCommit());
             long term = metadata.currentTerm();
             if (req.getTerm() < term) {
-                log.debug("RAFT_DIAG event=AE_REJECTED node={} leaderTerm={} myTerm={}", self.shortId(), req.getTerm(), term);
+                diag("RAFT_DIAG event=AE_REJECTED node={} leaderTerm={} myTerm={}", self.shortId(), req.getTerm(), term);
                 return appendResult(term, false, raftLog.lastIndex());
             }
             if (req.getTerm() > term) {
@@ -855,7 +856,7 @@ public final class RaftNode {
             long nowHb = System.currentTimeMillis();
             if (nowHb - lastHeartbeatDiag > 1000) {
                 lastHeartbeatDiag = nowHb;
-                log.debug("RAFT_DIAG event=HEARTBEAT_ACCEPTED node={} leaderTerm={} leader={}", self.shortId(), term, leaderId.shortId());
+                diag("RAFT_DIAG event=HEARTBEAT_ACCEPTED node={} leaderTerm={} leader={}", self.shortId(), term, leaderId.shortId());
             }
             return appendResult(term, true, raftLog.lastIndex());
         } finally {
@@ -947,4 +948,10 @@ public final class RaftNode {
     public int installSnapshotSentCount() { return installSnapshotSentCount.get(); }
     public int installSnapshotReceivedCount() { return installSnapshotReceivedCount.get(); }
     public long lastSnapshotDurationMs() { return lastSnapshotDurationMs.get(); }
+
+    private void diag(String pattern, Object... args) {
+        if (DIAG && log.isDebugEnabled()) {
+            log.debug(pattern, args);
+        }
+    }
 }

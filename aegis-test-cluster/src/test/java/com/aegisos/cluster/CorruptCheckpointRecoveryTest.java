@@ -64,16 +64,7 @@ public class CorruptCheckpointRecoveryTest {
             byte[] corruptBytes = new byte[]{0, 1, 2, 3};
             writerNode.fileSystem().write(checkpointPath, corruptBytes);
             
-            try {
-                String sha256 = String.valueOf(java.util.Arrays.hashCode(corruptBytes));
-                String hex = "";
-                for (int i = 0; i < Math.min(16, corruptBytes.length); i++) {
-                    hex += String.format("%02X ", corruptBytes[i]);
-                }
-                System.err.println("INSTRUMENT: CORRUPT_BYTES length=" + corruptBytes.length + " first16=" + hex.trim() + " sha256=" + sha256);
-            } catch (Exception ex) {
-                System.err.println("INSTRUMENT: CORRUPT_BYTES error: " + ex.getMessage());
-            }
+
             
             // Wait for lease expiration
             awaiter.awaitWorkerLeaseExpiration(executorId, java.time.Duration.ofSeconds(20));

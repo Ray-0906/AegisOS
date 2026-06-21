@@ -176,18 +176,16 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             }
             return null;
         });
-        log.info("Process runtime agent started");
+        log.debug("Process runtime agent started");
     }
 
     public AegisMessage onRunJob(AegisMessage msg) {
         if (shuttingDown) {
-            log.info("Agent is shutting down, dropping RUN_JOB message.");
+            log.debug("Agent is shutting down, dropping RUN_JOB message.");
             return null;
         }
         try {
             RunJob runJob = RunJob.parseFrom(msg.payload());
-            System.out.println("INSTRUMENT: AGENT_RECEIVED_ASSIGNMENT jobId=" + runJob.getRecord().getSpec().getJobId());
-            System.out.println("INSTRUMENT: ASSIGNMENT_EXECUTION_ID=" + runJob.getRecord().getExecutionId());
             dispatchLocal(runJob.getRecord());
         } catch (Exception e) {
             log.error("Failed to parse or dispatch RUN_JOB", e);
@@ -200,7 +198,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         String jobId = record.getSpec().getJobId();
         long executionId = record.getExecutionId();
         if (shuttingDown) {
-            log.info("Agent is shutting down, dropping dispatch for job {}", jobId);
+            log.debug("Agent is shutting down, dropping dispatch for job {}", jobId);
             return;
         }
 
@@ -225,7 +223,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             if (self.equals(assignedNode)) {
                 killProcessLocal(jobId);
             } else {
-                log.info("Forwarding cancel for job {} to node {}", jobId, assignedNode.shortId());
+                log.debug("Forwarding cancel for job {} to node {}", jobId, assignedNode.shortId());
                 network.sendAsync(assignedNode, MessageType.CANCEL_JOB, jobId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
         }, () -> {
@@ -235,7 +233,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     }
 
     public void killProcessLocal(String jobId) {
-        log.info("Killing process for job {} locally", jobId);
+        log.debug("Killing process for job {} locally", jobId);
         jvmBackend.cancelJob(jobId);
         if (dockerBackend != null) {
             dockerBackend.cancelJob(jobId);
@@ -294,7 +292,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
 
     public boolean canAccept() {
         boolean accept = running.get() < MAX_CONCURRENT_JOBS;
-        log.info("canAccept() returning {} (running={})", accept, running.get());
+        log.trace("canAccept() returning {} (running={})", accept, running.get());
         return accept;
     }
 
@@ -315,11 +313,6 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     }
 
     private void executeJob(JobRecord record) {
-        System.out.println("INSTRUMENT: AGENT_START_EXECUTION jobId=" + record.getSpec().getJobId());
-        System.out.println("INSTRUMENT: START_EXECUTION_ID=" + record.getExecutionId());
-        long currentRegId = registry.get(record.getSpec().getJobId()).map(com.aegisos.proto.JobRecord::getExecutionId).orElse(-1L);
-        System.out.println("INSTRUMENT: REGISTRY_EXECUTION_ID=" + currentRegId);
-
         com.aegisos.proto.RuntimeType runtime = record.getSpec().getRuntime();
         if (runtime == com.aegisos.proto.RuntimeType.RUNTIME_CONTAINER) {
             executeContainerJob(record);
@@ -644,7 +637,6 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             } else {
                 if (!isSuperseded(jobId, executionId)) {
                     log.error("Job {} FAILED", jobId, e);
-                    System.err.println("INSTRUMENT: JOB_FAILED_EMIT");
                     terminalScheduler.enqueue(jobId, executionId, JobState.FAILED, null,
                             e.getMessage() == null ? "error" : e.getMessage());
                     jobsFailed.incrementAndGet();
@@ -732,7 +724,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             return false;
         }
         if (isSuperseded(jobId, executionId)) {
-            log.info("Skipping {} update for superseded execution {} of job {}", state, executionId, jobId);
+            log.debug("Skipping {} update for superseded execution {} of job {}", state, executionId, jobId);
             return false;
         }
 
@@ -754,9 +746,9 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         try {
             if (System.getProperty("aegis.test.delay_upload_logs") != null) {
                 long delay = Long.parseLong(System.getProperty("aegis.test.delay_upload_logs"));
-                log.info("TEST HOOK: Delaying log upload for {}ms", delay);
+                log.debug("TEST HOOK: Delaying log upload for {}ms", delay);
                 try { Thread.sleep(delay); } catch (InterruptedException e) {}
-                log.info("TEST HOOK: Finished log upload delay");
+                log.debug("TEST HOOK: Finished log upload delay");
             }
             if (isSuperseded(jobId, executionId)) {
                 fencingDrops.incrementAndGet();
@@ -783,7 +775,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                     String fsPath = "/jobs/" + jobId + "/" + executionId + "/" + name;
                     fileSystem.write(fsPath, data);
                     logUploadsSucceeded.incrementAndGet();
-                    log.info("Uploaded job {} execution {} {} ({} bytes) -> {}",
+                    log.debug("Uploaded job {} execution {} {} ({} bytes) -> {}",
                             jobId, executionId, name, data.length, fsPath);
                 } else {
                     log.debug("uploadLogFile: localFile={} exists but has size 0", localFile.toAbsolutePath());
@@ -862,7 +854,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     private void cleanupJobFiles(String jobId, long executionId) {
         long delaySeconds = this.workspaceCleanupDelaySeconds;
         if (delaySeconds <= 0) {
-            log.info("Cleaning up workspace for job {} execution {} immediately", jobId, executionId);
+            log.trace("Cleaning up workspace for job {} execution {} immediately", jobId, executionId);
             deleteWorkspace(jobId, executionId);
             return;
         }
@@ -872,10 +864,10 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         }
         try {
             cleanupExecutor.schedule(() -> {
-                log.info("Executing deferred workspace cleanup for job {} execution {}", jobId, executionId);
+                log.trace("Executing deferred workspace cleanup for job {} execution {}", jobId, executionId);
                 deleteWorkspace(jobId, executionId);
             }, delaySeconds, TimeUnit.SECONDS);
-            log.info("Scheduled workspace cleanup for job {} execution {} in {} seconds", jobId, executionId, delaySeconds);
+            log.trace("Scheduled workspace cleanup for job {} execution {} in {} seconds", jobId, executionId, delaySeconds);
         } catch (RejectedExecutionException e) {
             log.debug("Cleanup executor stopped while scheduling job {} execution {}; cleanup skipped",
                     jobId, executionId);
@@ -896,7 +888,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                               }
                           });
                 }
-                log.info("Cleaned up workspace for job {} execution {}", jobId, executionId);
+                log.trace("Cleaned up workspace for job {} execution {}", jobId, executionId);
             }
         } catch (Exception e) {
             log.warn("Failed to clean up workspace for job {} execution {}", jobId, executionId, e);
@@ -904,7 +896,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
     }
 
     public void close() {
-        log.info("ProcessRuntimeAgent shutting down: runningJobs={}", running.get());
+        log.debug("ProcessRuntimeAgent shutting down: runningJobs={}", running.get());
         shuttingDown = true;
         // Cancel all active jobs to ensure child processes are killed
         jvmBackend.close();
@@ -924,6 +916,6 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        log.info("ProcessRuntimeAgent shutdown complete: cleanupExecutor.isTerminated={}", cleanupExecutor.isTerminated());
+        log.debug("ProcessRuntimeAgent shutdown complete: cleanupExecutor.isTerminated={}", cleanupExecutor.isTerminated());
     }
 }

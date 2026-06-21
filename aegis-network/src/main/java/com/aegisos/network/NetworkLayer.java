@@ -145,7 +145,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         server.start();
         // Now that the ephemeral/real port is known, advertise the correct address.
         this.advertisedAddress = advertiseHost + ":" + server.boundPort();
-        log.info("NetworkLayer started, node {} advertising {}", localNodeId().shortId(), advertisedAddress);
+        log.debug("NetworkLayer started, node {} advertising {}", localNodeId().shortId(), advertisedAddress);
     }
 
     private void acceptSocket(Socket socket) {
@@ -353,14 +353,8 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         handlerExecutor.shutdownNow();
         try {
             boolean terminated = handlerExecutor.awaitTermination(3, TimeUnit.SECONDS);
-            // #region agent log
-            java.util.Map<String, Object> data = new java.util.HashMap<>();
-            data.put("terminated", terminated);
-            data.put("isShutdown", handlerExecutor.isShutdown());
-            data.put("isTerminated", handlerExecutor.isTerminated());
-            com.aegisos.core.util.DebugLogger.log("NetworkLayer.java:319", "handlerExecutor shutdown status",
-                data, "D", "pre-fix");
-            // #endregion
+            log.trace("handlerExecutor shutdown status: terminated={} isShutdown={} isTerminated={}",
+                    terminated, handlerExecutor.isShutdown(), handlerExecutor.isTerminated());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

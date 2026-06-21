@@ -91,7 +91,7 @@ public final class ArtifactCache {
         } finally {
             lruLock.unlock();
         }
-        log.info("Recovered ArtifactCache: {} items, {} bytes", index.size(), currentSizeBytes);
+        log.debug("Recovered ArtifactCache: {} items, {} bytes", index.size(), currentSizeBytes);
     }
 
     public void pin(String artifactId) {
@@ -133,7 +133,7 @@ public final class ArtifactCache {
                     try {
                         Files.deleteIfExists(cacheDir.resolve(entry.getKey() + ".jar"));
                         Files.deleteIfExists(cacheDir.resolve(entry.getKey() + ".meta"));
-                        log.info("Evicted artifact {} from cache", entry.getKey());
+                        log.debug("Evicted artifact {} from cache", entry.getKey());
                     } catch (IOException e) {
                         log.warn("Failed to delete evicted artifact files for {}", entry.getKey(), e);
                     }
@@ -159,7 +159,7 @@ public final class ArtifactCache {
                 long currentSize = Files.size(local);
                 long currentMtime = Files.getLastModifiedTime(local).toMillis();
                 if (cached != null && currentSize == cached.size && currentMtime == cached.mtime) {
-                    log.info("CACHE HIT: {}", artifactId);
+                    log.trace("CACHE HIT: {}", artifactId);
                     lruLock.lock();
                     try {
                         index.get(artifactId); // touch for LRU
@@ -179,7 +179,7 @@ public final class ArtifactCache {
                 }
             }
 
-            log.info("CACHE MISS: {}", artifactId);
+            log.debug("CACHE MISS: {}", artifactId);
             byte[] data = fileSystem.read(fsPath);
             if (data == null) {
                 throw new IOException("Failed to read artifact from AegisFS: " + fsPath);

@@ -80,7 +80,7 @@ public final class StorageAuditScheduler implements AutoCloseable {
      */
     public void start() {
         scheduler.scheduleWithFixedDelay(this::runOnceSafe, com.aegisos.core.SchedulerJitter.jitter(intervalSeconds, intervalSeconds), intervalSeconds, TimeUnit.SECONDS);
-        log.info("Storage audit scheduler started (interval {}s)", intervalSeconds);
+        log.debug("Storage audit scheduler started (interval {}s)", intervalSeconds);
     }
 
     private void runOnceSafe() {
@@ -125,7 +125,7 @@ public final class StorageAuditScheduler implements AutoCloseable {
         }
 
         if (!wasLeader) {
-            log.info("Transitioned to LEADER. Clearing transient audit history.");
+            log.debug("Transitioned to LEADER. Clearing transient audit history.");
             store.clear();
             wasLeader = true;
         }
@@ -199,7 +199,7 @@ public final class StorageAuditScheduler implements AutoCloseable {
                 );
                 newRecommendations.add(recommendation);
 
-                log.info("Audit scan {}: chunk {} VERIFIED (evidence: scans {})",
+                log.debug("Audit scan {}: chunk {} VERIFIED (evidence: scans {})",
                         scanId, result.chunkId(), result.evidenceScans());
             } else {
                 log.debug("Audit scan {}: chunk {} -> {}: {}",
@@ -212,10 +212,11 @@ public final class StorageAuditScheduler implements AutoCloseable {
         currentRecommendations = Collections.unmodifiableList(newRecommendations);
 
         // Step 7 & 8: Propose and execute repairs
-        System.out.println("DEBUG: Reached Step 7. repairProposer=" + (repairProposer != null) + " isLeader=" + isLeader.getAsBoolean());
+        log.trace("Audit scan {} repair phase: proposerPresent={} leader={}",
+                scanId, repairProposer != null, isLeader.getAsBoolean());
         if (repairProposer != null && isLeader.getAsBoolean()) {
             java.util.List<java.util.concurrent.CompletableFuture<RepairOutcome>> phaseAFutures = repairProposer.proposeRepairs();
-            System.out.println("DEBUG: phaseAFutures.size() = " + phaseAFutures.size());
+            log.trace("Audit scan {} phase A repair futures={}", scanId, phaseAFutures.size());
             java.util.concurrent.CompletableFuture.allOf(phaseAFutures.toArray(new java.util.concurrent.CompletableFuture[0])).join();
             List<RepairOutcome> phaseA = phaseAFutures.stream().map(java.util.concurrent.CompletableFuture::join).collect(java.util.stream.Collectors.toList());
 
@@ -231,7 +232,7 @@ public final class StorageAuditScheduler implements AutoCloseable {
             currentRepairOutcomes = Collections.emptyList();
         }
 
-        log.info("Audit scan {} complete: {} divergences, {} verified, {} recommendations, {} repair outcomes",
+        log.debug("Audit scan {} complete: {} divergences, {} verified, {} recommendations, {} repair outcomes",
                 scanId, divergences.size(), newRecommendations.size(), newRecommendations.size(), currentRepairOutcomes.size());
     }
 

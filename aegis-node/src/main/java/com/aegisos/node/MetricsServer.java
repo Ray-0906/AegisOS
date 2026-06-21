@@ -140,7 +140,7 @@ public final class MetricsServer implements AutoCloseable {
         server.createContext("/cancel", exchange -> {
             if ("POST".equals(exchange.getRequestMethod())) {
                 String query = exchange.getRequestURI().getQuery();
-                log.info("Received /cancel request with query: {}", query);
+                log.debug("Received /cancel request with query: {}", query);
                 if (query != null && query.startsWith("jobId=")) {
                     String jobId = query.substring(6);
                     if (jobId.isEmpty()) {

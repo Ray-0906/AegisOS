@@ -192,7 +192,7 @@ public final class ProcessManager {
             Optional<JobRecord> record = agent.registry().get(handle.jobId());
             long now = System.currentTimeMillis();
             if (now - lastLog > 2000) {
-                log.info("ProcessManager.await: Job {} status is {}", handle.jobId(), 
+                log.debug("ProcessManager.await: Job {} status is {}", handle.jobId(),
                          record.map(r -> r.getState().toString()).orElse("NOT_FOUND"));
                 lastLog = now;
             }
@@ -212,7 +212,8 @@ public final class ProcessManager {
         }
         Optional<JobRecord> finalRecord = agent.registry().get(handle.jobId());
         String finalState = finalRecord.isPresent() ? finalRecord.get().getState().toString() : "MISSING";
-        System.out.println("AWAIT_RESULT_STATE=" + finalState);
+        log.debug("ProcessManager.await timed out for job {} with final observed state {}",
+                handle.jobId(), finalState);
         throw new java.util.concurrent.TimeoutException("job " + handle.jobId() + " did not finish in time");
     }
 

@@ -94,7 +94,7 @@ public final class AegisFS implements AutoCloseable {
             try {
                 RepairChunk repair = RepairChunk.parseFrom(cmd.getPayload());
                 repairTaskStore.applyRepairChunk(index, repair);
-                log.info("REPAIR_CHUNK at {}: task {} created for chunk {}",
+                log.debug("REPAIR_CHUNK at {}: task {} created for chunk {}",
                     index, repair.getRepairId(), HexUtil.encode(repair.getChunkId().toByteArray()));
             } catch (Exception e) {
                 log.warn("bad REPAIR_CHUNK at {}", index);
@@ -106,7 +106,7 @@ public final class AegisFS implements AutoCloseable {
                 Optional<RepairTaskStore.RepairTask> task =
                     repairTaskStore.pendingByRepairId(complete.getRepairId());
                 if (task.isEmpty()) {
-                    log.info("REPAIR_COMPLETE at {} ignored: no PENDING task for {}",
+                    log.debug("REPAIR_COMPLETE at {} ignored: no PENDING task for {}",
                         index, complete.getRepairId());
                     return;
                 }
@@ -127,7 +127,7 @@ public final class AegisFS implements AutoCloseable {
         replicator.start();
         scrubber.start();
         antiEntropy.start();
-        log.info("AegisFS started (replication factor {})", replicationFactor);
+        log.debug("AegisFS started (replication factor {})", replicationFactor);
     }
 
     public ChunkStore chunkStore() {

@@ -1,6 +1,9 @@
 package com.aegisos.runtime;
 
 import com.aegisos.core.identity.NodeId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.io.PrintWriter;
 import java.io.Serializable;
@@ -11,9 +14,11 @@ import java.nio.file.Paths;
 import java.util.Scanner;
 
 public class WorkerMain {
+    private static final Logger log = LoggerFactory.getLogger(WorkerMain.class);
+
     public static void main(String[] args) {
         if (args.length < 1) {
-            System.err.println("Usage: WorkerMain <controlPort>");
+            log.error("Usage: WorkerMain <controlPort>");
             System.exit(1);
         }
 
@@ -36,10 +41,10 @@ public class WorkerMain {
                         }
                     }
                     // EOF reached
-                    System.err.println("Socket EOF. Parent died. Exiting.");
+                    log.warn("Socket EOF. Parent died. Exiting.");
                     System.exit(1);
                 } catch (Exception e) {
-                    System.err.println("Socket error. Exiting.");
+                    log.warn("Socket error. Exiting.");
                     System.exit(1);
                 }
             });
@@ -131,21 +136,10 @@ public class WorkerMain {
                     jobHolder[0] = job; // Update with instantiated artifact job
                     if (restoreState != null && restoreState.length > 0) {
                         try {
-                            String sha256 = String.valueOf(java.util.Arrays.hashCode(restoreState));
-                            String hex = "";
-                            for (int i = 0; i < Math.min(16, restoreState.length); i++) {
-                                hex += String.format("%02X ", restoreState[i]);
-                            }
-                            System.err.println("INSTRUMENT: DESERIALIZE_INPUT length=" + restoreState.length + " first16=" + hex.trim() + " sha256=" + sha256);
-                        } catch (Exception ex) {}
-                        System.err.println("INSTRUMENT: DESERIALIZE_BEGIN");
-                        try {
                             Thread.currentThread().setContextClassLoader(cl);
                             CheckpointEnvelope env = CheckpointEnvelope.fromByteArray(restoreState);
                             job.restoreState(env.payload());
-                            System.err.println("INSTRUMENT: DESERIALIZE_SUCCESS");
                         } catch (Throwable t) {
-                            System.err.println("INSTRUMENT: DESERIALIZE_EXCEPTION exceptionClass=" + t.getClass().getName() + " message=" + t.getMessage());
                             throw t;
                         }
                     }
@@ -157,20 +151,9 @@ public class WorkerMain {
                 jobHolder[0] = job; // Update with deserialized job
                 if (restoreState != null && restoreState.length > 0) {
                     try {
-                        String sha256 = String.valueOf(java.util.Arrays.hashCode(restoreState));
-                        String hex = "";
-                        for (int i = 0; i < Math.min(16, restoreState.length); i++) {
-                            hex += String.format("%02X ", restoreState[i]);
-                        }
-                        System.err.println("INSTRUMENT: DESERIALIZE_INPUT length=" + restoreState.length + " first16=" + hex.trim() + " sha256=" + sha256);
-                    } catch (Exception ex) {}
-                    System.err.println("INSTRUMENT: DESERIALIZE_BEGIN");
-                    try {
                         CheckpointEnvelope env = CheckpointEnvelope.fromByteArray(restoreState);
                         job.restoreState(env.payload());
-                        System.err.println("INSTRUMENT: DESERIALIZE_SUCCESS");
                     } catch (Throwable t) {
-                        System.err.println("INSTRUMENT: DESERIALIZE_EXCEPTION exceptionClass=" + t.getClass().getName() + " message=" + t.getMessage());
                         throw t;
                     }
                 }
@@ -186,8 +169,7 @@ public class WorkerMain {
             System.exit(0);
             
         } catch (Throwable t) {
-            System.err.println("INSTRUMENT: CHECKPOINT_DESERIALIZE_FAIL at " + System.currentTimeMillis());
-            t.printStackTrace();
+            log.error("Worker execution failed", t);
             System.exit(1);
         }
     }

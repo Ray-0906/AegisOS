@@ -49,7 +49,7 @@ public final class GossipProtocol implements AutoCloseable {
     public void start() {
         network.registerHandler(MessageType.GOSSIP_SYN, this::onSyn);
         scheduler.scheduleAtFixedRate(this::cycleSafe, com.aegisos.core.SchedulerJitter.jitter(intervalMs, intervalMs), intervalMs, TimeUnit.MILLISECONDS);
-        log.info("Gossip started (fanout={}, interval={}ms)", fanout, intervalMs);
+        log.debug("Gossip started (fanout={}, interval={}ms)", fanout, intervalMs);
     }
 
     private AegisMessage onSyn(AegisMessage request) {

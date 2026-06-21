@@ -92,7 +92,7 @@ public final class JobSupervisor implements AutoCloseable {
     public void start() {
         network.registerHandler(MessageType.JOB_HEARTBEAT, this::onHeartbeat);
         executor.scheduleAtFixedRate(this::scanSafe, com.aegisos.core.SchedulerJitter.jitter(SCAN_INTERVAL_MS, SCAN_INTERVAL_MS), SCAN_INTERVAL_MS, TimeUnit.MILLISECONDS);
-        log.info("Job supervisor started (lease={}ms)", LEASE_DURATION_MS);
+        log.debug("Job supervisor started (lease={}ms)", LEASE_DURATION_MS);
     }
 
     private com.aegisos.core.message.AegisMessage onHeartbeat(com.aegisos.core.message.AegisMessage msg) {
@@ -124,7 +124,7 @@ public final class JobSupervisor implements AutoCloseable {
 
         // Detect leadership transition: clear stale state from previous leader
         if (!wasLeader) {
-            log.info("Became leader — clearing migration cooldowns and heartbeat state");
+            log.debug("Became leader — clearing migration cooldowns and heartbeat state");
             recentlyMigrated.clear();
             lastHeartbeat.clear();
             firstSeenQueued.clear();
@@ -165,7 +165,7 @@ public final class JobSupervisor implements AutoCloseable {
                         log.info("Scheduled PENDING job {} to {}", jobId, target.shortId());
                     } catch (Exception e) {
                         // It's normal if no node has capacity, we just leave it PENDING
-                        log.info("Could not schedule PENDING job {}: {}", jobId, e.getMessage());
+                        log.debug("Could not schedule PENDING job {}: {}", jobId, e.getMessage());
                     } finally {
                         pendingScheduling.remove(jobId);
                     }
@@ -220,8 +220,7 @@ public final class JobSupervisor implements AutoCloseable {
 
             // RUNNING + lease expired → emit LOST
             if (leaseExpired) {
-                System.out.println("INSTRUMENT: LEASE_EXPIRED jobId=" + jobId + " executionId=" + record.getExecutionId());
-                log.info("Job {} on node {}: execution lease expired ({}ms since last heartbeat). Emitting LOST.",
+                log.warn("Job {} on node {}: execution lease expired ({}ms since last heartbeat). Emitting LOST.",
                         jobId, assigned.shortId(), now - lastHeartbeat.getOrDefault(jobId, 0L));
                 if (metricsRegistry != null) {
                     metricsRegistry.counter("aegis_job_lease_expirations_total").increment();
@@ -232,14 +231,13 @@ public final class JobSupervisor implements AutoCloseable {
     }
 
     private void emitLostState(String jobId, JobRecord record) {
-        System.out.println("INSTRUMENT: LOST_EMITTED jobId=" + jobId + " executionId=" + record.getExecutionId());
         try {
             terminalScheduler.enqueue(jobId, record.getExecutionId(), JobState.LOST, null, null);
             jobsLost.incrementAndGet();
 
             // Test hook for Test Q (Race Condition)
             if (System.getProperty("aegis.test.delay_after_lost") != null) {
-                log.info("TEST HOOK: Pausing Leader after emitting LOST for {}", jobId);
+                log.debug("TEST HOOK: Pausing Leader after emitting LOST for {}", jobId);
                 Thread.sleep(5000);
             }
         } catch (Exception e) {
@@ -259,12 +257,8 @@ public final class JobSupervisor implements AutoCloseable {
     private static final int DEFAULT_MAX_RETRIES = 3;
 
     private void requeueJob(String jobId, JobRecord record) {
-        System.out.println("INSTRUMENT: REQUEUE_BEGIN jobId=" + jobId);
-        System.out.println("INSTRUMENT: EXECUTION_ID_OLD=" + record.getExecutionId());
         try {
             long nextExecutionId = record.getExecutionId() + 1;
-            System.out.println("INSTRUMENT: EXECUTION_ID_NEW=" + nextExecutionId);
-            
             if (nextExecutionId > DEFAULT_MAX_RETRIES + 1) {
                 log.warn("Job {} exceeded max retries ({}). Marking FAILED.", jobId, DEFAULT_MAX_RETRIES);
                 emitTerminalFailure(jobId, record, "exceeded max retries (" + DEFAULT_MAX_RETRIES + ")");
@@ -310,7 +304,7 @@ public final class JobSupervisor implements AutoCloseable {
 
     @Override
     public void close() {
-        log.info("JobSupervisor shutdown starting: pendingSchedulingSize={}", pendingScheduling.size());
+        log.debug("JobSupervisor shutdown starting: pendingSchedulingSize={}", pendingScheduling.size());
         terminalScheduler.shutdown();
         executor.shutdownNow();
         schedulingExecutor.shutdownNow();
@@ -320,7 +314,7 @@ public final class JobSupervisor implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        log.info("JobSupervisor shutdown complete: executor.isTerminated={}, schedulingExecutor.isTerminated={}", 
+        log.debug("JobSupervisor shutdown complete: executor.isTerminated={}, schedulingExecutor.isTerminated={}",
                  executor.isTerminated(), schedulingExecutor.isTerminated());
     }
 }

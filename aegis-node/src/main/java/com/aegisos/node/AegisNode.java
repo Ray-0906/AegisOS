@@ -351,80 +351,43 @@ public final class AegisNode implements AutoCloseable {
             return;
         }
         log.info("Shutting down node {}", identity.nodeId().shortId());
-        // #region agent log
-        com.aegisos.core.util.DebugLogger.log("AegisNode.java:306", "AegisNode.close() start",
-            java.util.Map.of("nodeId", identity.nodeId().shortId(), "started", started), "C", "pre-fix");
-        // #endregion
         if (metricsServer != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:312", "Closing metricsServer", java.util.Map.of(), "B", "pre-fix");
-            // #endregion
             metricsServer.close();
         }
         if (jobSupervisor != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:315", "Closing jobSupervisor", java.util.Map.of(), "C", "pre-fix");
-            // #endregion
             jobSupervisor.close();
         }
 
         if (runtimeAgent != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:321", "Closing runtimeAgent", java.util.Map.of(), "A", "pre-fix");
-            // #endregion
             runtimeAgent.close();
         }
         if (resourceReporter != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:324", "Closing resourceReporter", java.util.Map.of(), "C", "pre-fix");
-            // #endregion
             resourceReporter.close();
         }
         if (resourceAllocator != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:327", "Closing resourceAllocator", java.util.Map.of(), "C", "pre-fix");
-            // #endregion
             resourceAllocator.close();
             if (scheduler != null) {
                 scheduler.close();
             }
         }
         if (auditScheduler != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:330", "Closing auditScheduler", java.util.Map.of(), "C", "pre-fix");
-            // #endregion
             auditScheduler.close();
         }
 
         if (fileSystem != null) {
             try {
-                // #region agent log
-                com.aegisos.core.util.DebugLogger.log("AegisNode.java:335", "Closing fileSystem", java.util.Map.of(), "C", "pre-fix");
-                // #endregion
                 fileSystem.close();
             } catch (Exception e) {
                 log.warn("Error closing fileSystem: {}", e.toString());
             }
         }
         if (consensus != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:341", "Closing consensus", java.util.Map.of(), "C", "pre-fix");
-            // #endregion
             consensus.close();
         }
         if (discovery != null) {
-            // #region agent log
-            com.aegisos.core.util.DebugLogger.log("AegisNode.java:344", "Closing discovery", java.util.Map.of(), "C", "pre-fix");
-            // #endregion
             discovery.close();
         }
-        // #region agent log
-        com.aegisos.core.util.DebugLogger.log("AegisNode.java:346", "Closing network", java.util.Map.of(), "D", "pre-fix");
-        // #endregion
         network.close();
-        // #region agent log
-        com.aegisos.core.util.DebugLogger.log("AegisNode.java:348", "AegisNode.close() end", java.util.Map.of("nodeId", identity.nodeId().shortId()), "C", "pre-fix");
-        // #endregion
         started = false;
     }
 }
