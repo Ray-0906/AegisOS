@@ -13,6 +13,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class StaleCheckpointFenceTest {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(StaleCheckpointFenceTest.class);
 
     @Test
     void testStaleCheckpointsAreFenced() throws Exception {
@@ -30,7 +31,7 @@ public class StaleCheckpointFenceTest {
             JobHandle handle = submitter.api().getProcessManager().submit(new CheckpointableSum(100, 100), 1, 128);
             String jobId = handle.jobId();
 
-            System.out.println("JOB_SUBMITTED");
+            log.info("JOB_SUBMITTED");
             
             // Background thread to trace states
             Thread tracer = new Thread(() -> {
@@ -44,12 +45,12 @@ public class StaleCheckpointFenceTest {
                             JobRecord jr = jobOpt.get();
                             if (jr.getExecutionId() != lastExecId) {
                                 lastExecId = jr.getExecutionId();
-                                System.out.println("JOB_ASSIGNED executionId=" + lastExecId);
+                                log.debug("JOB_ASSIGNED executionId={}", lastExecId);
                             }
                             if (jr.getState() != lastState) {
                                 lastState = jr.getState();
-                                if (lastState == JobState.RUNNING) System.out.println("JOB_STARTED executionId=" + lastExecId);
-                                if (lastState == JobState.COMPLETED) System.out.println("JOB_COMPLETED executionId=" + lastExecId);
+                                if (lastState == JobState.RUNNING) log.debug("JOB_STARTED executionId={}", lastExecId);
+                                if (lastState == JobState.COMPLETED) log.info("JOB_COMPLETED executionId={}", lastExecId);
                             }
                         }
                         var chkOpt = submitter.runtimeAgent().registry().getCheckpoint(jobId);
@@ -57,7 +58,7 @@ public class StaleCheckpointFenceTest {
                             long seq = chkOpt.get().metadata().getSequence();
                             if (seq > lastSeq) {
                                 lastSeq = seq;
-                                System.out.println("CHECKPOINT_CREATED executionId=" + chkOpt.get().executionId() + " seq=" + seq);
+                                log.debug("CHECKPOINT_CREATED executionId={} seq={}", chkOpt.get().executionId(), seq);
                             }
                         }
                         Thread.sleep(100);

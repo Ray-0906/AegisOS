@@ -65,7 +65,7 @@ public final class ClusterHarness implements AutoCloseable {
             while (leaderTime == -1 || discoverTime == -1) {
                 if (leaderTime == -1 && currentLeader() != null) {
                     leaderTime = System.currentTimeMillis() - t0;
-                    System.out.println("LEADER_ELECTED=" + leaderTime);
+                    System.out.println("INITIAL_LEADER_ELECTION_DURATION_MS=" + leaderTime);
                 }
                 if (discoverTime == -1) {
                     try {
@@ -78,13 +78,15 @@ public final class ClusterHarness implements AutoCloseable {
                             }
                             if (all) {
                                 discoverTime = System.currentTimeMillis() - t0;
-                                System.out.println("ALL_NODES_DISCOVERED=" + discoverTime);
+                                System.out.println("FULL_CLUSTER_DISCOVERY_DURATION_MS=" + discoverTime);
                             }
                         }
-                    } catch (java.util.ConcurrentModificationException ignored) {}
+                    } catch (Exception e) {}
                 }
-                try { Thread.sleep(10); } catch (Exception e) { break; }
+                try { Thread.sleep(50); } catch (InterruptedException e) { break; }
             }
+            long bootTime = System.currentTimeMillis() - t0;
+            System.out.println("BOOT_DURATION_MS=" + bootTime);
         });
         monitor.start();
 
