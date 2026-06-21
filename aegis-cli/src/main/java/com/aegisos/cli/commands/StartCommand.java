@@ -28,16 +28,22 @@ public final class StartCommand implements Callable<Integer> {
             description = "HTTP metrics port (default: P2P port + 10000, 0 = disabled).")
     int metricsPort = -1;  // -1 signals "use default"
 
+    @CommandLine.Option(names = "--rest-port",
+            description = "REST API port (default: P2P port + 11000, 0 = disabled).")
+    int restPort = -1;  // -1 signals "use default"
+
     @CommandLine.Option(names = "--bootstrap", description = "Bootstrap a brand new cluster.")
     boolean bootstrap = false;
 
     @Override
     public Integer call() throws Exception {
         int resolvedMetricsPort = (metricsPort == -1) ? (port + 10000) : metricsPort;
+        int resolvedRestPort = (restPort == -1) ? (port + 11000) : restPort;
         NodeConfig config = new NodeConfig()
                 .port(port)
                 .advertiseHost(advertise)
                 .apiPort(resolvedMetricsPort)
+                .restPort(resolvedRestPort)
                 .bootstrap(bootstrap);
         if (home != null) {
             config.homeDir(home);
@@ -53,9 +59,12 @@ public final class StartCommand implements Callable<Integer> {
         String metricsUrl = resolvedMetricsPort > 0
                 ? "  metrics: http://127.0.0.1:" + resolvedMetricsPort + "/metrics"
                 : "  metrics: disabled";
+        String restUrl = resolvedRestPort > 0
+                ? "  api:     http://127.0.0.1:" + resolvedRestPort + "/v1/"
+                : "  api:     disabled";
         System.out.println("Node " + node.identity().nodeId().shortId()
                 + " started on port " + node.network().boundPort() + ". Ctrl-C to stop.\n"
-                + metricsUrl);
+                + metricsUrl + "\n" + restUrl);
         Thread.currentThread().join();
         return 0;
     }

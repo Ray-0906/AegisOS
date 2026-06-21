@@ -387,6 +387,12 @@ public final class ClientCommands {
                     if (node.consensus().leaderId() == null) {
                         throw new IllegalStateException("Timeout waiting to discover cluster leader");
                     }
+                    if (targetNodeIdHex == null || !targetNodeIdHex.matches("^[0-9a-fA-F]+$") || targetNodeIdHex.length() % 2 != 0) {
+                        System.err.println("Invalid NodeId: '" + targetNodeIdHex + "'.");
+                        System.err.println("Expected a valid hexadecimal node id.");
+                        System.err.println("Use 'aegis nodes' to list available node ids.");
+                        return 1;
+                    }
                     byte[] payload = com.aegisos.core.util.HexUtil.decode(targetNodeIdHex);
                     com.aegisos.proto.StateCommand cmd = com.aegisos.proto.StateCommand.newBuilder()
                             .setType(com.aegisos.proto.CommandType.ADD_VOTER)
@@ -414,6 +420,12 @@ public final class ClientCommands {
         try {
             return withClient(seeds, node -> {
                 try {
+                    if (targetNodeIdHex == null || !targetNodeIdHex.matches("^[0-9a-fA-F]+$") || targetNodeIdHex.length() % 2 != 0) {
+                        System.err.println("Invalid NodeId: '" + targetNodeIdHex + "'.");
+                        System.err.println("Expected a valid hexadecimal node id.");
+                        System.err.println("Use 'aegis nodes' to list available node ids.");
+                        return 1;
+                    }
                     byte[] payload = com.aegisos.core.util.HexUtil.decode(targetNodeIdHex);
                     com.aegisos.proto.StateCommand cmd = com.aegisos.proto.StateCommand.newBuilder()
                             .setType(com.aegisos.proto.CommandType.REMOVE_VOTER)

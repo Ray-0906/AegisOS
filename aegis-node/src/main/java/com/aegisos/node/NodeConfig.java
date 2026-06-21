@@ -20,6 +20,7 @@ public final class NodeConfig {
     private String advertiseHost = "127.0.0.1";
     private int port = 9000;
     private int apiPort = 0;  // 0 = metrics server disabled
+    private int restPort = 20001;
     private final List<Endpoint> seeds = new ArrayList<>();
     private int replicationFactor = 3;
     private long reaperIntervalMs = 60_000;
@@ -215,6 +216,15 @@ public final class NodeConfig {
 
     public NodeConfig apiPort(int p) {
         this.apiPort = p;
+        return this;
+    }
+
+    public int restPort() {
+        return restPort;
+    }
+
+    public NodeConfig restPort(int p) {
+        this.restPort = p;
         return this;
     }
 

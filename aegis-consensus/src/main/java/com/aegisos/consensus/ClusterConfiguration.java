@@ -68,7 +68,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
             voters.add(nodeId);
             observers.remove(nodeId);
             version++;
-            log.info("ADD_VOTER at index {} applied: {} is now a voter (version {})", index, nodeId.shortId(), version);
+            log.debug("ADD_VOTER at index {} applied: {} is now a voter (version {})", index, nodeId.shortId(), version);
         } catch (Exception e) {
             log.error("Failed to apply ADD_VOTER at index {}: {}", index, e.toString());
         }
@@ -83,7 +83,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
             }
             voters.remove(nodeId);
             version++;
-            log.info("REMOVE_VOTER at index {} applied: {} removed from voters (version {})", index, nodeId.shortId(), version);
+            log.debug("REMOVE_VOTER at index {} applied: {} removed from voters (version {})", index, nodeId.shortId(), version);
         } catch (Exception e) {
             log.error("Failed to apply REMOVE_VOTER at index {}: {}", index, e.toString());
         }

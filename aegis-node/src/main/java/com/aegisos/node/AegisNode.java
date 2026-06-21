@@ -60,6 +60,7 @@ public final class AegisNode implements AutoCloseable {
 
     private volatile boolean started;
     private MetricsServer metricsServer;
+    private com.aegisos.node.api.ApiServer apiServer;
     private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
     private final com.aegisos.core.observability.TimelineRegistry timelineRegistry;
 
@@ -198,23 +199,33 @@ public final class AegisNode implements AutoCloseable {
         }
 
         // 5. Start all background subsystems now that in-memory state is fully populated
-        fileSystem.start();
-        auditScheduler.start();
-        runtimeAgent.start();
-        network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
+        boolean isClient = (config.role() == com.aegisos.proto.NodeRole.CLIENT);
+        
+        if (!isClient) {
+            fileSystem.start();
+            auditScheduler.start();
+            runtimeAgent.start();
+            network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
+            scheduler.start();
+            resourceReporter.start();
+            if (jobSupervisor != null) {
+                jobSupervisor.start();
+            }
+        }
         
         QueryHandler queryHandler = new QueryHandler(discovery, fileSystem);
         network.registerHandler(MessageType.CLIENT_QUERY, queryHandler::handle);
-        scheduler.start();
-        resourceReporter.start();
-        if (jobSupervisor != null) {
-            jobSupervisor.start();
-        }
+        
         consensus.start(); // Start Raft last to avoid heartbeat races triggering applyCommitted early
 
-        if (config.apiPort() >= 0) {
+        if (config.apiPort() >= 0 && !isClient) {
             metricsServer = new MetricsServer(this, config.apiPort());
             metricsServer.start();
+        }
+
+        if (config.restPort() > 0 && !isClient) {
+            apiServer = new com.aegisos.node.api.ApiServer(this, config.restPort());
+            apiServer.start();
         }
 
         started = true;
@@ -374,6 +385,14 @@ public final class AegisNode implements AutoCloseable {
             auditScheduler.close();
         }
 
+        if (apiServer != null) {
+            try {
+                apiServer.shutdown();
+            } catch (Exception e) {
+                log.error("Failed to stop API server", e);
+            }
+        }
+        log.info("Node {} shutdown complete", identity.nodeId());
         if (fileSystem != null) {
             try {
                 fileSystem.close();

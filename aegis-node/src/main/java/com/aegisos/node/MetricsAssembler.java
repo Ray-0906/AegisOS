@@ -35,15 +35,10 @@ public final class MetricsAssembler {
             new MetricsSnapshot.Counter(failed)
         );
 
-        Set<NodeId> voters = consensus.clusterConfiguration().voters();
-        int aliveNodes = 0;
+        int aliveNodes = discovery.membership().aliveCount();
         int deadNodes = 0;
         for (PeerEntry p : discovery.membership().allPeers()) {
-            NodeId peerId = NodeId.of(p.getNodeId().toByteArray());
-            if (!voters.contains(peerId)) continue;
-            if (p.getStatus() == PeerStatus.ALIVE) {
-                aliveNodes++;
-            } else {
+            if (p.getStatus() != PeerStatus.ALIVE) {
                 deadNodes++;
             }
         }
