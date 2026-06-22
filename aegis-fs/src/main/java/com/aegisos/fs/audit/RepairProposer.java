@@ -364,7 +364,7 @@ public final class RepairProposer {
         Map<NodeId, Set<String>> observed = collector.observeRemoteState(
                 network, discovery.membership(), self, fileSystem.chunkStore());
 
-        Set<NodeId> voters = consensus.clusterConfiguration().voters();
+        var voters = consensus.clusterConfiguration().voters();
         for (NodeId voter : voters) {
             if (discovery.membership().statusOf(voter) == PeerStatus.ALIVE) {
                 Set<String> chunks = observed.get(voter);
