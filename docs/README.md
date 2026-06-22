@@ -1,33 +1,12 @@
-# Documentation Index
+# AegisOS Documentation
 
-Welcome to the AegisOS Documentation. To ensure there is a single source of truth, information is strictly layered across three foundational documents.
+Welcome to the AegisOS documentation. At this size, documentation itself is a subsystem. Please use this index to navigate the project.
 
-## Core Knowledge Freeze v1.0
-
-If you are a newcomer navigating AegisOS, start here:
-
-*   **[ARCHITECTURE.md](../ARCHITECTURE.md) ("What exists?")**
-    *   System topology, component dependency graphs, data artifact flow, and directory layouts.
-*   **[LIFECYCLE.md](LIFECYCLE.md) ("How does it evolve?")**
-    *   Temporal behavior, Node and Job state machines, and failover recovery sequences.
-*   **[OPERATIONS.md](OPERATIONS.md) ("How do I operate/debug it?")**
-    *   Investigation protocols, refactoring rules, the verification staircase, and system invariants.
-
-## Historical
-
-*   [ARCHITECTURE_v0.95.md](ARCHITECTURE_v0.95.md) *(Historical snapshot for context)*
-
-## Design Records
-
-*   [docs/adr/](adr/)
-
-## Testing
-
-*   [CANARY_TESTS.md](../CANARY_TESTS.md)
-*   [LIFECYCLE_SCORECARD.md](../LIFECYCLE_SCORECARD.md)
-*   [TEST_DEBT.md](TEST_DEBT.md)
-
-## Reliability
-
-*   [SYSTEM_INVARIANTS.md](../SYSTEM_INVARIANTS.md)
-*   [DEBT_LEDGER.md](../DEBT_LEDGER.md)
+- **[Getting Started](getting-started/GETTING_STARTED.md)**: The 5-minute success path to building and running AegisOS.
+- **[Architecture](architecture/ARCHITECTURE.md)**: High-level design, invariants, and component ownership.
+- **[API Contracts](architecture/API_CONTRACT_v1.md)**: The guaranteed v1 REST API surfaces.
+- **[Error Contracts](architecture/ERROR_CONTRACT.md)**: Standardized error responses.
+- **[Operations](operations/SMOKE_TEST.md)**: Guides for running and testing the cluster.
+- **[Governance](governance/SCORECARD.md)**: The project scorecard, roadmap, and state of components.
+- **[ADRs](adr/)**: Architectural Decision Records explaining *why* things are the way they are.
+- **[History](history/)**: Historical documentation, design discussions, debt logs, and retired components.
