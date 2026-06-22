@@ -37,6 +37,17 @@ public class Router implements HttpHandler {
         log.debug("API Request: {} {}", method, path);
 
         try {
+            boolean isKnownPath = path.equals("/v1/health") || path.equals("/v1/nodes") || path.equals("/v1/leader") ||
+                    path.equals("/v1/files") || path.startsWith("/v1/files/") ||
+                    path.equals("/v1/artifacts") ||
+                    path.equals("/v1/jobs") || path.startsWith("/v1/jobs/") ||
+                    path.equals("/v1/admin/membership") || path.startsWith("/v1/admin/membership/");
+
+            if (!isKnownPath) {
+                ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
+                return;
+            }
+
             if (method.equals("GET")) {
                 if (path.equals("/v1/health")) {
                     clusterHandler.getHealth(exchange);
@@ -59,7 +70,6 @@ public class Router implements HttpHandler {
                     jobHandler.listJobs(exchange);
                 } else if (path.startsWith("/v1/jobs/")) {
                     String subPath = path.substring("/v1/jobs/".length());
-                    // format: {id} or {id}/logs
                     int slashIdx = subPath.indexOf('/');
                     if (slashIdx == -1) {
                         jobHandler.getJob(exchange, subPath);
@@ -67,7 +77,6 @@ public class Router implements HttpHandler {
                         String jobId = subPath.substring(0, slashIdx);
                         String action = subPath.substring(slashIdx + 1);
                         if (action.equals("logs")) {
-                            // parse query param for stream and executionId
                             String query = exchange.getRequestURI().getQuery();
                             String stream = "stdout";
                             Long execId = null;
@@ -81,29 +90,28 @@ public class Router implements HttpHandler {
                                 }
                             }
                             if (!stream.equals("stdout") && !stream.equals("stderr")) {
-                                stream = "stdout"; // default or throw error
+                                stream = "stdout";
                             }
                             jobHandler.getJobLogs(exchange, jobId, stream, execId);
                         } else {
-                            ResponseWriter.writeError(exchange, 404, "Not Found");
+                            ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
                         }
                     }
                 } else {
-                    ResponseWriter.writeError(exchange, 404, "Not Found");
+                    ResponseWriter.writeError(exchange, 405, "METHOD_NOT_ALLOWED");
                 }
             } else if (method.equals("PUT")) {
                 if (path.startsWith("/v1/files/")) {
                     fileHandler.putFile(exchange, path.substring("/v1/files/".length()));
                 } else {
-                    ResponseWriter.writeError(exchange, 404, "Not Found");
+                    ResponseWriter.writeError(exchange, 405, "METHOD_NOT_ALLOWED");
                 }
             } else if (method.equals("POST")) {
                 if (path.equals("/v1/admin/membership")) {
                     adminHandler.addVoter(exchange);
                 } else if (path.equals("/v1/artifacts")) {
-                    // Extract ?name=foo.jar from query params
                     String query = exchange.getRequestURI().getQuery();
-                    String name = "artifact.jar"; // default
+                    String name = "artifact.jar";
                     if (query != null) {
                         for (String param : query.split("&")) {
                             String[] kv = param.split("=");
@@ -116,7 +124,7 @@ public class Router implements HttpHandler {
                 } else if (path.equals("/v1/jobs")) {
                     jobHandler.submitJob(exchange);
                 } else {
-                    ResponseWriter.writeError(exchange, 404, "Not Found");
+                    ResponseWriter.writeError(exchange, 405, "METHOD_NOT_ALLOWED");
                 }
             } else if (method.equals("DELETE")) {
                 if (path.startsWith("/v1/admin/membership/")) {
@@ -124,14 +132,14 @@ public class Router implements HttpHandler {
                 } else if (path.startsWith("/v1/jobs/")) {
                     jobHandler.cancelJob(exchange, path.substring("/v1/jobs/".length()));
                 } else {
-                    ResponseWriter.writeError(exchange, 404, "Not Found");
+                    ResponseWriter.writeError(exchange, 405, "METHOD_NOT_ALLOWED");
                 }
             } else {
-                ResponseWriter.writeError(exchange, 405, "Method Not Allowed");
+                ResponseWriter.writeError(exchange, 405, "METHOD_NOT_ALLOWED");
             }
         } catch (Exception e) {
             log.error("Internal API Error handling {} {}", method, path, e);
-            ResponseWriter.writeError(exchange, 500, "Internal Server Error: " + e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         } finally {
             exchange.close();
         }

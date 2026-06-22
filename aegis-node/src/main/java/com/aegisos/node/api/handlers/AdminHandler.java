@@ -45,7 +45,7 @@ public class AdminHandler {
         try {
             MembershipRequest req = mapper.readValue(exchange.getRequestBody(), MembershipRequest.class);
             if (req.nodeId == null || !req.nodeId.matches("^[0-9a-fA-F]+$") || req.nodeId.length() % 2 != 0) {
-                ResponseWriter.writeError(exchange, 400, "Invalid nodeId");
+                ResponseWriter.writeError(exchange, 400, "INVALID_REQUEST");
                 return;
             }
 
@@ -60,7 +60,7 @@ public class AdminHandler {
             ResponseWriter.writeJson(exchange, 202, new MembershipResponse("ACCEPTED", "Node " + req.nodeId + " proposed as voter"));
         } catch (Exception e) {
             log.error("Failed to add voter", e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 
@@ -69,7 +69,7 @@ public class AdminHandler {
 
         try {
             if (nodeId == null || !nodeId.matches("^[0-9a-fA-F]+$") || nodeId.length() % 2 != 0) {
-                ResponseWriter.writeError(exchange, 400, "Invalid nodeId");
+                ResponseWriter.writeError(exchange, 400, "INVALID_REQUEST");
                 return;
             }
 
@@ -84,7 +84,7 @@ public class AdminHandler {
             ResponseWriter.writeJson(exchange, 202, new MembershipResponse("ACCEPTED", "Node " + nodeId + " proposed for removal"));
         } catch (Exception e) {
             log.error("Failed to remove voter", e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 }

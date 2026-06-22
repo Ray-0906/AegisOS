@@ -1,0 +1,55 @@
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.1"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.1 http://maven.apache.org/xsd/assembly-2.1.1.xsd">
+    <id>dist</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <includeBaseDirectory>true</includeBaseDirectory>
+    <baseDirectory>aegisos-${project.version}</baseDirectory>
+
+    <fileSets>
+        <!-- Include the bin wrapper scripts -->
+        <fileSet>
+            <directory>bin</directory>
+            <outputDirectory>bin</outputDirectory>
+            <includes>
+                <include>*.sh</include>
+                <include>*.ps1</include>
+            </includes>
+            <fileMode>0755</fileMode>
+        </fileSet>
+        <!-- Include the demo scripts -->
+        <fileSet>
+            <directory>demo</directory>
+            <outputDirectory>demo</outputDirectory>
+            <includes>
+                <include>*.ps1</include>
+            </includes>
+            <fileMode>0755</fileMode>
+        </fileSet>
+        <!-- Include the documentation -->
+        <fileSet>
+            <directory>docs</directory>
+            <outputDirectory>docs</outputDirectory>
+        </fileSet>
+    </fileSets>
+
+    <files>
+        <!-- Include the CLI fat jar -->
+        <file>
+            <source>aegis-cli/target/aegis.jar</source>
+            <outputDirectory>aegis-cli/target</outputDirectory>
+        </file>
+        <!-- Include the aegis-node jar -->
+        <file>
+            <source>aegis-node/target/aegis-node-${project.version}.jar</source>
+            <outputDirectory>aegis-node/target</outputDirectory>
+        </file>
+        <!-- Include the examples jar -->
+        <file>
+            <source>aegis-examples/target/aegis-examples-${project.version}.jar</source>
+            <outputDirectory>aegis-examples/target</outputDirectory>
+        </file>
+    </files>
+</assembly>

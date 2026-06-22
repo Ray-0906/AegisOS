@@ -67,7 +67,7 @@ public class FileHandler {
             ResponseWriter.writeJson(exchange, 201, resp);
         } catch (Exception e) {
             log.error("Failed to upload file {}", path, e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 
@@ -81,7 +81,7 @@ public class FileHandler {
             }
 
             if (node.fileSystem().fileIndex().byName(remotePath).isEmpty()) {
-                ResponseWriter.writeError(exchange, 404, "File not found: " + remotePath);
+                ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
                 return;
             }
 
@@ -94,7 +94,7 @@ public class FileHandler {
             }
         } catch (Exception e) {
             log.error("Failed to download file {}", path, e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 
@@ -111,7 +111,7 @@ public class FileHandler {
             ResponseWriter.writeJson(exchange, 200, new ListFilesResponse(files));
         } catch (Exception e) {
             log.error("Failed to list files at {}", path, e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 }

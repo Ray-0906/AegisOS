@@ -87,7 +87,7 @@ public class ArtifactHandler {
             ResponseWriter.writeJson(exchange, 201, new ArtifactUploadResponse(sha256, name, data.length));
         } catch (Exception e) {
             log.error("Failed to upload artifact {}", name, e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 
@@ -107,7 +107,7 @@ public class ArtifactHandler {
             ResponseWriter.writeJson(exchange, 200, artifacts);
         } catch (Exception e) {
             log.error("Failed to list artifacts", e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 }

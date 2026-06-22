@@ -25,6 +25,8 @@
         <module>aegis-cli</module>
         <module>aegis-demo-job</module>
         <module>aegis-test-cluster</module>
+        <module>aegis-contract-test</module>
+        <module>aegis-examples</module>
     </modules>
 
     <properties>
@@ -158,6 +160,17 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.6.0</version>
+                <inherited>false</inherited>
+                <configuration>
+                    <descriptors>
+                        <descriptor>src/assembly/dist.xml</descriptor>
+                    </descriptors>
+                </configuration>
             </plugin>
         </plugins>
     </build>

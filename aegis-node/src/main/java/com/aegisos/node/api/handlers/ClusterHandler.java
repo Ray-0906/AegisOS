@@ -24,7 +24,7 @@ public class ClusterHandler {
     public void getHealth(HttpExchange exchange) throws IOException {
         NodeId leader = node.consensus().leaderId();
         if (leader == null) {
-            ResponseWriter.writeError(exchange, 503, "Cluster is currently unavailable (No leader)");
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         } else {
             ResponseWriter.writeJson(exchange, 200, new HealthResponse("UP"));
         }
@@ -50,7 +50,7 @@ public class ClusterHandler {
     public void getLeader(HttpExchange exchange) throws IOException {
         NodeId leader = node.consensus().leaderId();
         if (leader == null) {
-            ResponseWriter.writeError(exchange, 503, "No leader currently elected");
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
             return;
         }
         String leaderId = com.aegisos.core.util.HexUtil.encode(leader.toBytes());

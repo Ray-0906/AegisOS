@@ -84,7 +84,7 @@ public class JobHandler {
             ResponseWriter.writeJson(exchange, 202, handle.jobId());
         } catch (Exception e) {
             log.error("Failed to submit job", e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 
@@ -103,7 +103,7 @@ public class JobHandler {
             ResponseWriter.writeJson(exchange, 200, summaries);
         } catch (Exception e) {
             log.error("Failed to list jobs", e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 
@@ -111,7 +111,7 @@ public class JobHandler {
         try {
             Optional<JobRecord> optRecord = node.runtimeAgent().registry().get(jobId);
             if (optRecord.isEmpty()) {
-                ResponseWriter.writeError(exchange, 404, "Job not found");
+                ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
                 return;
             }
 
@@ -128,7 +128,7 @@ public class JobHandler {
             ResponseWriter.writeJson(exchange, 200, details);
         } catch (Exception e) {
             log.error("Failed to get job", e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 
@@ -139,7 +139,7 @@ public class JobHandler {
             exchange.sendResponseHeaders(202, -1);
         } catch (Exception e) {
             log.error("Failed to cancel job", e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 
@@ -147,7 +147,7 @@ public class JobHandler {
         try {
             Optional<JobRecord> optRecord = node.runtimeAgent().registry().get(jobId);
             if (optRecord.isEmpty()) {
-                ResponseWriter.writeError(exchange, 404, "Job not found");
+                ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
                 return;
             }
 
@@ -159,7 +159,7 @@ public class JobHandler {
                 data = node.fileSystem().read(path);
             } catch (Exception e) {
                 // File does not exist or cannot be read yet
-                ResponseWriter.writeError(exchange, 404, "Logs not found");
+                ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
                 return;
             }
 
@@ -170,7 +170,7 @@ public class JobHandler {
             }
         } catch (Exception e) {
             log.error("Failed to get job logs", e);
-            ResponseWriter.writeError(exchange, 500, e.getMessage());
+            ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
 }
