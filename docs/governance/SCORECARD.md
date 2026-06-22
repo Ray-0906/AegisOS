@@ -1,19 +1,61 @@
 # AegisOS Scorecard
 
-This document tracks the status of all major architectural freezes and feature tracks.
+## AegisOS v1.2.2
 
-## Milestones
-- v0.3 Freeze                ✅
-- Reliability Freeze v1.0    ✅
-- Knowledge Freeze v1.0      ✅
-- BUILD_GREEN_v1             ✅
-- Reliability Freeze v1.1    ACTIVE
+STATUS: FROZEN
 
-## Cleanup
-- Wave 1 Cleanup             ✅
+**The distributed systems R&D phase is over. The platform engineering phase begins.**
 
-## Active Tracks
-- Track C.1                  ✅
-- Track C.2                  ✅
-- Track C.3a                 ✅
-- Track C.3b                 ✅
+## AegisOS v1.3.0 (REST API)
+STATUS: FROZEN
+
+## AegisOS v1.3.1 (aegis-client)
+STATUS: FROZEN
+
+## AegisOS v1.3.2 (CLI Migration)
+### Wave 3A
+STATUS: FROZEN
+Commands migrated:
+- run
+- status
+- jobs list
+- cancel
+- logs
+
+### Wave 3C
+STATUS: FROZEN
+Commands migrated:
+- artifact list
+- artifact upload
+
+### v1.3.2R (Retirement Phase)
+STATUS: FROZEN
+- `ClientCommands.java` removed
+- `withClient()` legacy architecture retired
+
+### Stable Core
+✅ Raft Consensus
+✅ Gossip Membership
+✅ Storage Engine
+✅ P2P Networking
+✅ Leader Election
+✅ Log Replication
+✅ Scheduler
+✅ Distributed Jobs
+✅ Checkpointing
+✅ Exactly-once execution
+✅ Node Rejoin
+✅ Replication Healing
+✅ Metrics
+✅ Observability
+
+### Technical Debt (Scheduled for removal)
+⚠️ `withClient()` logic
+⚠️ Ephemeral CLI nodes
+⚠️ Gossip-based leader discovery
+⚠️ CLI booting `AegisNode`
+
+### Known Limitations (Intentional design choices)
+ℹ️ Manual `add-voter` step required
+ℹ️ Single operator startup
+ℹ️ Java-only workloads
