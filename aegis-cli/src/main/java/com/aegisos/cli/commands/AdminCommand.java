@@ -3,13 +3,13 @@ package com.aegisos.cli.commands;
 import picocli.CommandLine;
 
 @CommandLine.Command(
-        name = "raft",
-        description = "Manage Raft cluster membership",
+        name = "admin",
+        description = "Manage cluster administration tasks",
         subcommands = {
-                AddVoterCommand.class,
-                RemoveVoterCommand.class
+                AddMemberCommand.class,
+                RemoveMemberCommand.class
         })
-public class RaftCommand implements Runnable {
+public class AdminCommand implements Runnable {
     @Override
     public void run() {
         new CommandLine(this).usage(System.out);

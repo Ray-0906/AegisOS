@@ -16,6 +16,8 @@ public class JoinModeNonElectableTest {
             NodeConfig config = new NodeConfig()
                     .homeDir(home)
                     .port(0)
+                .restPort(0)
+                .apiPort(0)
                     .advertiseHost("127.0.0.1")
                     .bootstrap(false); // join mode
             try (AegisNode node = new AegisNode(config)) {

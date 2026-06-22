@@ -25,7 +25,7 @@ public class ApiServer {
     }
 
     public void start() throws IOException {
-        server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
+        server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 10);
         server.createContext("/v1/", new Router(node));
         
         executor = Executors.newFixedThreadPool(10, r -> {

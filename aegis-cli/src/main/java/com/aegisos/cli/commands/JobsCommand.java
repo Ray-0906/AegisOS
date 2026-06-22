@@ -14,6 +14,8 @@ public final class JobsCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        return ClientCommands.runJobsList(seeds);
+        JobsListCommand listCmd = new JobsListCommand();
+        listCmd.seeds = this.seeds;
+        return listCmd.call();
     }
 }

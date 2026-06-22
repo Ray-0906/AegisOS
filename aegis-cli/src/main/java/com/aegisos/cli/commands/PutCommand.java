@@ -1,7 +1,11 @@
 package com.aegisos.cli.commands;
 
+import com.aegisos.cli.util.RestCliHelper;
+import com.aegisos.client.AegisClient;
 import picocli.CommandLine;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
 
@@ -19,6 +23,20 @@ public final class PutCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        return ClientCommands.runPut(seeds, localFile, remotePath);
+        if (seeds.isEmpty()) {
+            System.err.println("aegis put: at least one --seed is required");
+            return 2;
+        }
+
+        try {
+            AegisClient client = RestCliHelper.createClient(seeds);
+            byte[] data = Files.readAllBytes(Path.of(localFile));
+            client.putFile(remotePath, data);
+            System.out.println("Uploaded " + localFile + " -> " + remotePath + " (" + data.length + " bytes)");
+            return 0;
+        } catch (Exception e) {
+            System.err.println("aegis put failed: " + e.getMessage());
+            return 1;
+        }
     }
 }

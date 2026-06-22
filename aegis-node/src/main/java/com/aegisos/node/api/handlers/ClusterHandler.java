@@ -1,5 +1,6 @@
 package com.aegisos.node.api.handlers;
 
+import com.aegisos.api.dto.cluster.HealthResponse;
 import com.aegisos.api.dto.cluster.LeaderResponse;
 import com.aegisos.api.dto.cluster.NodeResponse;
 import com.aegisos.core.identity.NodeId;
@@ -25,9 +26,7 @@ public class ClusterHandler {
         if (leader == null) {
             ResponseWriter.writeError(exchange, 503, "Cluster is currently unavailable (No leader)");
         } else {
-            // Write a simple inline object or we can create a HealthResponse DTO later.
-            // For now just 200 OK
-            ResponseWriter.writeJson(exchange, 200, java.util.Map.of("status", "UP"));
+            ResponseWriter.writeJson(exchange, 200, new HealthResponse("UP"));
         }
     }
 
@@ -35,7 +34,8 @@ public class ClusterHandler {
         List<NodeResponse> nodes = new ArrayList<>();
         // Add self
         String selfId = com.aegisos.core.util.HexUtil.encode(node.identity().nodeId().toBytes());
-        nodes.add(new NodeResponse(selfId, "ALIVE", node.config().restPort()));
+        int selfApiPort = node.apiServer() != null ? node.apiServer().boundPort() : node.config().restPort();
+        nodes.add(new NodeResponse(selfId, "ALIVE", selfApiPort));
 
         for (PeerEntry p : node.discovery().membership().allPeers()) {
             String id = com.aegisos.core.util.HexUtil.encode(p.getNodeId().toByteArray());
@@ -57,7 +57,8 @@ public class ClusterHandler {
 
         // Return the leader ID and its API port
         // Currently, we don't propagate API port via Gossip, so we default to 20001 if it's not self
-        int apiPort = com.aegisos.core.util.HexUtil.encode(node.identity().nodeId().toBytes()).equals(leaderId) ? node.config().restPort() : 20001;
+        int selfApiPort = node.apiServer() != null ? node.apiServer().boundPort() : node.config().restPort();
+        int apiPort = com.aegisos.core.util.HexUtil.encode(node.identity().nodeId().toBytes()).equals(leaderId) ? selfApiPort : 20001;
 
         LeaderResponse response = new LeaderResponse(leaderId, apiPort);
         ResponseWriter.writeJson(exchange, 200, response);

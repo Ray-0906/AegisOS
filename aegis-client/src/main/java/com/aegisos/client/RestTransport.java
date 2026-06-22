@@ -57,6 +57,17 @@ public class RestTransport {
         return execute(request, responseType);
     }
     
+    public <T> T postBinary(URI uri, byte[] data, Class<T> responseType) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(uri)
+                .header("Content-Type", "application/octet-stream")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(data))
+                .timeout(Duration.ofSeconds(30))
+                .build();
+                
+        return execute(request, responseType);
+    }
+
     public <T> T putBinary(URI uri, byte[] data, Class<T> responseType) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(uri)

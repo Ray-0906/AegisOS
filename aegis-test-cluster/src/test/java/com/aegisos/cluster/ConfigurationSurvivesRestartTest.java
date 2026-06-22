@@ -58,6 +58,8 @@ public class ConfigurationSurvivesRestartTest {
             NodeConfig config = new NodeConfig()
                     .homeDir(home)
                     .port(0)
+                .restPort(0)
+                .apiPort(0)
                     .advertiseHost("127.0.0.1");
 
             boolean isBootstrap = nodes.isEmpty();
@@ -156,6 +158,8 @@ public class ConfigurationSurvivesRestartTest {
             NodeConfig config = new NodeConfig()
                     .homeDir(dirs.get(i))
                     .port(0)
+                .restPort(0)
+                .apiPort(0)
                     .advertiseHost("127.0.0.1");
 
             // On restart, do NOT set bootstrap — the log already exists,

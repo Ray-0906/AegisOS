@@ -223,7 +223,7 @@ public final class AegisNode implements AutoCloseable {
             metricsServer.start();
         }
 
-        if (config.restPort() > 0 && !isClient) {
+        if (config.restPort() >= 0 && !isClient) {
             apiServer = new com.aegisos.node.api.ApiServer(this, config.restPort());
             apiServer.start();
         }
@@ -288,6 +288,10 @@ public final class AegisNode implements AutoCloseable {
 
     public ArtifactClassLoader artifactClassLoader() {
         return artifactClassLoader;
+    }
+
+    public com.aegisos.node.api.ApiServer apiServer() {
+        return apiServer;
     }
 
     public AegisOS api() {

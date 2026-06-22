@@ -1,7 +1,11 @@
 package com.aegisos.cli.commands;
 
+import com.aegisos.cli.util.RestCliHelper;
+import com.aegisos.client.AegisClient;
 import picocli.CommandLine;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
 
@@ -19,6 +23,20 @@ public final class GetCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        return ClientCommands.runGet(seeds, remotePath, localFile);
+        if (seeds.isEmpty()) {
+            System.err.println("aegis get: at least one --seed is required");
+            return 2;
+        }
+
+        try {
+            AegisClient client = RestCliHelper.createClient(seeds);
+            byte[] data = client.getFile(remotePath);
+            Files.write(Path.of(localFile), data);
+            System.out.println("Downloaded " + remotePath + " -> " + localFile + " (" + data.length + " bytes)");
+            return 0;
+        } catch (Exception e) {
+            System.err.println("aegis get failed: " + e.getMessage());
+            return 1;
+        }
     }
 }

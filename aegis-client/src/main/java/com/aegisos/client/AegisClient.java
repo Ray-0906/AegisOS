@@ -1,7 +1,12 @@
 package com.aegisos.client;
 
+import com.aegisos.api.dto.cluster.HealthResponse;
+import com.aegisos.api.dto.cluster.LeaderResponse;
 import com.aegisos.api.dto.cluster.NodeResponse;
 import com.aegisos.api.dto.file.UploadFileResponse;
+import com.aegisos.api.dto.job.JobDetails;
+import com.aegisos.api.dto.job.JobRequest;
+import com.aegisos.api.dto.job.JobSummary;
 import com.aegisos.api.dto.membership.MembershipRequest;
 import com.aegisos.api.dto.membership.MembershipResponse;
 import org.slf4j.Logger;
@@ -38,12 +43,39 @@ public class AegisClient {
         });
     }
 
+    public com.aegisos.api.dto.file.ListFilesResponse listFiles(String path) {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            // In v1.3 we only support listing /, but we can pass path as query param if needed
+            // For now, let's just hit /v1/files or /v1/files/
+            String targetPath = path.equals("/") ? "/v1/files" : "/v1/files/" + trimLeadingSlash(path);
+            URI target = leader.resolve(targetPath);
+            return transport.get(target, com.aegisos.api.dto.file.ListFilesResponse.class);
+        });
+    }
+
     public List<NodeResponse> getNodes() {
         return executeWithRetry(() -> {
             URI leader = leaderResolver.getLeader();
             URI target = leader.resolve("/v1/nodes");
             NodeResponse[] nodes = transport.get(target, NodeResponse[].class);
             return Arrays.asList(nodes);
+        });
+    }
+
+    public LeaderResponse getLeader() {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/leader");
+            return transport.get(target, LeaderResponse.class);
+        });
+    }
+
+    public HealthResponse getHealth() {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/health");
+            return transport.get(target, HealthResponse.class);
         });
     }
 
@@ -63,6 +95,70 @@ public class AegisClient {
         });
     }
 
+    public String submitJob(JobRequest req) {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/jobs");
+            return transport.post(target, req, String.class);
+        });
+    }
+
+    public List<JobSummary> listJobs() {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/jobs");
+            JobSummary[] summaries = transport.get(target, JobSummary[].class);
+            return Arrays.asList(summaries);
+        });
+    }
+
+    public JobDetails getJobStatus(String jobId) {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/jobs/" + jobId);
+            return transport.get(target, JobDetails.class);
+        });
+    }
+
+    public void cancelJob(String jobId) {
+        executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/jobs/" + jobId);
+            transport.delete(target, Void.class);
+            return null;
+        });
+    }
+
+    public String getJobLogs(String jobId, String stream, Long executionId) {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            String path = "/v1/jobs/" + jobId + "/logs?stream=" + stream;
+            if (executionId != null) {
+                path += "&executionId=" + executionId;
+            }
+            URI target = leader.resolve(path);
+            byte[] data = transport.getBinary(target);
+            return new String(data, java.nio.charset.StandardCharsets.UTF_8);
+        });
+    }
+
+    public com.aegisos.api.dto.artifact.ArtifactUploadResponse uploadArtifact(String name, byte[] data) {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/artifacts?name=" + name);
+            return transport.postBinary(target, data, com.aegisos.api.dto.artifact.ArtifactUploadResponse.class);
+        });
+    }
+
+    public List<com.aegisos.api.dto.artifact.ArtifactSummary> listArtifacts() {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/artifacts");
+            com.aegisos.api.dto.artifact.ArtifactSummary[] summaries = transport.get(target, com.aegisos.api.dto.artifact.ArtifactSummary[].class);
+            return Arrays.asList(summaries);
+        });
+    }
+
     private <T> T executeWithRetry(ClientOperation<T> operation) {
         try {
             return operation.execute();
@@ -77,6 +173,7 @@ public class AegisClient {
                 throw new RuntimeException("Operation failed after retry", retryEx);
             }
         } catch (Exception e) {
+            e.printStackTrace();
             throw new RuntimeException("Operation failed", e);
         }
     }

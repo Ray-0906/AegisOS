@@ -12,6 +12,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.stream.Collectors;
+import com.aegisos.api.dto.file.ListFilesResponse;
 
 public class FileHandler {
 
@@ -92,6 +94,23 @@ public class FileHandler {
             }
         } catch (Exception e) {
             log.error("Failed to download file {}", path, e);
+            ResponseWriter.writeError(exchange, 500, e.getMessage());
+        }
+    }
+
+    public void listFiles(HttpExchange exchange, String path) throws IOException {
+        try {
+            // Wait briefly for file metadata to replicate if not yet visible
+            Thread.sleep(500); // allow raft catch-up, as in CLI
+
+            java.util.List<com.aegisos.proto.FileMetadata> protoFiles = node.fileSystem().list(path);
+            java.util.List<ListFilesResponse.FileInfo> files = protoFiles.stream()
+                    .map(f -> new ListFilesResponse.FileInfo(f.getName(), f.getSize(), f.getChunksCount()))
+                    .collect(Collectors.toList());
+
+            ResponseWriter.writeJson(exchange, 200, new ListFilesResponse(files));
+        } catch (Exception e) {
+            log.error("Failed to list files at {}", path, e);
             ResponseWriter.writeError(exchange, 500, e.getMessage());
         }
     }
