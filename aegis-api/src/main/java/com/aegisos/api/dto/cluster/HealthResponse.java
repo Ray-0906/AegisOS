@@ -1,7 +1,7 @@
 package com.aegisos.api.dto.cluster;
 
 public class HealthResponse {
-    public final String status;
+    public String status;
 
     public HealthResponse() {
         this.status = null;

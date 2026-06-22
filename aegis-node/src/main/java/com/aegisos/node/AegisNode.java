@@ -56,6 +56,7 @@ public final class AegisNode implements AutoCloseable {
     private ProcessRuntimeAgent runtimeAgent;
     private JobSupervisor jobSupervisor;
     private ProcessManager processManager;
+    private com.aegisos.api.runtime.RuntimeManager runtimeManager;
     private AegisOS aegisOS;
 
     private volatile boolean started;
@@ -166,6 +167,16 @@ public final class AegisNode implements AutoCloseable {
 
         processManager = new com.aegisos.runtime.DefaultProcessManager(network, scheduler, runtimeAgent, identity.nodeId(), fileSystem);
         aegisOS = new AegisOS(fileSystem, processManager, new ClusterInfo(discovery));
+
+        com.aegisos.api.runtime.ProcessTable processTable = new com.aegisos.runtime.table.InMemoryProcessTable();
+        com.aegisos.api.runtime.ProcessScheduler processScheduler = new com.aegisos.runtime.core.SimpleProcessScheduler();
+        com.aegisos.api.runtime.RuntimeEngine runtimeEngine = new com.aegisos.runtime.core.LocalRuntimeEngine();
+        runtimeManager = new com.aegisos.runtime.core.DefaultRuntimeManager(processTable, processScheduler, runtimeEngine, consensus);
+
+        com.aegisos.runtime.consensus.ProcessStateApplier applier = new com.aegisos.runtime.consensus.ProcessStateApplier(processTable);
+        consensus.stateMachine().register(com.aegisos.proto.CommandType.SUBMIT_PROCESS, (index, cmd) -> applier.applySubmit(cmd.getPayload().toByteArray()));
+        consensus.stateMachine().register(com.aegisos.proto.CommandType.UPDATE_PROCESS_STATE, (index, cmd) -> applier.applyUpdate(cmd.getPayload().toByteArray()));
+        consensus.stateMachine().register(com.aegisos.proto.CommandType.CANCEL_PROCESS, (index, cmd) -> applier.applyCancel(cmd.getPayload().toByteArray()));
 
         // 2. Configure Snapshots
         consensus.stateMachine().registerSnapshotParticipant(consensus.clusterConfiguration());
@@ -300,6 +311,10 @@ public final class AegisNode implements AutoCloseable {
 
     public ProcessManager processManager() {
         return processManager;
+    }
+
+    public com.aegisos.api.runtime.RuntimeManager runtimeManager() {
+        return runtimeManager;
     }
 
     public Scheduler scheduler() {

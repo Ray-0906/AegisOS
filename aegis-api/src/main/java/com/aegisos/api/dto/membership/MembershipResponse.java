@@ -1,8 +1,8 @@
 package com.aegisos.api.dto.membership;
 
 public class MembershipResponse {
-    public final String status;
-    public final String message;
+    public String status;
+    public String message;
 
     public MembershipResponse() {
         this.status = null;

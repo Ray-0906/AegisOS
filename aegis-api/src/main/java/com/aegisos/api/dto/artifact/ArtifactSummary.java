@@ -1,10 +1,10 @@
 package com.aegisos.api.dto.artifact;
 
 public class ArtifactSummary {
-    public final String artifactId;
-    public final String name;
-    public final long sizeBytes;
-    public final long uploadedAt;
+    public String artifactId;
+    public String name;
+    public long sizeBytes;
+    public long uploadedAt;
 
     public ArtifactSummary() {
         this.artifactId = null;

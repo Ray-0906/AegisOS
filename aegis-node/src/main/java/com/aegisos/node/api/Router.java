@@ -20,6 +20,7 @@ public class Router implements HttpHandler {
     private final FileHandler fileHandler;
     private final com.aegisos.node.api.handlers.JobHandler jobHandler;
     private final com.aegisos.node.api.handlers.ArtifactHandler artifactHandler;
+    private final com.aegisos.node.api.handlers.ProcessEndpoint processEndpoint;
 
     public Router(AegisNode node) {
         this.clusterHandler = new ClusterHandler(node);
@@ -27,6 +28,7 @@ public class Router implements HttpHandler {
         this.fileHandler = new FileHandler(node);
         this.jobHandler = new com.aegisos.node.api.handlers.JobHandler(node);
         this.artifactHandler = new com.aegisos.node.api.handlers.ArtifactHandler(node);
+        this.processEndpoint = new com.aegisos.node.api.handlers.ProcessEndpoint(node.runtimeManager());
     }
 
     @Override
@@ -41,10 +43,16 @@ public class Router implements HttpHandler {
                     path.equals("/v1/files") || path.startsWith("/v1/files/") ||
                     path.equals("/v1/artifacts") ||
                     path.equals("/v1/jobs") || path.startsWith("/v1/jobs/") ||
+                    path.equals("/v1/processes") || path.startsWith("/v1/processes/") ||
                     path.equals("/v1/admin/membership") || path.startsWith("/v1/admin/membership/");
 
             if (!isKnownPath) {
                 ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
+                return;
+            }
+
+            if (path.startsWith("/v1/processes")) {
+                processEndpoint.handle(exchange);
                 return;
             }
 

@@ -159,6 +159,43 @@ public class AegisClient {
         });
     }
 
+    public String submitProcess(String artifactId, int cpuCores, long memoryMb) {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/processes");
+            com.aegisos.api.runtime.ProcessResources resources = new com.aegisos.api.runtime.ProcessResources(cpuCores, memoryMb);
+            java.util.Map<String, Object> req = java.util.Map.of("artifactId", artifactId, "resources", resources);
+            java.util.Map response = transport.post(target, req, java.util.Map.class);
+            return (String) response.get("processId");
+        });
+    }
+
+    public com.aegisos.api.runtime.ProcessRecord getProcess(String processId) {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/processes/" + processId);
+            return transport.get(target, com.aegisos.api.runtime.ProcessRecord.class);
+        });
+    }
+
+    public List<com.aegisos.api.runtime.ProcessRecord> listProcesses() {
+        return executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/processes");
+            com.aegisos.api.runtime.ProcessRecord[] processes = transport.get(target, com.aegisos.api.runtime.ProcessRecord[].class);
+            return Arrays.asList(processes);
+        });
+    }
+
+    public void cancelProcess(String processId) {
+        executeWithRetry(() -> {
+            URI leader = leaderResolver.getLeader();
+            URI target = leader.resolve("/v1/processes/" + processId);
+            transport.delete(target, Void.class);
+            return null;
+        });
+    }
+
     private <T> T executeWithRetry(ClientOperation<T> operation) {
         try {
             return operation.execute();

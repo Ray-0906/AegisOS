@@ -8,21 +8,74 @@ import com.aegisos.api.runtime.ProcessScheduler;
 import com.aegisos.api.runtime.RuntimeEngine;
 import com.aegisos.api.runtime.RuntimeManager;
 import com.aegisos.runtime.table.InMemoryProcessTable;
+import com.aegisos.consensus.ConsensusModule;
+import com.aegisos.proto.StateCommand;
+import com.aegisos.runtime.consensus.ProcessStateApplier;
+import com.aegisos.core.identity.NodeId;
+import com.aegisos.core.identity.IdentityService;
+import com.aegisos.network.NetworkLayer;
+import com.aegisos.core.observability.MetricsRegistry;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Collections;
+import java.util.concurrent.CompletableFuture;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 public class DefaultRuntimeManagerTest {
 
     private RuntimeManager runtimeManager;
+    private ProcessTable processTable;
+    private ProcessStateApplier applier;
 
     @BeforeEach
-    public void setup() {
-        ProcessTable processTable = new InMemoryProcessTable();
+    public void setup() throws Exception {
+        processTable = new InMemoryProcessTable();
         ProcessScheduler processScheduler = new SimpleProcessScheduler();
         RuntimeEngine runtimeEngine = new LocalRuntimeEngine();
-        runtimeManager = new DefaultRuntimeManager(processTable, processScheduler, runtimeEngine);
+        applier = new ProcessStateApplier(processTable);
+
+        IdentityService identity = IdentityService.ephemeral();
+        NodeId localNode = identity.nodeId();
+        NetworkLayer network = new NetworkLayer(identity, 0, "127.0.0.1");
+
+        Path tempDir = Files.createTempDirectory("raft-test");
+        ConsensusModule consensus = new ConsensusModule(
+            network,
+            localNode, 
+            tempDir,
+            Collections::emptyList, 
+            Collections::emptyList, 
+            () -> true, 
+            true, 
+            10, 
+            (id) -> null,
+            new MetricsRegistry()
+        ) {
+            @Override
+            public CompletableFuture<Long> propose(StateCommand command) {
+                switch (command.getType()) {
+                    case SUBMIT_PROCESS:
+                        applier.applySubmit(command.getPayload().toByteArray());
+                        break;
+                    case UPDATE_PROCESS_STATE:
+                        applier.applyUpdate(command.getPayload().toByteArray());
+                        break;
+                    case CANCEL_PROCESS:
+                        applier.applyCancel(command.getPayload().toByteArray());
+                        break;
+                    default:
+                        break;
+                }
+                return CompletableFuture.completedFuture(1L);
+            }
+        };
+
+        runtimeManager = new DefaultRuntimeManager(processTable, processScheduler, runtimeEngine, consensus);
     }
 
     @Test

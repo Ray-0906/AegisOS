@@ -1,9 +1,9 @@
 package com.aegisos.api.dto.cluster;
 
 public class NodeResponse {
-    public final String nodeId;
-    public final String status;
-    public final int apiPort;
+    public String nodeId;
+    public String status;
+    public int apiPort;
 
     public NodeResponse() {
         this.nodeId = null;

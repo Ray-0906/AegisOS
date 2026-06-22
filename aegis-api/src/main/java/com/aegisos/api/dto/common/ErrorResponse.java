@@ -1,10 +1,10 @@
 package com.aegisos.api.dto.common;
 
 public class ErrorResponse {
-    public final String error;
-    public final int code;
-    public final String leaderId;
-    public final Integer apiPort;
+    public String error;
+    public int code;
+    public String leaderId;
+    public Integer apiPort;
 
     public ErrorResponse() {
         this.error = null;

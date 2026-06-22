@@ -8,21 +8,42 @@ import com.aegisos.api.runtime.ProcessState;
 import com.aegisos.api.runtime.ProcessTable;
 import com.aegisos.api.runtime.RuntimeEngine;
 import com.aegisos.api.runtime.RuntimeManager;
+import com.aegisos.consensus.ConsensusModule;
+import com.aegisos.proto.CommandType;
+import com.aegisos.proto.ProcessRecordProto;
+import com.aegisos.proto.StateCommand;
+import com.aegisos.runtime.util.ProcessMapper;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 public class DefaultRuntimeManager implements RuntimeManager {
 
     private final ProcessTable processTable;
     private final ProcessScheduler processScheduler;
     private final RuntimeEngine runtimeEngine;
+    private final ConsensusModule consensus;
 
-    public DefaultRuntimeManager(ProcessTable processTable, ProcessScheduler processScheduler, RuntimeEngine runtimeEngine) {
+    public DefaultRuntimeManager(ProcessTable processTable, ProcessScheduler processScheduler, RuntimeEngine runtimeEngine, ConsensusModule consensus) {
         this.processTable = processTable;
         this.processScheduler = processScheduler;
         this.runtimeEngine = runtimeEngine;
+        this.consensus = consensus;
+    }
+
+    private void propose(CommandType type, ProcessRecord record) {
+        try {
+            ProcessRecordProto proto = ProcessMapper.toProto(record);
+            StateCommand cmd = StateCommand.newBuilder()
+                    .setType(type)
+                    .setPayload(proto.toByteString())
+                    .build();
+            consensus.propose(cmd).get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to propose process state to Raft", e);
+        }
     }
 
     @Override
@@ -41,15 +62,37 @@ public class DefaultRuntimeManager implements RuntimeManager {
                 now
         );
 
-        processTable.register(record);
+        propose(CommandType.SUBMIT_PROCESS, record);
 
         PlacementDecision decision = processScheduler.evaluate(record);
 
-        processTable.updateState(processId, ProcessState.PLACED, System.currentTimeMillis(), decision.assignedNodeId(), 0);
+        ProcessRecord placedRecord = new ProcessRecord(
+                processId,
+                artifactId,
+                decision.assignedNodeId(),
+                0,
+                ProcessState.PLACED,
+                resources,
+                now,
+                System.currentTimeMillis()
+        );
+        
+        propose(CommandType.UPDATE_PROCESS_STATE, placedRecord);
 
-        runtimeEngine.start(record);
+        runtimeEngine.start(placedRecord);
 
-        processTable.updateState(processId, ProcessState.RUNNING, System.currentTimeMillis(), decision.assignedNodeId(), 0);
+        ProcessRecord runningRecord = new ProcessRecord(
+                processId,
+                artifactId,
+                decision.assignedNodeId(),
+                0,
+                ProcessState.RUNNING,
+                resources,
+                now,
+                System.currentTimeMillis()
+        );
+        
+        propose(CommandType.UPDATE_PROCESS_STATE, runningRecord);
 
         return processId;
     }
@@ -59,13 +102,20 @@ public class DefaultRuntimeManager implements RuntimeManager {
         Optional<ProcessRecord> optionalRecord = processTable.lookup(processId);
         if (optionalRecord.isPresent()) {
             runtimeEngine.stop(processId);
-            processTable.updateState(
+            
+            ProcessRecord existing = optionalRecord.get();
+            ProcessRecord cancelledRecord = new ProcessRecord(
                     processId,
+                    existing.artifactId(),
+                    existing.ownerNodeId(),
+                    existing.executionId(),
                     ProcessState.CANCELLED,
-                    System.currentTimeMillis(),
-                    optionalRecord.get().ownerNodeId(),
-                    optionalRecord.get().executionId()
+                    existing.resources(),
+                    existing.submitTimestamp(),
+                    System.currentTimeMillis()
             );
+
+            propose(CommandType.CANCEL_PROCESS, cancelledRecord);
         }
     }
 

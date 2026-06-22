@@ -1,9 +1,9 @@
 package com.aegisos.api.dto.artifact;
 
 public class ArtifactUploadResponse {
-    public final String artifactId;
-    public final String name;
-    public final long sizeBytes;
+    public String artifactId;
+    public String name;
+    public long sizeBytes;
 
     public ArtifactUploadResponse() {
         this.artifactId = null;

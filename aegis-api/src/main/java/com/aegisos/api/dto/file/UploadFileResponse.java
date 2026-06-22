@@ -1,10 +1,10 @@
 package com.aegisos.api.dto.file;
 
 public class UploadFileResponse {
-    public final String path;
-    public final String status;
-    public final long bytes;
-    public final int chunkCount;
+    public String path;
+    public String status;
+    public long bytes;
+    public int chunkCount;
 
     public UploadFileResponse() {
         this.path = null;

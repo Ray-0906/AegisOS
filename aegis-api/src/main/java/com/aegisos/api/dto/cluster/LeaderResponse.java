@@ -1,8 +1,8 @@
 package com.aegisos.api.dto.cluster;
 
 public class LeaderResponse {
-    public final String leaderId;
-    public final int apiPort;
+    public String leaderId;
+    public int apiPort;
 
     public LeaderResponse() {
         this.leaderId = null;

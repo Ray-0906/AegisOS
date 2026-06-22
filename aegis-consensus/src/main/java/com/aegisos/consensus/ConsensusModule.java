@@ -29,12 +29,11 @@ import java.util.function.Supplier;
  * Raft messages, and provides {@link #propose} with automatic leader forwarding so any
  * node can submit a command.
  */
-public final class ConsensusModule implements RaftTransport, AutoCloseable {
+public class ConsensusModule implements RaftTransport, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(ConsensusModule.class);
     private static final boolean DIAG = Boolean.getBoolean("aegis.diag");
     private static final long COMMIT_TIMEOUT_MS = 25_000;
-
     private final NetworkLayer network;
     private final RaftNode raftNode;
     private final ClusterStateMachine stateMachine;
