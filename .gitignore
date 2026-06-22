@@ -16,7 +16,6 @@ dist/
 .DS_Store
 
 # Agent
-.agents/
 .gemini/
 
 # Runtime Generated
