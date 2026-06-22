@@ -559,3 +559,43 @@ To ensure distributed system constraints are clearly understood without re-readi
 **FREEZE DATE:** 2026-06-21
 
 The `v0.4` milestone is now completely stabilized and frozen. Future agents can proceed to build new features or components atop this foundation.
+
+---
+
+## 15. The Shift to Platform Engineering (v1.3.x)
+
+**Date:** 2026-06-22
+
+With the foundational R&D phase completed and v0.4 frozen, the architecture transitioned towards strict Platform Engineering with a focus on discipline, rigid boundaries, and true REST decoupling.
+
+### 15.1 Era 1 Architecture (The Problem)
+In Era 1, the CLI acted as an active distributed system participant. When running a command like `aegis put` or `aegis run`, the CLI would:
+1. Boot a temporary, ephemeral `AegisNode` via `ClientCommands.withClient()`.
+2. Connect directly via P2P.
+3. Observe Raft elections and manually query the leader.
+4. Execute operations via the internal Java `aegis-api`.
+
+This created a severe architectural leak: CLI clients were tightly coupled to cluster internal states (Gossip, Raft, Election Terms) and violated standard separation of concerns.
+
+### 15.2 The Migration (Wave 1 to Wave 3)
+We introduced `INV-048` through `INV-060` enforcing strict separation:
+- **`aegis-client` created:** A stateless HTTP wrapper that tracks only leader routing and handles 503 retry logic without internal cluster awareness.
+- **REST layer built:** Implemented `ApiServer` operating strictly on port `20001` (separated from P2P `9001` and Metrics `19001`).
+- **Resource boundaries:** Defined rigid, immutable DTOs that do not leak internal structures (`INV-048`). All REST endpoints correspond exactly 1:1 with an existing CLI capability (`INV-054`). 
+- **Large files:** Avoided base64 JSON encapsulation. Binary uploads use raw `application/octet-stream` streams (`INV-056`).
+
+The migration happened in structured, frozen waves:
+- **Wave 1:** `nodes`, `health`, `leader`
+- **Wave 2:** File Operations (`put`, `get`, `ls`)
+- **Wave 3A:** Jobs (`run`, `status`, `list`, `cancel`)
+- **Wave 3C:** Artifacts (`upload`, `list`)
+
+### 15.3 v1.3.2R Retirement Phase
+After Wave 3C was verified, we formally executed an audited Retirement phase to purge Era 1 architecture (`INV-061`, `INV-063`).
+
+- All residual internal usages of `ClientCommands.withClient()` were classified, verified obsolete, and permanently deleted (`Promote.java`, `DirectPromote.java`).
+- `ClientCommands.java` itself was removed.
+- A full `mvn clean verify` ran cleanly (98 tests passing), proving zero legacy runtime or test dependencies remained.
+- Test infrastructure was cleansed of dependency on CLI implementation internals (`INV-062`).
+
+**Result:** The CLI module (`aegis-cli`) is now purely a presentation layer that acts solely as a client connecting to the robust REST API layer. Era 1 is officially over.
