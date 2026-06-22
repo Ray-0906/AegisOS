@@ -164,7 +164,7 @@ public final class AegisNode implements AutoCloseable {
                     network, identity.nodeId(), runtimeAgent, metricsRegistry);
         }
 
-        processManager = new ProcessManager(network, scheduler, runtimeAgent, identity.nodeId(), fileSystem);
+        processManager = new com.aegisos.runtime.DefaultProcessManager(network, scheduler, runtimeAgent, identity.nodeId(), fileSystem);
         aegisOS = new AegisOS(fileSystem, processManager, new ClusterInfo(discovery));
 
         // 2. Configure Snapshots

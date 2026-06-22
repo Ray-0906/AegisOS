@@ -41,5 +41,9 @@
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.aegisos</groupId>
+            <artifactId>aegis-api</artifactId>
+        </dependency>
     </dependencies>
 </project>
