@@ -64,36 +64,6 @@ public class DefaultRuntimeManager implements RuntimeManager {
 
         propose(CommandType.SUBMIT_PROCESS, record);
 
-        PlacementDecision decision = processScheduler.evaluate(record);
-
-        ProcessRecord placedRecord = new ProcessRecord(
-                processId,
-                artifactId,
-                decision.assignedNodeId(),
-                0,
-                ProcessState.PLACED,
-                resources,
-                now,
-                System.currentTimeMillis()
-        );
-        
-        propose(CommandType.UPDATE_PROCESS_STATE, placedRecord);
-
-        runtimeEngine.start(placedRecord);
-
-        ProcessRecord runningRecord = new ProcessRecord(
-                processId,
-                artifactId,
-                decision.assignedNodeId(),
-                0,
-                ProcessState.RUNNING,
-                resources,
-                now,
-                System.currentTimeMillis()
-        );
-        
-        propose(CommandType.UPDATE_PROCESS_STATE, runningRecord);
-
         return processId;
     }
 
@@ -101,8 +71,6 @@ public class DefaultRuntimeManager implements RuntimeManager {
     public void cancelProcess(String processId) {
         Optional<ProcessRecord> optionalRecord = processTable.lookup(processId);
         if (optionalRecord.isPresent()) {
-            runtimeEngine.stop(processId);
-            
             ProcessRecord existing = optionalRecord.get();
             ProcessRecord cancelledRecord = new ProcessRecord(
                     processId,

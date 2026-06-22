@@ -9,4 +9,5 @@ public interface ProcessTable {
     Optional<ProcessRecord> lookup(String processId);
     List<ProcessRecord> list();
     void remove(String processId);
+    void addListener(ProcessStateListener listener);
 }
