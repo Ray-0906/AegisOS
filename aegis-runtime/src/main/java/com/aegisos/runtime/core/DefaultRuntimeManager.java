@@ -13,6 +13,7 @@ import com.aegisos.proto.CommandType;
 import com.aegisos.proto.ProcessRecordProto;
 import com.aegisos.proto.StateCommand;
 import com.aegisos.runtime.util.ProcessMapper;
+import com.aegisos.core.identity.IdentityService;
 
 import java.util.List;
 import java.util.Optional;
@@ -25,12 +26,14 @@ public class DefaultRuntimeManager implements RuntimeManager {
     private final ProcessScheduler processScheduler;
     private final RuntimeEngine runtimeEngine;
     private final ConsensusModule consensus;
+    private final IdentityService identity;
 
-    public DefaultRuntimeManager(ProcessTable processTable, ProcessScheduler processScheduler, RuntimeEngine runtimeEngine, ConsensusModule consensus) {
+    public DefaultRuntimeManager(ProcessTable processTable, ProcessScheduler processScheduler, RuntimeEngine runtimeEngine, ConsensusModule consensus, IdentityService identity) {
         this.processTable = processTable;
         this.processScheduler = processScheduler;
         this.runtimeEngine = runtimeEngine;
         this.consensus = consensus;
+        this.identity = identity;
     }
 
     private void propose(CommandType type, ProcessRecord record) {
@@ -55,6 +58,7 @@ public class DefaultRuntimeManager implements RuntimeManager {
                 processId,
                 artifactId,
                 null,
+                identity.nodeId().toHex(),
                 0,
                 ProcessState.SUBMITTED,
                 resources,
@@ -76,6 +80,7 @@ public class DefaultRuntimeManager implements RuntimeManager {
                     processId,
                     existing.artifactId(),
                     existing.ownerNodeId(),
+                    existing.submitterNodeId(),
                     existing.executionId(),
                     ProcessState.CANCELLED,
                     existing.resources(),

@@ -22,6 +22,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.io.File;
+import java.io.InputStream;
+import com.aegisos.network.NetworkLayer;
+import com.aegisos.network.VirtualOutputStream;
+import com.aegisos.core.identity.NodeId;
 
 public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
     private static final Logger log = LoggerFactory.getLogger(LocalRuntimeEngine.class);
@@ -30,16 +34,19 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
     private final IdentityService identityService;
     private final ArtifactRegistry artifactRegistry;
     private final ArtifactCache artifactCache;
+    private final NetworkLayer networkLayer;
     private final ExecutorService processExecutor = Executors.newCachedThreadPool();
     private final ConcurrentHashMap<String, Process> activeProcesses = new ConcurrentHashMap<>();
     private final java.util.Set<String> cancelledProcesses = ConcurrentHashMap.newKeySet();
 
     public LocalRuntimeEngine(ConsensusModule consensus, IdentityService identityService, 
-                              ArtifactRegistry artifactRegistry, ArtifactCache artifactCache) {
+                              ArtifactRegistry artifactRegistry, ArtifactCache artifactCache,
+                              NetworkLayer networkLayer) {
         this.consensus = consensus;
         this.identityService = identityService;
         this.artifactRegistry = artifactRegistry;
         this.artifactCache = artifactCache;
+        this.networkLayer = networkLayer;
     }
 
     @Override
@@ -84,10 +91,24 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
             File logFile = logDir.resolve(record.processId() + ".log").toFile();
 
             ProcessBuilder pb = new ProcessBuilder("java", "-jar", localPath.toString());
-            pb.redirectOutput(logFile);
-            pb.redirectError(logFile);
+            pb.redirectErrorStream(true);
             Process process = pb.start();
             activeProcesses.put(record.processId(), process);
+
+            InputStream processStdout = process.getInputStream();
+            processExecutor.submit(() -> {
+                NodeId submitterId = NodeId.fromHex(record.submitterNodeId());
+                try (VirtualOutputStream vos = new VirtualOutputStream(networkLayer, submitterId, record.processId())) {
+                    byte[] buf = new byte[8192];
+                    int read;
+                    while (!Thread.currentThread().isInterrupted() && (read = processStdout.read(buf)) != -1) {
+                        vos.write(buf, 0, read);
+                        vos.flush();
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to pump process stream for {}", record.processId(), e);
+                }
+            });
 
             process.onExit().thenAccept(p -> {
                 activeProcesses.remove(record.processId());
@@ -100,6 +121,7 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                         record.processId(),
                         record.artifactId(),
                         record.ownerNodeId(),
+                        record.submitterNodeId(),
                         record.executionId(),
                         exitState,
                         record.resources(),
@@ -127,6 +149,7 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                     record.processId(),
                     record.artifactId(),
                     record.ownerNodeId(),
+                    record.submitterNodeId(),
                     record.executionId(),
                     ProcessState.RUNNING,
                     record.resources(),

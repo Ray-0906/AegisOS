@@ -81,7 +81,8 @@ public class DefaultRuntimeManagerTest {
             identity.publicKey(),
             "127.0.0.1:0",
             com.aegisos.proto.NodeRole.CLUSTER_MEMBER,
-            1000
+            1000,
+            new com.aegisos.core.telemetry.ResourceMonitor()
         );
 
         com.aegisos.discovery.DiscoveryService discovery = org.mockito.Mockito.mock(com.aegisos.discovery.DiscoveryService.class);
@@ -110,12 +111,12 @@ public class DefaultRuntimeManagerTest {
         Files.writeString(localMeta, size + "\n" + mtime + "\n");
 
         ProcessScheduler processScheduler = new SimpleProcessScheduler(consensus, identity, membership);
-        RuntimeEngine runtimeEngine = new LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache);
+        RuntimeEngine runtimeEngine = new LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network);
         
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) processScheduler);
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) runtimeEngine);
 
-        runtimeManager = new DefaultRuntimeManager(processTable, processScheduler, runtimeEngine, consensus);
+        runtimeManager = new DefaultRuntimeManager(processTable, processScheduler, runtimeEngine, consensus, identity);
     }
 
     @Test

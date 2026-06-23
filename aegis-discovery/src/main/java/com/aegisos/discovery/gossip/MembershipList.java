@@ -47,9 +47,11 @@ public final class MembershipList {
     private final long suspectTimeoutMs;
     private final long deadTimeoutMs;
     private final long evictTimeoutMs;
+    private final com.aegisos.core.telemetry.ResourceMonitor resourceMonitor;
 
     public MembershipList(NodeId selfId, byte[] selfPublicKey, String selfAddress,
-                          com.aegisos.proto.NodeRole selfRole, long gossipIntervalMs) {
+                          com.aegisos.proto.NodeRole selfRole, long gossipIntervalMs,
+                          com.aegisos.core.telemetry.ResourceMonitor resourceMonitor) {
         this.selfId = selfId;
         this.selfPublicKey = selfPublicKey.clone();
         this.selfAddress = selfAddress;
@@ -57,6 +59,7 @@ public final class MembershipList {
         this.suspectTimeoutMs = 3 * gossipIntervalMs;
         this.deadTimeoutMs = 10 * gossipIntervalMs;
         this.evictTimeoutMs = 30 * gossipIntervalMs;
+        this.resourceMonitor = resourceMonitor;
         peers.put(selfId, selfEntry());
     }
 
@@ -69,6 +72,7 @@ public final class MembershipList {
                 .setStatus(PeerStatus.ALIVE)
                 .setVersion(selfVersion.get())
                 .setRole(selfRole)
+                .setResources(resourceMonitor != null ? resourceMonitor.gather(selfId.toBytes()) : com.aegisos.proto.NodeResources.getDefaultInstance())
                 .build();
     }
 
@@ -82,6 +86,7 @@ public final class MembershipList {
                 .setStatus(PeerStatus.ALIVE)
                 .setVersion(selfVersion.incrementAndGet())
                 .setRole(selfRole)
+                .setResources(resourceMonitor != null ? resourceMonitor.gather(selfId.toBytes()) : com.aegisos.proto.NodeResources.getDefaultInstance())
                 .build());
     }
 

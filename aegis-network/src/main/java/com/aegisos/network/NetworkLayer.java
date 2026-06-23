@@ -61,6 +61,8 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     private final Map<Long, PendingRequest> pending = new ConcurrentHashMap<>();
     private final AtomicLong correlationCounter = new AtomicLong(1);
+    
+    private final Map<String, VirtualInputStream> activeStreams = new ConcurrentHashMap<>();
 
     public interface MessageFilter {
         boolean test(NodeId from, NodeId to, MessageType type, byte[] payload);
@@ -118,6 +120,16 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         this.advertiseHost = advertisedHost;
         this.advertisedAddress = advertisedHost + ":" + port;
         this.handshakeHandler = new HandshakeHandler(identity, () -> advertisedAddress);
+        
+        registerHandler(MessageType.IPC_DATA, message -> {
+            handleIpcData(message.sender(), message.payload());
+            return null;
+        });
+        
+        registerHandler(MessageType.IPC_EOF, message -> {
+            handleIpcEof(message.sender(), message.payload());
+            return null;
+        });
     }
 
     public void setAddressResolver(Function<NodeId, Optional<Endpoint>> resolver) {
@@ -256,6 +268,47 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         }
         return future.orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                 .whenComplete((r, t) -> pending.remove(correlation));
+    }
+
+    public VirtualInputStream registerIpcStream(String processId) {
+        VirtualInputStream stream = new VirtualInputStream();
+        activeStreams.put(processId, stream);
+        return stream;
+    }
+
+    public void unregisterIpcStream(String processId) {
+        VirtualInputStream stream = activeStreams.remove(processId);
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (IOException e) {
+                // ignore
+            }
+        }
+    }
+
+    private void handleIpcData(NodeId from, byte[] payload) {
+        try {
+            com.aegisos.proto.IpcChunkProto chunk = com.aegisos.proto.IpcChunkProto.parseFrom(payload);
+            VirtualInputStream stream = activeStreams.get(chunk.getProcessId());
+            if (stream != null) {
+                stream.enqueueChunk(chunk.getData().toByteArray());
+            }
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            log.error("Failed to parse IPC chunk from {}", from.shortId(), e);
+        }
+    }
+
+    private void handleIpcEof(NodeId from, byte[] payload) {
+        try {
+            com.aegisos.proto.IpcChunkProto chunk = com.aegisos.proto.IpcChunkProto.parseFrom(payload);
+            VirtualInputStream stream = activeStreams.get(chunk.getProcessId());
+            if (stream != null) {
+                stream.enqueueChunk(new byte[0]);
+            }
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            log.error("Failed to parse IPC EOF from {}", from.shortId(), e);
+        }
     }
 
     @Override

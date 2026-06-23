@@ -72,6 +72,7 @@ message PeerEntry {
   PeerStatus status      = 5;
   int64      version     = 6;
   NodeRole   role        = 7;
+  NodeResources resources = 8;
 }
 
 message MembershipList {
@@ -476,4 +477,13 @@ message ProcessRecordProto {
   ProcessResourcesProto resources = 6;
   int64 submitTimestamp = 7;
   int64 stateTimestamp = 8;
+  bytes submitter_node_id = 9;
+}
+
+// ---------------------------------------------------------------------------
+// IPC Networking (Path B)
+// ---------------------------------------------------------------------------
+message IpcChunkProto {
+  string process_id = 1;
+  bytes data        = 2;
 }

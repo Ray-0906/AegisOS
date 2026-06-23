@@ -19,7 +19,7 @@ class MembershipListTest {
     @Test
     void observeAddsAlivePeer() {
         NodeId self = randomId(1);
-        MembershipList list = new MembershipList(self, new byte[32], "127.0.0.1:9000", com.aegisos.proto.NodeRole.CLUSTER_MEMBER, 1000);
+        MembershipList list = new MembershipList(self, new byte[32], "127.0.0.1:9000", com.aegisos.proto.NodeRole.CLUSTER_MEMBER, 1000, new com.aegisos.core.telemetry.ResourceMonitor());
         NodeId peer = randomId(2);
         list.observe(peer, new byte[32], new Endpoint("127.0.0.1", 9001));
 
@@ -31,12 +31,12 @@ class MembershipListTest {
     @Test
     void mergeTakesHigherVersion() {
         NodeId self = randomId(1);
-        MembershipList a = new MembershipList(self, new byte[32], "127.0.0.1:9000", com.aegisos.proto.NodeRole.CLUSTER_MEMBER, 1000);
+        MembershipList a = new MembershipList(self, new byte[32], "127.0.0.1:9000", com.aegisos.proto.NodeRole.CLUSTER_MEMBER, 1000, new com.aegisos.core.telemetry.ResourceMonitor());
         NodeId peer = randomId(2);
         a.observe(peer, new byte[32], new Endpoint("127.0.0.1", 9001));
 
         // A second membership list with a fresher view of the same peer.
-        MembershipList b = new MembershipList(randomId(3), new byte[32], "127.0.0.1:9002", com.aegisos.proto.NodeRole.CLUSTER_MEMBER, 1000);
+        MembershipList b = new MembershipList(randomId(3), new byte[32], "127.0.0.1:9002", com.aegisos.proto.NodeRole.CLUSTER_MEMBER, 1000, new com.aegisos.core.telemetry.ResourceMonitor());
         b.observe(peer, new byte[32], new Endpoint("127.0.0.1", 9099));
         b.observe(peer, new byte[32], new Endpoint("127.0.0.1", 9099)); // bump version
 
@@ -47,7 +47,7 @@ class MembershipListTest {
     @Test
     void selfIsAlwaysAlive() {
         NodeId self = randomId(1);
-        MembershipList list = new MembershipList(self, new byte[32], "127.0.0.1:9000", com.aegisos.proto.NodeRole.CLUSTER_MEMBER, 1000);
+        MembershipList list = new MembershipList(self, new byte[32], "127.0.0.1:9000", com.aegisos.proto.NodeRole.CLUSTER_MEMBER, 1000, new com.aegisos.core.telemetry.ResourceMonitor());
         list.sweep();
         assertEquals(1, list.aliveCount());
     }

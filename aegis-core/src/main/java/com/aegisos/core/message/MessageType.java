@@ -45,7 +45,10 @@ public enum MessageType {
     CANCEL_JOB(47),
 
     PRE_VOTE(50),
-    PRE_VOTE_RESULT(51);
+    PRE_VOTE_RESULT(51),
+
+    IPC_DATA(60),
+    IPC_EOF(61);
 
     private final int code;
 

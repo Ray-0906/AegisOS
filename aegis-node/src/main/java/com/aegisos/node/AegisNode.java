@@ -57,6 +57,7 @@ public final class AegisNode implements AutoCloseable {
     private JobSupervisor jobSupervisor;
     private ProcessManager processManager;
     private com.aegisos.api.runtime.RuntimeManager runtimeManager;
+    private com.aegisos.runtime.core.TopologyReconciler topologyReconciler;
     private AegisOS aegisOS;
 
     private volatile boolean started;
@@ -82,7 +83,8 @@ public final class AegisNode implements AutoCloseable {
         network.start();
 
         String selfAddress = config.advertiseHost() + ":" + network.boundPort();
-        discovery = new DiscoveryService(network, identity, selfAddress, config.role());
+        com.aegisos.core.telemetry.ResourceMonitor resourceMonitor = new com.aegisos.core.telemetry.ResourceMonitor();
+        discovery = new DiscoveryService(network, identity, selfAddress, config.role(), resourceMonitor);
         discovery.start(config.seeds());
 
         java.util.function.Supplier<java.util.List<com.aegisos.core.identity.NodeId>> allPeers = () ->
@@ -170,12 +172,13 @@ public final class AegisNode implements AutoCloseable {
 
         com.aegisos.api.runtime.ProcessTable processTable = new com.aegisos.runtime.table.InMemoryProcessTable();
         com.aegisos.api.runtime.ProcessScheduler processScheduler = new com.aegisos.runtime.core.SimpleProcessScheduler(consensus, identity, discovery.membership());
-        com.aegisos.api.runtime.RuntimeEngine runtimeEngine = new com.aegisos.runtime.core.LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache);
+        com.aegisos.api.runtime.RuntimeEngine runtimeEngine = new com.aegisos.runtime.core.LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network);
         
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) processScheduler);
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) runtimeEngine);
 
-        runtimeManager = new com.aegisos.runtime.core.DefaultRuntimeManager(processTable, processScheduler, runtimeEngine, consensus);
+        runtimeManager = new com.aegisos.runtime.core.DefaultRuntimeManager(processTable, processScheduler, runtimeEngine, consensus, identity);
+        topologyReconciler = new com.aegisos.runtime.core.TopologyReconciler(processTable, consensus, discovery);
 
         com.aegisos.runtime.consensus.ProcessStateApplier applier = new com.aegisos.runtime.consensus.ProcessStateApplier(processTable);
         consensus.stateMachine().register(com.aegisos.proto.CommandType.SUBMIT_PROCESS, (index, cmd) -> applier.applySubmit(cmd.getPayload().toByteArray()));
@@ -223,6 +226,7 @@ public final class AegisNode implements AutoCloseable {
             network.registerHandler(MessageType.RUN_JOB, runtimeAgent::onRunJob);
             scheduler.start();
             resourceReporter.start();
+            topologyReconciler.start();
             if (jobSupervisor != null) {
                 jobSupervisor.start();
             }

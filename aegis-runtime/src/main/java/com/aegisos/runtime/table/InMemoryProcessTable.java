@@ -50,6 +50,7 @@ public class InMemoryProcessTable implements ProcessTable {
                 existing.processId(),
                 existing.artifactId(),
                 ownerNodeId,
+                existing.submitterNodeId(),
                 executionId,
                 state,
                 existing.resources(),

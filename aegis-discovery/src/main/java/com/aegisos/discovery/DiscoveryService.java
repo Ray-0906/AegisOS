@@ -43,11 +43,11 @@ public final class DiscoveryService implements AutoCloseable {
                 return t;
             }));
 
-    public DiscoveryService(NetworkLayer network, IdentityService identity, String selfAddress, com.aegisos.proto.NodeRole role) {
+    public DiscoveryService(NetworkLayer network, IdentityService identity, String selfAddress, com.aegisos.proto.NodeRole role, com.aegisos.core.telemetry.ResourceMonitor resourceMonitor) {
         this.network = network;
         this.identity = identity;
         this.membership = new MembershipList(identity.nodeId(), identity.publicKey(),
-                selfAddress, role, DEFAULT_INTERVAL_MS);
+                selfAddress, role, DEFAULT_INTERVAL_MS, resourceMonitor);
         this.gossip = new GossipProtocol(network, membership, DEFAULT_FANOUT, DEFAULT_INTERVAL_MS);
         this.routingTable = new RoutingTable(identity.nodeId());
         this.router = new KademliaRouter(network, routingTable,

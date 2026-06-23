@@ -79,6 +79,7 @@ public final class ProcessMapper {
                 .setResources(toProto(record.resources()))
                 .setSubmitTimestamp(record.submitTimestamp())
                 .setStateTimestamp(record.stateTimestamp())
+                .setSubmitterNodeId(record.submitterNodeId() == null ? com.google.protobuf.ByteString.EMPTY : com.google.protobuf.ByteString.copyFrom(com.aegisos.core.identity.NodeId.fromHex(record.submitterNodeId()).toBytes()))
                 .build();
     }
 
@@ -90,6 +91,7 @@ public final class ProcessMapper {
                 proto.getProcessId().isEmpty() ? null : proto.getProcessId(),
                 proto.getArtifactId().isEmpty() ? null : proto.getArtifactId(),
                 proto.getOwnerNodeId().isEmpty() ? null : proto.getOwnerNodeId(),
+                proto.getSubmitterNodeId().isEmpty() ? null : com.aegisos.core.identity.NodeId.of(proto.getSubmitterNodeId().toByteArray()).toHex(),
                 proto.getExecutionId(),
                 fromProto(proto.getState()),
                 fromProto(proto.getResources()),
