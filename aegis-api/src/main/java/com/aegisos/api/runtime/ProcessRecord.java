@@ -9,5 +9,7 @@ public record ProcessRecord(
         ProcessState state,
         ProcessResources resources,
         long submitTimestamp,
-        long stateTimestamp) {
+        long stateTimestamp,
+        String executionCommand,
+        String pipeToProcessId) {
 }

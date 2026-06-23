@@ -159,12 +159,20 @@ public class AegisClient {
         });
     }
 
-    public String submitProcess(String artifactId, int cpuCores, long memoryMb) {
+    public String submitProcess(String artifactId, int cpuCores, long memoryMb, String executionCommand, String pipeToProcessId) {
         return executeWithRetry(() -> {
             URI leader = leaderResolver.getLeader();
             URI target = leader.resolve("/v1/processes");
             com.aegisos.api.runtime.ProcessResources resources = new com.aegisos.api.runtime.ProcessResources(cpuCores, memoryMb);
-            java.util.Map<String, Object> req = java.util.Map.of("artifactId", artifactId, "resources", resources);
+            java.util.Map<String, Object> req = new java.util.HashMap<>();
+            req.put("artifactId", artifactId);
+            req.put("resources", resources);
+            if (executionCommand != null) {
+                req.put("executionCommand", executionCommand);
+            }
+            if (pipeToProcessId != null) {
+                req.put("pipeToProcessId", pipeToProcessId);
+            }
             java.util.Map response = transport.post(target, req, java.util.Map.class);
             return (String) response.get("processId");
         });

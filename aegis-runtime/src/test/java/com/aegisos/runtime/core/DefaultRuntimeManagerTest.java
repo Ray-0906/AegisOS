@@ -122,7 +122,7 @@ public class DefaultRuntimeManagerTest {
     @Test
     public void testSubmitProcessLifecycle() {
         ProcessResources resources = new ProcessResources(2, 1024L);
-        String processId = runtimeManager.submitProcess("test-artifact-id", resources);
+        String processId = runtimeManager.submitProcess("test-artifact-id", resources, "", null);
 
         ProcessRecord record = null;
         for (int i = 0; i < 50; i++) {
@@ -141,7 +141,7 @@ public class DefaultRuntimeManagerTest {
     @Test
     public void testCancelProcess() {
         ProcessResources resources = new ProcessResources(1, 512L);
-        String processId = runtimeManager.submitProcess("test-artifact-id", resources);
+        String processId = runtimeManager.submitProcess("test-artifact-id", resources, "", null);
 
         runtimeManager.cancelProcess(processId);
 

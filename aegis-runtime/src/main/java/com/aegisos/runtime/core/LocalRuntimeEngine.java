@@ -21,6 +21,7 @@ import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CompletableFuture;
 import java.io.File;
 import java.io.InputStream;
 import com.aegisos.network.NetworkLayer;
@@ -118,7 +119,14 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                 Files.write(checkpointFile, checkpoint);
             }
 
-            ProcessBuilder pb = new ProcessBuilder("java", "-jar", localPath.toString());
+            ProcessBuilder pb;
+            if (record.executionCommand() == null || record.executionCommand().trim().isEmpty()) {
+                pb = new ProcessBuilder("java", "-jar", localPath.toString());
+            } else {
+                String cmdStr = record.executionCommand().replace("{artifact}", localPath.toString());
+                pb = new ProcessBuilder(cmdStr.split(" "));
+            }
+            
             if (checkpoint != null) {
                 pb.environment().put("AEGIS_CHECKPOINT_DIR", logDir.toString());
             }
@@ -127,19 +135,26 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
             activeProcesses.put(record.processId(), process);
 
             InputStream processStdout = process.getInputStream();
-            processExecutor.submit(() -> {
-                NodeId submitterId = NodeId.fromHex(record.submitterNodeId());
-                try (VirtualOutputStream vos = new VirtualOutputStream(networkLayer, submitterId, record.processId())) {
+            CompletableFuture.runAsync(() -> {
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile, true)) {
                     byte[] buf = new byte[8192];
                     int read;
-                    while (!Thread.currentThread().isInterrupted() && (read = processStdout.read(buf)) != -1) {
-                        vos.write(buf, 0, read);
-                        vos.flush();
+                    while ((read = processStdout.read(buf)) != -1) {
+                        fos.write(buf, 0, read);
+                        fos.flush();
+
+                        if (record.pipeToProcessId() != null && !record.pipeToProcessId().isEmpty()) {
+                            java.util.Optional<ProcessRecord> targetOpt = processTable.lookup(record.pipeToProcessId());
+                            if (targetOpt.isPresent() && targetOpt.get().ownerNodeId() != null) {
+                                byte[] data = java.util.Arrays.copyOf(buf, read);
+                                networkLayer.sendIpcData(targetOpt.get().ownerNodeId(), record.pipeToProcessId(), data);
+                            }
+                        }
                     }
                 } catch (Exception e) {
                     log.error("Failed to pump process stream for {}", record.processId(), e);
                 }
-            });
+            }, processExecutor);
 
             process.onExit().thenAccept(p -> {
                 activeProcesses.remove(record.processId());
@@ -157,7 +172,9 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                         exitState,
                         record.resources(),
                         record.submitTimestamp(),
-                        System.currentTimeMillis()
+                        System.currentTimeMillis(),
+                        record.executionCommand(),
+                        record.pipeToProcessId()
                 );
 
                 try {
@@ -185,7 +202,9 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                     ProcessState.RUNNING,
                     record.resources(),
                     record.submitTimestamp(),
-                    System.currentTimeMillis()
+                    System.currentTimeMillis(),
+                    record.executionCommand(),
+                    record.pipeToProcessId()
             );
 
             ProcessRecordProto proto = ProcessMapper.toProto(runningRecord);
@@ -199,7 +218,19 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                 return null;
             });
         } catch (Exception e) {
-            log.error("Failed to execute process {}", record.processId(), e);
+            log.error("Failed to start process {}", record.processId(), e);
+        }
+    }
+
+    public void receiveIpcData(String processId, byte[] data) {
+        Process process = activeProcesses.get(processId);
+        if (process != null && process.isAlive()) {
+            try {
+                process.getOutputStream().write(data);
+                process.getOutputStream().flush();
+            } catch (java.io.IOException e) {
+                log.error("Failed to write IPC data to process {}", processId, e);
+            }
         }
     }
 }

@@ -56,7 +56,9 @@ public class InMemoryProcessTable implements ProcessTable {
                 state,
                 existing.resources(),
                 existing.submitTimestamp(),
-                stateTimestamp
+                stateTimestamp,
+                existing.executionCommand(),
+                existing.pipeToProcessId()
         ));
         if (updated != null) {
             notifyListeners(updated);

@@ -479,6 +479,8 @@ message ProcessRecordProto {
   int64 submitTimestamp = 7;
   int64 stateTimestamp = 8;
   bytes submitter_node_id = 9;
+  string execution_command = 10;
+  string pipe_to_process_id = 11;
 }
 
 // ---------------------------------------------------------------------------

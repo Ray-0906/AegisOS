@@ -242,6 +242,19 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         }
     }
 
+    public void sendIpcData(String targetNodeId, String targetProcessId, byte[] data) {
+        try {
+            NodeId target = NodeId.fromHex(targetNodeId);
+            com.aegisos.proto.IpcChunkProto proto = com.aegisos.proto.IpcChunkProto.newBuilder()
+                    .setProcessId(targetProcessId)
+                    .setData(com.google.protobuf.ByteString.copyFrom(data))
+                    .build();
+            sendAsync(target, MessageType.IPC_DATA, proto.toByteArray());
+        } catch (Exception e) {
+            log.error("Failed to send IPC data to {}/{}", targetNodeId, targetProcessId, e);
+        }
+    }
+
     /** Request/response RPC with default timeout. */
     public CompletableFuture<AegisMessage> request(NodeId nodeId, MessageType type, byte[] payload) {
         return request(nodeId, type, payload, DEFAULT_RPC_TIMEOUT_MS);

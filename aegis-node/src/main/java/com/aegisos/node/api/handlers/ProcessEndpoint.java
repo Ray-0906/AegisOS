@@ -54,8 +54,10 @@ public class ProcessEndpoint {
                     resourcesNode.get("cpuCores").asInt(),
                     resourcesNode.get("memoryMb").asLong()
             );
+            String executionCommand = payload.has("executionCommand") ? payload.get("executionCommand").asText() : "";
+            String pipeToProcessId = payload.has("pipeToProcessId") ? payload.get("pipeToProcessId").asText() : null;
 
-            String processId = runtimeManager.submitProcess(artifactId, resources);
+            String processId = runtimeManager.submitProcess(artifactId, resources, executionCommand, pipeToProcessId);
             ResponseWriter.writeJson(exchange, 201, Map.of("processId", processId));
         }
     }

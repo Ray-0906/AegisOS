@@ -42,11 +42,17 @@ public final class ProcessCommand implements Callable<Integer> {
         @CommandLine.Option(names = "--memory", defaultValue = "512", description = "Memory MB")
         long memory;
 
+        @CommandLine.Option(names = {"--command"}, description = "Custom execution command (use {artifact} as the file path placeholder)")
+        private String executionCommand;
+
+        @CommandLine.Option(names = {"--pipe-to"}, description = "Process ID to pipe output to")
+        private String pipeToProcessId;
+
         @Override
         public Integer call() {
             try {
                 AegisClient client = createClient(seeds);
-                String processId = client.submitProcess(artifact, cpu, memory);
+                String processId = client.submitProcess(artifact, cpu, memory, executionCommand, pipeToProcessId);
                 System.out.println(processId);
                 return 0;
             } catch (Exception e) {

@@ -50,7 +50,7 @@ public class DefaultRuntimeManager implements RuntimeManager {
     }
 
     @Override
-    public String submitProcess(String artifactId, ProcessResources resources) {
+    public String submitProcess(String artifactId, ProcessResources resources, String executionCommand, String pipeToProcessId) {
         String processId = UUID.randomUUID().toString();
         long now = System.currentTimeMillis();
 
@@ -63,7 +63,9 @@ public class DefaultRuntimeManager implements RuntimeManager {
                 ProcessState.SUBMITTED,
                 resources,
                 now,
-                now
+                now,
+                executionCommand,
+                pipeToProcessId
         );
 
         propose(CommandType.SUBMIT_PROCESS, record);
@@ -85,7 +87,9 @@ public class DefaultRuntimeManager implements RuntimeManager {
                     ProcessState.CANCELLED,
                     existing.resources(),
                     existing.submitTimestamp(),
-                    System.currentTimeMillis()
+                    System.currentTimeMillis(),
+                    existing.executionCommand(),
+                    existing.pipeToProcessId()
             );
 
             propose(CommandType.CANCEL_PROCESS, cancelledRecord);
