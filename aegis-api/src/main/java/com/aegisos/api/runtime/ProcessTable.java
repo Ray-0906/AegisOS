@@ -10,4 +10,6 @@ public interface ProcessTable {
     List<ProcessRecord> list();
     void remove(String processId);
     void addListener(ProcessStateListener listener);
+    void saveCheckpoint(String processId, byte[] stateData);
+    byte[] getLatestCheckpoint(String processId);
 }

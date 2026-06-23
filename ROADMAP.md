@@ -4,27 +4,54 @@ The v1.x architecture established the foundational distributed execution fabric,
 
 The v2.x roadmap is defined by a strict engineering hierarchy: Operability and Durability must precede Scale and Features. We will not expand the payload capabilities of the system until we have complete visibility into its operation and guaranteed state recovery for long-running computations.
 
-## Phase 1: Operability (v2.1)
+## [COMPLETED] Phase 1: Operability (v2.1)
 **The Visual Control Plane**
 A headless orchestrator is a black box. We will build a comprehensive, real-time observability frontend to expose the internal state machine.
-* **Next.js Dashboard:** A real-time web interface consuming AegisOS REST endpoints.
-* **Dynamic Topology Mapping:** Visual representation of node health, Gossip telemetry, and Raft consensus stability.
-* **Gamified Progression UI:** Implementing dark-mode, high-contrast visual logic to map the lifecycles of distributed workloads into a rank-based progression system, turning cluster management into an engaging, reactive experience.
+* [x] **Next.js Dashboard:** A real-time web interface consuming AegisOS REST endpoints.
+* [x] **Dynamic Topology Mapping:** Visual representation of node health, Gossip telemetry, and Raft consensus stability.
+* [x] **Gamified Progression UI:** Implementing dark-mode, high-contrast visual logic to map the lifecycles of distributed workloads into a rank-based progression system, turning cluster management into an engaging, reactive experience.
 
-## Phase 2: Durability (v2.2)
+## [COMPLETED] Phase 2: Durability (v2.2)
 **Stateful Checkpointing & Fault Tolerance**
 Currently, a hardware failure during a long-running process results in total progress loss. We will enable true fault tolerance.
-* **Checkpoint API:** Fleshing out the `checkpoint()` hook in `LocalRuntimeEngine` to allow running workloads to flush their memory state safely to `AegisFS`.
-* **State Injection:** Upgrading the scheduler to automatically retrieve and inject saved state chunks into replacement nodes when recovering a `FAILED` process.
+* [x] **Checkpoint API:** Fleshing out the `checkpoint()` hook in `LocalRuntimeEngine` to allow running workloads to flush their memory state safely to `AegisFS`.
+* [x] **State Injection:** Upgrading the scheduler to automatically retrieve and inject saved state chunks into replacement nodes when recovering a `FAILED` process.
 
-## Phase 3: Scale (v2.3)
+## [COMPLETED] Phase 3: Scale (v2.3)
 **The Polyglot Engine**
 AegisOS is currently constrained by a hardcoded Java runtime boundary. We will open the compute layer to the broader software ecosystem.
-* **Dynamic Execution:** Modifying `ArtifactRecord` to support custom execution commands.
-* **Binary Agnosticism:** Decoupling `LocalRuntimeEngine` from `java -jar` to natively support Python scripts, Node.js payloads, and compiled binaries directly on the host OS.
+* [x] **Dynamic Execution:** Modifying `ArtifactRecord` to support custom execution commands.
+* [x] **Binary Agnosticism:** Decoupling `LocalRuntimeEngine` from `java -jar` to natively support Python scripts, Node.js payloads, and compiled binaries directly on the host OS.
 
-## Phase 4: Features (v2.4)
+## [COMPLETED] Phase 4: Features (v2.4)
 **Agentic Orchestration**
 Moving beyond static script execution to orchestrating complex, decentralized workflows.
-* **Distributed State Graphs:** Evolving the scheduler to natively manage multi-step, cyclic execution paths.
-* **AI First-Class Citizens:** Allowing AegisOS to manage multi-agent systems, piping context between disparate nodes (e.g., a data-gathering node streaming state to an analysis node) using the Virtual IPC overlay.
+* [x] **Distributed State Graphs:** Evolving the scheduler to natively manage multi-step, cyclic execution paths.
+* [x] **AI First-Class Citizens:** Allowing AegisOS to manage multi-agent systems, piping context between disparate nodes (e.g., a data-gathering node streaming state to an analysis node) using the Virtual IPC overlay.
+
+## Phase 5: Operational Sustainability (The Lifecycle Engine)
+
+**Strategic Objective:** AegisOS currently operates as an append-only system. To prevent catastrophic Out-Of-Memory (OOM) errors and disk exhaustion over prolonged uptimes, the cluster must autonomously manage the lifecycle and destruction of historical data.
+
+### Epic 5.1: Raft State Snapshotting (Consensus Compaction)
+* **The Risk:** The Raft consensus log continuously appends every state change. A node running for 30 days will have millions of log entries, consuming massive heap memory and making reboot recovery unacceptably slow.
+* **The Architecture:** 
+  * Implement snapshotting at the consensus layer.
+  * When the log reaches a predefined threshold (e.g., 10,000 entries), the State Machine writes its current exact state to disk and drops all previous log entries.
+  * Implement "InstallSnapshot" RPCs so new nodes joining the cluster can download the compressed state instead of replaying millions of obsolete commands.
+
+### Epic 5.2: Distributed Garbage Collection (Disk Management)
+* **The Risk:** Every uploaded polyglot script, `.jar` file, and `checkpoint.dat` memory dump remains in `AegisFS` and the local `logs/` directory forever.
+* **The Architecture:**
+  * Build a low-priority background daemon (The Scavenger) on each worker node.
+  * Implement a TTL (Time-To-Live) or Reference Counting protocol. If an artifact has not been referenced by an active or recently submitted process in 7 days, the cluster unanimously agrees to purge the physical files from the distributed filesystem.
+
+### Epic 5.3: Process Retention & Archival (Memory Management)
+* **The Risk:** The `InMemoryProcessTable` stores every executed pipeline in active RAM. Heavy workflow submission will eventually crash the JVM.
+* **The Architecture:**
+  * Define a strict retention policy for `COMPLETED` and `FAILED` processes (e.g., retain for 24 hours).
+  * Build an eviction pipeline that moves expired records out of the active concurrent map and either drops them permanently or serializes them to cold storage (disk) for historical auditing.
+
+## Phase 6: Zero-Trust Security & Multi-Tenancy (Future Scope)
+**Strategic Objective:** Transition AegisOS from an open cluster where any connected CLI can execute arbitrary commands into a secure, identity-driven compute fabric.
+* **Architecture Roadmap:** Implement cryptographic workload signing, Role-Based Access Control (RBAC) via the `IdentityService`, and strict node authentication to prevent rogue nodes from joining the consensus pool.

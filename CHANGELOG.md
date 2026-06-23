@@ -1,3 +1,18 @@
+# Release Notes - AegisOS v2.0.0 (The Polyglot Overlay Milestone)
+
+AegisOS v2.0.0 introduces true polyglot capabilities, distributed Virtual IPC stream routing, and stateful checkpointing, transforming the runtime from a JVM-only supervisor into a completely generalized, language-agnostic distributed OS.
+
+## Major Architectural Features
+
+* **The Polyglot Engine:** `LocalRuntimeEngine` has been completely decoupled from the JVM. Through the `executionCommand` schema field, you can now orchestrate Python scripts, compiled C++ binaries, Node.js applications, and bash orchestration. AegisOS injects the local file path via an `{artifact}` token.
+* **Virtual IPC Overlay:** Real Unix-style piping over a P2P network. `CompletableFuture.runAsync` aggressive standard output pumping eliminates OS buffer blocking risks. The network layer routes these bytes directly into the `OutputStream` of remote receiving processes via the `pipeToProcessId` schema extension.
+* **Stateful Checkpointing:** The `InMemoryProcessTable` now acts as a distributed checkpoint registry. Payloads can emit a `CommandType.SAVE_CHECKPOINT`, persisting their internal state into the Raft log. On crash or restart, `LocalRuntimeEngine` fetches and injects the latest binary snapshot back into the workload.
+
+## Upgrading
+All state from `v1.x` should be purged due to new schema requirements in `ProcessRecordProto` (`executionCommand`, `pipeToProcessId`). Start fresh clusters using `--bootstrap`.
+
+---
+
 # Release Notes - AegisOS v1.0.0 (The Distributed Execution Milestone)
 
 AegisOS v1.0.0 marks the transition from a consensus experiment into a fully functional, self-healing distributed operating system runtime. This release introduces true spatial awareness, physical process supervision, and distributed stream multiplexing.

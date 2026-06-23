@@ -159,6 +159,7 @@ enum CommandType {
   SUBMIT_PROCESS        = 17;
   UPDATE_PROCESS_STATE  = 18;
   CANCEL_PROCESS        = 19;
+  SAVE_CHECKPOINT       = 20;
 }
 
 message StateCommand {
@@ -478,6 +479,8 @@ message ProcessRecordProto {
   int64 submitTimestamp = 7;
   int64 stateTimestamp = 8;
   bytes submitter_node_id = 9;
+  string execution_command = 10;
+  string pipe_to_process_id = 11;
 }
 
 // ---------------------------------------------------------------------------
@@ -487,3 +490,11 @@ message IpcChunkProto {
   string process_id = 1;
   bytes data        = 2;
 }
+
+message CheckpointStateProto {
+  string process_id = 1;
+  string execution_id = 2;
+  bytes state_data = 3;       // The actual memory dump / progress payload
+  int64 timestamp = 4;
+}
+

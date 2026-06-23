@@ -28,3 +28,9 @@ build_artifacts/
 test--cluster-n1/
 test--cluster-n2/
 test--cluster-n3/
+node1-data/
+node2-data/
+node3-data/
+node1/
+node2/
+node3/

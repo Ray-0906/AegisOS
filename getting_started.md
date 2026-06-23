@@ -1,4 +1,4 @@
-# Getting Started with AegisOS v1.0.0
+# Getting Started with AegisOS v2.0.0
 
 ## Prerequisites
 * Java 21 or higher
@@ -58,6 +58,18 @@ Submit your workload to the cluster, requesting specific hardware resources:
 
 ```bash
 java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --cpu 1 --memory 256 --seed 127.0.0.1:20000
+```
+
+By default, the process runs via the JVM (`java -jar {artifact}`). However, AegisOS v2.0.0 is a Polyglot Engine. You can execute Python, Node.js, bash scripts, or native binaries by supplying a custom command:
+
+```bash
+java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --command "python {artifact}" --cpu 1 --memory 256 --seed 127.0.0.1:20000
+```
+
+To pipe the output of this process to another process running on the cluster (Virtual IPC Overlay), provide the target `--pipe-to` Process ID:
+
+```bash
+java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --command "python {artifact}" --pipe-to <RECEIVER_PROCESS_ID> --cpu 1 --memory 256 --seed 127.0.0.1:20000
 ```
 
 The scheduler will evaluate the Gossip topology, find a node with 256MB of free RAM, and assign the process.

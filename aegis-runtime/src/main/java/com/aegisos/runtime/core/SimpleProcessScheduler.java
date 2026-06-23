@@ -72,7 +72,9 @@ public class SimpleProcessScheduler implements ProcessScheduler, ProcessStateLis
                         ProcessState.FAILED,
                         record.resources(),
                         record.submitTimestamp(),
-                        System.currentTimeMillis()
+                        System.currentTimeMillis(),
+                        record.executionCommand(),
+                        record.pipeToProcessId()
                 );
             } else {
                 int idx = ThreadLocalRandom.current().nextInt(candidates.size());
@@ -87,7 +89,9 @@ public class SimpleProcessScheduler implements ProcessScheduler, ProcessStateLis
                         ProcessState.PLACED,
                         record.resources(),
                         record.submitTimestamp(),
-                        System.currentTimeMillis()
+                        System.currentTimeMillis(),
+                        record.executionCommand(),
+                        record.pipeToProcessId()
                 );
             }
 

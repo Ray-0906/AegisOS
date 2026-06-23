@@ -16,6 +16,7 @@ import java.util.concurrent.Executors;
 public class InMemoryProcessTable implements ProcessTable {
 
     private final ConcurrentHashMap<String, ProcessRecord> table = new ConcurrentHashMap<>();
+    private final java.util.Map<String, byte[]> checkpoints = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<ProcessStateListener> listeners = new CopyOnWriteArrayList<>();
     private final ExecutorService eventExecutor = Executors.newSingleThreadExecutor();
 
@@ -55,7 +56,9 @@ public class InMemoryProcessTable implements ProcessTable {
                 state,
                 existing.resources(),
                 existing.submitTimestamp(),
-                stateTimestamp
+                stateTimestamp,
+                existing.executionCommand(),
+                existing.pipeToProcessId()
         ));
         if (updated != null) {
             notifyListeners(updated);
@@ -75,5 +78,15 @@ public class InMemoryProcessTable implements ProcessTable {
     @Override
     public void remove(String processId) {
         table.remove(processId);
+    }
+
+    @Override
+    public void saveCheckpoint(String processId, byte[] stateData) {
+        checkpoints.put(processId, stateData);
+    }
+
+    @Override
+    public byte[] getLatestCheckpoint(String processId) {
+        return checkpoints.get(processId);
     }
 }
