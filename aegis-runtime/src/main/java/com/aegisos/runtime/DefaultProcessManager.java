@@ -141,7 +141,7 @@ public final class DefaultProcessManager implements ProcessManager {
         return new JobHandle(spec.getJobId());
     }
 
-    private NodeId scheduleWithRetry(JobSpec spec) throws Exception {
+    private com.aegisos.core.identity.NodeId scheduleWithRetry(JobSpec spec) throws Exception {
         long deadline = System.currentTimeMillis() + SCHEDULE_RETRY_WINDOW_MS;
         while (true) {
             Optional<JobRecord> existing = agent.registry().get(spec.getJobId());

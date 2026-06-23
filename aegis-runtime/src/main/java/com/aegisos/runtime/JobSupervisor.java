@@ -150,7 +150,7 @@ public final class JobSupervisor implements AutoCloseable {
                 }
                 schedulingExecutor.submit(() -> {
                     try {
-                        NodeId target = scheduler.schedule(record.getSpec(), 1L, record.getCheckpointFileId());
+                        com.aegisos.core.identity.NodeId target = scheduler.schedule(record.getSpec(), 1L, record.getCheckpointFileId());
                         JobRecord assignedRecord = record.toBuilder()
                                 .setAssignedNodeId(ByteString.copyFrom(target.toBytes()))
                                 .setState(JobState.QUEUED)
@@ -265,7 +265,7 @@ public final class JobSupervisor implements AutoCloseable {
                 return;
             }
 
-            NodeId newNode = scheduler.schedule(record.getSpec(), nextExecutionId, record.getCheckpointFileId());
+            com.aegisos.core.identity.NodeId newNode = scheduler.schedule(record.getSpec(), nextExecutionId, record.getCheckpointFileId());
 
             // Send cancel to old node — even if it appears dead, it might come back.
             // MUST be done AFTER schedule() commits the new executionId, so if the old node
