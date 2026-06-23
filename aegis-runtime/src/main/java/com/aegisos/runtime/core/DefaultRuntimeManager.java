@@ -101,4 +101,9 @@ public class DefaultRuntimeManager implements RuntimeManager {
     public List<ProcessRecord> listProcesses() {
         return processTable.list();
     }
+
+    @Override
+    public void checkpoint(String processId, byte[] stateData) {
+        runtimeEngine.checkpoint(processId, stateData);
+    }
 }

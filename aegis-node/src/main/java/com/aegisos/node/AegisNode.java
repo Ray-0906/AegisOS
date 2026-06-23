@@ -172,7 +172,7 @@ public final class AegisNode implements AutoCloseable {
 
         com.aegisos.api.runtime.ProcessTable processTable = new com.aegisos.runtime.table.InMemoryProcessTable();
         com.aegisos.api.runtime.ProcessScheduler processScheduler = new com.aegisos.runtime.core.SimpleProcessScheduler(consensus, identity, discovery.membership());
-        com.aegisos.api.runtime.RuntimeEngine runtimeEngine = new com.aegisos.runtime.core.LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network);
+        com.aegisos.api.runtime.RuntimeEngine runtimeEngine = new com.aegisos.runtime.core.LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network, processTable);
         
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) processScheduler);
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) runtimeEngine);
@@ -184,6 +184,7 @@ public final class AegisNode implements AutoCloseable {
         consensus.stateMachine().register(com.aegisos.proto.CommandType.SUBMIT_PROCESS, (index, cmd) -> applier.applySubmit(cmd.getPayload().toByteArray()));
         consensus.stateMachine().register(com.aegisos.proto.CommandType.UPDATE_PROCESS_STATE, (index, cmd) -> applier.applyUpdate(cmd.getPayload().toByteArray()));
         consensus.stateMachine().register(com.aegisos.proto.CommandType.CANCEL_PROCESS, (index, cmd) -> applier.applyCancel(cmd.getPayload().toByteArray()));
+        consensus.stateMachine().register(com.aegisos.proto.CommandType.SAVE_CHECKPOINT, (index, cmd) -> applier.applyCheckpoint(cmd.getPayload().toByteArray()));
 
         // 2. Configure Snapshots
         consensus.stateMachine().registerSnapshotParticipant(consensus.clusterConfiguration());

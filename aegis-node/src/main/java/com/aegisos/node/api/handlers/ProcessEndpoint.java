@@ -34,6 +34,9 @@ public class ProcessEndpoint {
                 getProcessDetails(exchange, path.substring("/v1/processes/".length()));
             } else if ("DELETE".equals(method) && path.startsWith("/v1/processes/")) {
                 cancelProcess(exchange, path.substring("/v1/processes/".length()));
+            } else if ("POST".equals(method) && path.matches("/v1/processes/.+/checkpoint")) {
+                String processId = path.split("/")[3];
+                saveCheckpoint(exchange, processId);
             } else {
                 ResponseWriter.writeError(exchange, 405, "METHOD_NOT_ALLOWED");
             }
@@ -74,5 +77,13 @@ public class ProcessEndpoint {
     private void cancelProcess(HttpExchange exchange, String processId) throws IOException {
         runtimeManager.cancelProcess(processId);
         ResponseWriter.writeJson(exchange, 202, Map.of());
+    }
+
+    private void saveCheckpoint(HttpExchange exchange, String processId) throws IOException {
+        try (InputStream is = exchange.getRequestBody()) {
+            byte[] stateData = is.readAllBytes();
+            runtimeManager.checkpoint(processId, stateData);
+            ResponseWriter.writeJson(exchange, 202, Map.of());
+        }
     }
 }

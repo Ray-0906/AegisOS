@@ -57,4 +57,13 @@ public class ProcessStateApplier {
             throw new RuntimeException(e);
         }
     }
+
+    public void applyCheckpoint(byte[] payload) {
+        try {
+            com.aegisos.proto.CheckpointStateProto proto = com.aegisos.proto.CheckpointStateProto.parseFrom(payload);
+            processTable.saveCheckpoint(proto.getProcessId(), proto.getStateData().toByteArray());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

@@ -7,4 +7,5 @@ public interface RuntimeManager {
     void cancelProcess(String processId);
     ProcessRecord getProcessDetails(String processId);
     List<ProcessRecord> listProcesses();
+    void checkpoint(String processId, byte[] stateData);
 }

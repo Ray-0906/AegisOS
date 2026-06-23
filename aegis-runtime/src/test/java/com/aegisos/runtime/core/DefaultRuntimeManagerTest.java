@@ -111,7 +111,7 @@ public class DefaultRuntimeManagerTest {
         Files.writeString(localMeta, size + "\n" + mtime + "\n");
 
         ProcessScheduler processScheduler = new SimpleProcessScheduler(consensus, identity, membership);
-        RuntimeEngine runtimeEngine = new LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network);
+        RuntimeEngine runtimeEngine = new LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network, processTable);
         
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) processScheduler);
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) runtimeEngine);

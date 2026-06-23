@@ -35,18 +35,20 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
     private final ArtifactRegistry artifactRegistry;
     private final ArtifactCache artifactCache;
     private final NetworkLayer networkLayer;
+    private final com.aegisos.api.runtime.ProcessTable processTable;
     private final ExecutorService processExecutor = Executors.newCachedThreadPool();
     private final ConcurrentHashMap<String, Process> activeProcesses = new ConcurrentHashMap<>();
     private final java.util.Set<String> cancelledProcesses = ConcurrentHashMap.newKeySet();
 
     public LocalRuntimeEngine(ConsensusModule consensus, IdentityService identityService, 
                               ArtifactRegistry artifactRegistry, ArtifactCache artifactCache,
-                              NetworkLayer networkLayer) {
+                              NetworkLayer networkLayer, com.aegisos.api.runtime.ProcessTable processTable) {
         this.consensus = consensus;
         this.identityService = identityService;
         this.artifactRegistry = artifactRegistry;
         this.artifactCache = artifactCache;
         this.networkLayer = networkLayer;
+        this.processTable = processTable;
     }
 
     @Override
@@ -62,7 +64,27 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
     }
 
     @Override
-    public void checkpoint(String processId) {
+    public void checkpoint(String processId, byte[] stateData) {
+        try {
+            com.aegisos.proto.CheckpointStateProto proto = com.aegisos.proto.CheckpointStateProto.newBuilder()
+                    .setProcessId(processId)
+                    .setExecutionId("0") // placeholder
+                    .setStateData(com.google.protobuf.ByteString.copyFrom(stateData))
+                    .setTimestamp(System.currentTimeMillis())
+                    .build();
+
+            StateCommand cmd = StateCommand.newBuilder()
+                    .setType(CommandType.SAVE_CHECKPOINT)
+                    .setPayload(proto.toByteString())
+                    .build();
+
+            consensus.propose(cmd).exceptionally(ex -> {
+                log.error("Failed to propose checkpoint for process {}", processId, ex);
+                return null;
+            });
+        } catch (Exception e) {
+            log.error("Failed to construct checkpoint command for process {}", processId, e);
+        }
     }
 
     @Override
@@ -90,7 +112,16 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
             Files.createDirectories(logDir);
             File logFile = logDir.resolve(record.processId() + ".log").toFile();
 
+            byte[] checkpoint = processTable.getLatestCheckpoint(record.processId());
+            if (checkpoint != null) {
+                Path checkpointFile = logDir.resolve("checkpoint.dat");
+                Files.write(checkpointFile, checkpoint);
+            }
+
             ProcessBuilder pb = new ProcessBuilder("java", "-jar", localPath.toString());
+            if (checkpoint != null) {
+                pb.environment().put("AEGIS_CHECKPOINT_DIR", logDir.toString());
+            }
             pb.redirectErrorStream(true);
             Process process = pb.start();
             activeProcesses.put(record.processId(), process);
