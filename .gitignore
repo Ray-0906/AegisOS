@@ -25,3 +25,6 @@ test-cluster/
 recovered.txt
 test_downloaded.txt
 build_artifacts/
+test--cluster-n1/
+test--cluster-n2/
+test--cluster-n3/
