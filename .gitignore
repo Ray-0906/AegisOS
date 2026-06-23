@@ -19,7 +19,7 @@ dist/
 .gemini/
 
 # Runtime Generated
-node*/
+
 data/
 test-cluster/
 recovered.txt
