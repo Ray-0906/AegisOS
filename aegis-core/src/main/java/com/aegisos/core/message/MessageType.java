@@ -42,7 +42,13 @@ public enum MessageType {
     JOB_UPDATE(44),
     JOB_DONE(45),
     JOB_HEARTBEAT(46),
-    CANCEL_JOB(47);
+    CANCEL_JOB(47),
+
+    PRE_VOTE(50),
+    PRE_VOTE_RESULT(51),
+
+    IPC_DATA(60),
+    IPC_EOF(61);
 
     private final int code;
 

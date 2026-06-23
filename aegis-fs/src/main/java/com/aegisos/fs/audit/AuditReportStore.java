@@ -99,4 +99,11 @@ public final class AuditReportStore {
     public synchronized int size() {
         return history.size();
     }
+
+    /**
+     * Clears all historical scans from the store.
+     */
+    public synchronized void clear() {
+        history.clear();
+    }
 }

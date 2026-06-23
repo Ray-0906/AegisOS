@@ -55,16 +55,64 @@ public final class MetricsServer implements AutoCloseable {
         server = HttpServer.create(
                 new InetSocketAddress("0.0.0.0", port), 10);
 
-        server.createContext("/metrics", exchange -> {
+        com.aegisos.core.observability.MetricsExporter exporter = 
+            new com.aegisos.core.observability.PrometheusMetricsExporter(() -> node.metrics());
+        MetricsHttpServer metricsHttpServer = new MetricsHttpServer(exporter);
+        metricsHttpServer.register(server);
+        
+        server.createContext("/topology", exchange -> {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
                 return;
             }
-            byte[] body = buildMetrics().getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
-            exchange.sendResponseHeaders(200, body.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(body);
+            try {
+                String json = buildTopologyJson();
+                byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to generate topology JSON", e);
+                exchange.sendResponseHeaders(500, -1);
+            }
+        });
+        
+        server.createContext("/jobs", exchange -> {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            String path = exchange.getRequestURI().getPath();
+            String query = exchange.getRequestURI().getQuery();
+            try {
+                String[] parts = path.split("/");
+                // path "/jobs" gives parts=["", "jobs"]
+                // path "/jobs/123" gives parts=["", "jobs", "123"]
+                String json;
+                if (parts.length == 2 && "jobs".equals(parts[1])) {
+                    json = buildJobsJson(query);
+                } else if (parts.length == 3 && "jobs".equals(parts[1])) {
+                    String jobId = parts[2];
+                    json = buildJobJson(jobId);
+                    if (json == null) {
+                        exchange.sendResponseHeaders(404, -1);
+                        return;
+                    }
+                } else {
+                    exchange.sendResponseHeaders(404, -1);
+                    return;
+                }
+                byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                log.error("Failed to generate jobs JSON", e);
+                exchange.sendResponseHeaders(500, -1);
             }
         });
 
@@ -92,7 +140,7 @@ public final class MetricsServer implements AutoCloseable {
         server.createContext("/cancel", exchange -> {
             if ("POST".equals(exchange.getRequestMethod())) {
                 String query = exchange.getRequestURI().getQuery();
-                log.info("Received /cancel request with query: {}", query);
+                log.debug("Received /cancel request with query: {}", query);
                 if (query != null && query.startsWith("jobId=")) {
                     String jobId = query.substring(6);
                     if (jobId.isEmpty()) {
@@ -342,49 +390,7 @@ public final class MetricsServer implements AutoCloseable {
             }
         });
 
-        server.createContext("/metrics/jobs", exchange -> {
-            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                exchange.sendResponseHeaders(405, -1);
-                return;
-            }
-            try {
-                var agent = node.runtimeAgent();
-                var supervisor = node.jobSupervisor();
-                long jobsLost = supervisor != null ? supervisor.jobsLost.get() : 0;
-                long jobsRequeued = supervisor != null ? supervisor.jobsRequeued.get() : 0;
-                
-                String json = String.format("""
-                        {
-                          "jobsStarted": %d,
-                          "jobsCompleted": %d,
-                          "jobsFailed": %d,
-                          "jobsCancelled": %d,
-                          "jobsLost": %d,
-                          "jobsRequeued": %d,
-                          "jobsSuperseded": %d,
-                          "fencingDrops": %d,
-                          "logUploadsSucceeded": %d,
-                          "logUploadsFailed": %d
-                        }
-                        """,
-                        agent.jobsStarted.get(), agent.jobsCompleted.get(), agent.jobsFailed.get(),
-                        agent.jobsCancelled.get(), jobsLost, jobsRequeued,
-                        agent.jobsSuperseded.get(), agent.fencingDrops.get(),
-                        agent.logUploadsSucceeded.get(), agent.logUploadsFailed.get());
-                        
-                byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
-                exchange.sendResponseHeaders(200, bytes.length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(bytes);
-                }
-            } catch (Exception e) {
-                log.error("Failed to generate jobs metrics", e);
-                exchange.sendResponseHeaders(500, -1);
-            }
-        });
-
-        server.createContext("/raft/metrics", exchange -> {
+server.createContext("/raft/metrics", exchange -> {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
                 return;
@@ -434,7 +440,7 @@ public final class MetricsServer implements AutoCloseable {
             }
         });
 
-        executor = Executors.newVirtualThreadPerTaskExecutor();
+        executor = com.aegisos.core.ExecutorRegistry.register("metricsServer", Executors.newVirtualThreadPerTaskExecutor());
         server.setExecutor(executor);
         server.start();
         log.info("Metrics server listening on http://0.0.0.0:{}/ (endpoints: /metrics, /health)", port);
@@ -513,10 +519,8 @@ public final class MetricsServer implements AutoCloseable {
         return sb.toString();
     }
 
-    private String buildMetrics() {
+    private String buildTopologyJson() {
         String nodeId = node.identity().nodeId().shortId();
-
-        // --- Consensus ---
         boolean isLeader = node.consensus().isLeader();
         String leaderId = null;
         if (node.consensus().leaderId() != null) {
@@ -524,44 +528,99 @@ public final class MetricsServer implements AutoCloseable {
         }
         long term        = node.consensus().raftNode().currentTerm();
         long commitIndex = node.consensus().raftNode().commitIndex();
-        String role = isLeader ? "LEADER"
-                : (leaderId != null ? "FOLLOWER" : "CANDIDATE");
-
-        // --- Membership ---
+        String role = isLeader ? "LEADER" : (leaderId != null ? "FOLLOWER" : "CANDIDATE");
         int aliveNodes = node.discovery().membership().aliveCount();
 
-        // --- Jobs ---
-        Collection<JobRecord> allJobs = node.runtimeAgent().registry().all();
-        long queued    = allJobs.stream().filter(j -> j.getState() == JobState.QUEUED).count();
-        long pending   = allJobs.stream().filter(j -> j.getState() == JobState.PENDING).count();
-        long running   = allJobs.stream().filter(j -> j.getState() == JobState.RUNNING).count();
-        long completed = allJobs.stream().filter(j -> j.getState() == JobState.COMPLETED).count();
-        long failed    = allJobs.stream().filter(j -> j.getState() == JobState.FAILED).count();
+        java.util.List<String> followers = new java.util.ArrayList<>();
+        java.util.List<String> deadNodes = new java.util.ArrayList<>();
+        for (var member : node.discovery().membership().allPeers()) {
+            String peerShortId = com.aegisos.core.identity.NodeId.of(member.getNodeId().toByteArray()).shortId();
+            if (peerShortId.equals(nodeId)) continue;
+            if (member.getStatus() == com.aegisos.proto.PeerStatus.ALIVE) {
+                followers.add(peerShortId);
+            } else {
+                deadNodes.add(peerShortId);
+            }
+        }
 
-        // --- Storage ---
-        int localChunks = node.fileSystem().chunkStore().listChunkIds().size();
+        java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
+        map.put("nodeId", nodeId);
+        map.put("role", role);
+        map.put("leader", leaderId);
+        map.put("term", term);
+        map.put("commitIndex", commitIndex);
+        map.put("aliveNodes", aliveNodes);
+        map.put("followers", followers);
+        map.put("deadNodes", deadNodes);
 
-        // Hand-built JSON — no Jackson dependency needed.
-        return String.format("""
-                {
-                  "nodeId"      : "%s",
-                  "role"        : "%s",
-                  "leader"      : %s,
-                  "term"        : %d,
-                  "commitIndex" : %d,
-                  "aliveNodes"  : %d,
-                  "jobs"        : { "PENDING": %d, "QUEUED": %d, "RUNNING": %d, "COMPLETED": %d, "FAILED": %d },
-                  "localChunks" : %d
+        return com.aegisos.core.util.JsonBuilder.object(map);
+    }
+
+    private String buildJobsJson(String query) {
+        int limit = -1;
+        JobState filterState = null;
+        if (query != null) {
+            String[] pairs = query.split("&");
+            for (String pair : pairs) {
+                String[] kv = pair.split("=");
+                if (kv.length == 2) {
+                    if ("limit".equals(kv[0])) {
+                        try { limit = Integer.parseInt(kv[1]); } catch (NumberFormatException ignored) {}
+                    } else if ("state".equals(kv[0])) {
+                        try { filterState = JobState.valueOf(kv[1]); } catch (IllegalArgumentException ignored) {}
+                    }
                 }
-                """,
-                nodeId,
-                role,
-                leaderId == null ? "null" : "\"" + leaderId + "\"",
-                term,
-                commitIndex,
-                aliveNodes,
-                pending, queued, running, completed, failed,
-                localChunks);
+            }
+        }
+
+        Collection<JobRecord> allJobs = node.runtimeAgent().registry().all();
+        java.util.stream.Stream<JobRecord> stream = allJobs.stream();
+        if (filterState != null) {
+            final JobState s = filterState;
+            stream = stream.filter(j -> j.getState() == s);
+        }
+        if (limit > 0) {
+            stream = stream.limit(limit);
+        }
+
+        java.util.List<java.util.Map<String, Object>> jobsList = new java.util.ArrayList<>();
+        for (JobRecord job : stream.toList()) {
+            java.util.Map<String, Object> jMap = new java.util.LinkedHashMap<>();
+            jMap.put("id", job.getSpec().getJobId());
+            jMap.put("state", job.getState().name());
+            jobsList.add(jMap);
+        }
+        return com.aegisos.core.util.JsonBuilder.array(jobsList);
+    }
+
+    private String buildJobJson(String jobId) {
+        java.util.Optional<JobRecord> maybeJob = node.runtimeAgent().registry().get(jobId);
+        if (maybeJob.isEmpty()) return null;
+        JobRecord job = maybeJob.get();
+        
+        java.util.List<java.util.Map<String, Object>> events = new java.util.ArrayList<>();
+        if (node.timelineRegistry() != null) {
+            java.util.Optional<com.aegisos.core.observability.JobTimeline> maybeTimeline = node.timelineRegistry().getTimeline(jobId);
+            if (maybeTimeline.isPresent()) {
+                for (com.aegisos.core.observability.JobTimelineEvent e : maybeTimeline.get().getEvents()) {
+                    java.util.Map<String, Object> eMap = new java.util.LinkedHashMap<>();
+                    eMap.put("timestamp", e.timestampMs());
+                    eMap.put("type", e.type().name());
+                    eMap.put("node", e.nodeId());
+                    eMap.put("details", e.details());
+                    events.add(eMap);
+                }
+            }
+        }
+
+        java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
+        map.put("id", job.getSpec().getJobId());
+        map.put("state", job.getState().name());
+        map.put("assignedNode", job.getAssignedNodeId().isEmpty() ? null : com.aegisos.core.identity.NodeId.of(job.getAssignedNodeId().toByteArray()).shortId());
+        map.put("error", job.getError());
+        map.put("timeline", events);
+
+        return com.aegisos.core.util.JsonBuilder.object(map);
     }
 
     private static String escapeJson(String s) {

@@ -27,6 +27,7 @@ message MessageHeader {
   uint64 sequence     = 6; // per-connection monotonic counter
   uint64 correlation  = 7; // request/response correlation id (0 = none)
   bool   handshake    = 8; // true while body is still plaintext (pre-session-key)
+  bool   is_response  = 9; // true if this message is a response to an earlier correlation id
 }
 
 message Envelope {
@@ -71,6 +72,7 @@ message PeerEntry {
   PeerStatus status      = 5;
   int64      version     = 6;
   NodeRole   role        = 7;
+  NodeResources resources = 8;
 }
 
 message MembershipList {
@@ -153,6 +155,10 @@ enum CommandType {
   REMOVE_VOTER      = 13;
   REPAIR_CHUNK      = 14;
   REPAIR_COMPLETE   = 15;
+  UPDATE_JOB_CHECKPOINT = 16;
+  SUBMIT_PROCESS        = 17;
+  UPDATE_PROCESS_STATE  = 18;
+  CANCEL_PROCESS        = 19;
 }
 
 message StateCommand {
@@ -250,11 +256,34 @@ enum JobState {
   ASSIGNED    = 8;  // deprecated: use QUEUED
   PENDING     = 9;
   CANCELLED   = 10;
+  RESTORING   = 11;
 }
 
 message ResourceRequest {
   int32 cpu_cores = 1;
   int64 memory_mb = 2;
+}
+
+message ArtifactReference {
+  string sha256     = 1;
+  string mount_path = 2; // relative to workspace root, e.g. "artifacts/model.bin"
+}
+
+enum RuntimeType {
+  RUNTIME_UNSPECIFIED = 0;  // legacy/default: treated as RUNTIME_JVM
+  RUNTIME_JVM         = 1;  // JVM process via ProcessSupervisor
+  RUNTIME_CONTAINER   = 2;  // container via ContainerEngine
+}
+
+message EnvVar {
+  string key   = 1;
+  string value = 2;
+}
+
+message ContainerSpec {
+  string image          = 1;  // e.g. "alpine:latest", "myapp:1.0"
+  repeated string cmd   = 2;  // override entrypoint
+  repeated EnvVar env   = 3;  // environment variables
 }
 
 message JobSpec {
@@ -265,6 +294,9 @@ message JobSpec {
   bytes  code_chunk_id   = 5; // AegisFS chunk holding the job bytecode jar (optional)
   string code_file_id    = 6; // AegisFS file id for job code
   ResourceRequest resources = 7;
+  repeated ArtifactReference artifacts = 8;
+  RuntimeType runtime    = 9;          // execution backend (default: JVM)
+  ContainerSpec container = 10;        // only used when runtime == RUNTIME_CONTAINER
 }
 
 message JobRecord {
@@ -284,12 +316,18 @@ message JobRecord {
 message ProbeRequest {
   string job_id = 1;
   ResourceRequest resources = 2;
+  repeated string artifact_sha256s = 3;
+  string checkpoint_file_id = 4;
 }
 
 message ProbeResult {
   bytes node_id = 1;
   bool  accepted = 2;
-  double score  = 3;
+  double score  = 3; // deprecated: score is computed by the leader now
+  int32 cpu_available = 4;
+  int64 mem_available = 5;
+  int32 running_jobs = 6;
+  int64 download_bytes_saved = 7;
 }
 
 message RunJob {
@@ -308,6 +346,20 @@ message JobUpdate {
 message JobHeartbeat {
   string job_id = 1;
   uint64 execution_id = 2;
+}
+
+message CheckpointMetadata {
+  int64  sequence = 1;
+  string artifact_id = 2;
+  int64  timestamp = 3;
+  int64  size_bytes = 4;
+}
+
+message UpdateJobCheckpoint {
+  string job_id = 1;
+  uint64 execution_id = 2;
+  string checkpoint_file_id = 3;
+  CheckpointMetadata metadata = 4;
 }
 
 message ClientCommandResult {
@@ -360,6 +412,10 @@ message ArtifactRecord {
   ArtifactStatus status = 7;  // lifecycle state
 }
 
+message RegisterArtifact {
+  ArtifactRecord artifact = 1;
+}
+
 // ---------------------------------------------------------------------------
 // Snapshots & Log Compaction (Sprint 6)
 // ---------------------------------------------------------------------------
@@ -387,4 +443,47 @@ message InstallSnapshot {
 message InstallSnapshotResponse {
   int64 term    = 1;
   bool  success = 2;
+}
+
+// ---------------------------------------------------------------------------
+// V1.5.0 Process Runtime Structures
+// ---------------------------------------------------------------------------
+
+enum ProcessStateProto {
+  PROCESS_SUBMITTED = 0;
+  PROCESS_QUEUED = 1;
+  PROCESS_PLACED = 2;
+  PROCESS_STARTING = 3;
+  PROCESS_RUNNING = 4;
+  PROCESS_CHECKPOINTING = 5;
+  PROCESS_PAUSED = 6;
+  PROCESS_MIGRATING = 7;
+  PROCESS_COMPLETED = 8;
+  PROCESS_FAILED = 9;
+  PROCESS_CANCELLED = 10;
+}
+
+message ProcessResourcesProto {
+  int32 cpuCores = 1;
+  int64 memoryMb = 2;
+}
+
+message ProcessRecordProto {
+  string processId = 1;
+  string artifactId = 2;
+  string ownerNodeId = 3;
+  int64 executionId = 4;
+  ProcessStateProto state = 5;
+  ProcessResourcesProto resources = 6;
+  int64 submitTimestamp = 7;
+  int64 stateTimestamp = 8;
+  bytes submitter_node_id = 9;
+}
+
+// ---------------------------------------------------------------------------
+// IPC Networking (Path B)
+// ---------------------------------------------------------------------------
+message IpcChunkProto {
+  string process_id = 1;
+  bytes data        = 2;
 }

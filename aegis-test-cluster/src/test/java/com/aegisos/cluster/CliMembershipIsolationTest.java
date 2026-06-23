@@ -26,8 +26,8 @@ public class CliMembershipIsolationTest {
             });
             assertEquals(true, discovered, "Cluster did not form properly");
 
-            AegisNode seedNode = nodes.get(0);
-            String seedAddress = "127.0.0.1:" + seedNode.network().boundPort();
+            AegisNode seedNode = nodes.stream().filter(n -> n.consensus().isLeader()).findFirst().orElse(nodes.get(0));
+            String seedAddress = "http://127.0.0.1:" + seedNode.apiServer().boundPort();
 
             // Run the CLI nodes command
             int exitCode = new CommandLine(new AegisCLI()).execute("nodes", "--seed", seedAddress);

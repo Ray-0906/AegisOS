@@ -21,7 +21,8 @@ public class ResourceAllocator implements AutoCloseable {
 
     private final int totalCpuCores;
     private final long totalMemoryMb;
-    private final long softReservationTtlMs = Long.getLong("aegis.reservation.ttl", 60000);
+    private final int maxConcurrentReservations;
+    private final long softReservationTtlMs = Long.getLong("aegis.reservation.ttl", 2000);
 
     private int hardAllocatedCpu = 0;
     private long hardAllocatedMem = 0;
@@ -34,15 +35,20 @@ public class ResourceAllocator implements AutoCloseable {
     private final Map<String, SoftReservation> softReservations = new ConcurrentHashMap<>();
     private final Map<String, ResourceRequest> hardAllocations = new ConcurrentHashMap<>();
 
-    private final ScheduledExecutorService reaper = Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+    private final ScheduledExecutorService reaper = com.aegisos.core.ExecutorRegistry.register("resourceAllocator", Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r)));
 
-    public ResourceAllocator(int totalCpuCores, long totalMemoryMb) {
+    public ResourceAllocator(int totalCpuCores, long totalMemoryMb, int maxConcurrentReservations) {
         this.totalCpuCores = totalCpuCores;
         this.totalMemoryMb = totalMemoryMb;
-        reaper.scheduleAtFixedRate(this::reapSoftReservations, 5, 5, TimeUnit.SECONDS);
+        this.maxConcurrentReservations = maxConcurrentReservations;
+        reaper.scheduleAtFixedRate(this::reapSoftReservations, com.aegisos.core.SchedulerJitter.jitter(5, 5), 5, TimeUnit.SECONDS);
     }
 
     public synchronized String tryReserve(String jobId, long schedulerEpoch, ResourceRequest request) {
+        if (softReservations.size() >= maxConcurrentReservations) {
+            log.info("tryReserve failed for {}: max concurrent reservations ({}) reached", jobId, maxConcurrentReservations);
+            return null;
+        }
         if (request.getCpuCores() + hardAllocatedCpu + softReservedCpu > totalCpuCores) {
             log.info("tryReserve failed for {}: requested CPU {} > available (total {}, hard {}, soft {})", 
                 jobId, request.getCpuCores(), totalCpuCores, hardAllocatedCpu, softReservedCpu);
@@ -112,7 +118,7 @@ public class ResourceAllocator implements AutoCloseable {
                 SoftReservation res = entry.getValue();
                 softReservedCpu -= res.request().getCpuCores();
                 softReservedMem -= res.request().getMemoryMb();
-                log.warn("Reservation expired: job={} resId={}", res.jobId(), res.reservationId());
+                log.debug("Reservation expired: job={} resId={}", res.jobId(), res.reservationId());
                 it.remove();
             }
         }
@@ -153,6 +159,8 @@ public class ResourceAllocator implements AutoCloseable {
     public synchronized long hardAllocatedMem() { return hardAllocatedMem; }
     public synchronized int softReservedCpu() { return softReservedCpu; }
     public synchronized long softReservedMem() { return softReservedMem; }
+    public synchronized int getAvailableCpu() { return totalCpuCores - hardAllocatedCpu - softReservedCpu; }
+    public synchronized long getAvailableMem() { return totalMemoryMb - hardAllocatedMem - softReservedMem; }
     public Map<String, SoftReservation> softReservations() { return softReservations; }
     public Map<String, ResourceRequest> hardAllocations() { return hardAllocations; }
 

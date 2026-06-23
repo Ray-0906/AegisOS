@@ -22,6 +22,7 @@ public class ProcessSupervisor {
     private static final Logger log = LoggerFactory.getLogger(ProcessSupervisor.class);
 
     private final String jobId;
+    private final WorkspaceInfo workspace;
     private final Path workDir;
     private final int memoryMb;
     private Process process;
@@ -29,19 +30,54 @@ public class ProcessSupervisor {
     private ServerSocket serverSocket;
     private Socket clientSocket;
     private PrintWriter out;
-    private Scanner in;
+    private java.io.DataInputStream in;
 
-    public ProcessSupervisor(NodeId nodeId, String jobId, int memoryMb) {
+    private java.util.function.Consumer<byte[]> checkpointListener;
+
+    public ProcessSupervisor(String jobId, int memoryMb, WorkspaceInfo workspace) {
         this.jobId = jobId;
         this.memoryMb = memoryMb;
-        // Temporary isolated working directory, separated by node ID for local cluster testing
-        this.workDir = Paths.get(System.getProperty("java.io.tmpdir"), "aegis", nodeId.shortId(), "jobs", jobId);
+        this.workspace = workspace;
+        this.workDir = workspace.root();
+    }
+
+    public void setCheckpointListener(java.util.function.Consumer<byte[]> checkpointListener) {
+        this.checkpointListener = checkpointListener;
+    }
+
+    public void mountArtifacts(java.util.Map<String, String> mountPaths) throws IOException {
+        if (mountPaths == null || mountPaths.isEmpty()) return;
+        for (java.util.Map.Entry<String, String> entry : mountPaths.entrySet()) {
+            String mountPath = entry.getKey();
+            String localCachePath = entry.getValue();
+
+            // Validate mount path
+            if (mountPath == null || mountPath.isEmpty() || mountPath.equals(".") || mountPath.equals("..") ||
+                mountPath.startsWith("/") || mountPath.contains("..")) {
+                throw new IllegalArgumentException("Invalid mount path: " + mountPath);
+            }
+
+            java.nio.file.Path targetPath = workspace.artifactsDir().resolve(mountPath).normalize();
+            if (!targetPath.startsWith(workspace.artifactsDir())) {
+                throw new IllegalArgumentException("Mount path escapes artifacts directory: " + mountPath);
+            }
+
+            java.nio.file.Files.createDirectories(targetPath.getParent());
+
+            // Try symlink, fallback to copy
+            try {
+                java.nio.file.Files.createSymbolicLink(targetPath, java.nio.file.Paths.get(localCachePath));
+                log.debug("Symlinked artifact {} to {}", localCachePath, targetPath);
+            } catch (Exception e) {
+                log.debug("Failed to create symlink for {}, falling back to copy: {}", mountPath, e.getMessage());
+                java.nio.file.Files.copy(java.nio.file.Paths.get(localCachePath), targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                log.debug("Copied artifact {} to {}", localCachePath, targetPath);
+            }
+        }
     }
 
     public byte[] runWorker(Object[] jobArgs) throws Exception {
-        Files.createDirectories(workDir);
-        Files.createDirectories(workDir.resolve("output"));
-        Files.createDirectories(workDir.resolve("checkpoint"));
+        workspace.provision();
 
         File argsFile = workDir.resolve("job_args.bin").toFile();
         Files.write(argsFile.toPath(), Serialization.serialize(jobArgs));
@@ -60,7 +96,7 @@ public class ProcessSupervisor {
         for (Object o : jobArgs) {
             sb.append(o == null ? "null" : o.getClass().getName()).append(", ");
         }
-        log.info(sb.toString());
+        log.trace(sb.toString());
 
         ProcessBuilder pb = new ProcessBuilder(
             javaBin,
@@ -71,27 +107,29 @@ public class ProcessSupervisor {
         );
         pb.directory(workDir.toFile());
         
-        File stdoutFile = workDir.resolve("stdout.log").toFile();
-        File stderrFile = workDir.resolve("stderr.log").toFile();
+        File stdoutFile = workspace.stdoutLog().toFile();
+        File stderrFile = workspace.stderrLog().toFile();
         pb.redirectOutput(stdoutFile);
         pb.redirectError(stderrFile);
 
-        log.info("Supervisor starting Worker process for job {}", jobId);
+        log.debug("Supervisor starting Worker process for job {}", jobId);
         process = pb.start();
 
         AtomicBoolean completed = new AtomicBoolean(false);
         AtomicReference<String> failError = new AtomicReference<>(null);
+        AtomicReference<String> controlError = new AtomicReference<>(null);
         CountDownLatch latch = new CountDownLatch(1);
 
         Thread acceptor = new Thread(() -> {
             try {
                 serverSocket.setSoTimeout(10000); // 10 seconds to connect
                 clientSocket = serverSocket.accept();
-                log.info("[{}] Worker connected to control socket", jobId);
+                log.debug("[{}] Worker connected to control socket", jobId);
                 // Do NOT set a read timeout on the client socket.
                 // Scanner treats SocketTimeoutException as end-of-input,
                 // which silently kills the acceptor loop.
-                in = new Scanner(clientSocket.getInputStream());
+                // Use DataInputStream to avoid buffering ahead into the binary payload
+                in = new java.io.DataInputStream(clientSocket.getInputStream());
                 out = new PrintWriter(clientSocket.getOutputStream(), true);
 
                 // Start ping thread
@@ -103,7 +141,7 @@ public class ProcessSupervisor {
                             }
                             Thread.sleep(2000);
                         }
-                        log.info("[{}] Pinger exiting: completed={} processAlive={}", jobId, completed.get(), process.isAlive());
+                        log.trace("[{}] Pinger exiting: completed={} processAlive={}", jobId, completed.get(), process.isAlive());
                     } catch (Exception e) {
                         log.debug("[{}] Pinger exception: {}", jobId, e.getMessage());
                     }
@@ -111,8 +149,8 @@ public class ProcessSupervisor {
                 pinger.setDaemon(true);
                 pinger.start();
 
-                while (in.hasNextLine() && !completed.get()) {
-                    String line = in.nextLine();
+                String line;
+                while (!completed.get() && (line = readAsciiLine(in)) != null) {
                     log.debug("[{}] Acceptor read: {}", jobId, line);
                     if (line.contains("\"type\":\"COMPLETE\"")) {
                         completed.set(true);
@@ -123,15 +161,25 @@ public class ProcessSupervisor {
                         completed.set(true);
                         latch.countDown();
                         break;
+                    } else if (line.contains("\"type\":\"CHECKPOINT\"")) {
+                        // Extract size
+                        int sizeIdx = line.indexOf("\"size\":");
+                        if (sizeIdx != -1) {
+                            int endIdx = line.indexOf('}', sizeIdx);
+                            int size = Integer.parseInt(line.substring(sizeIdx + 7, endIdx).trim());
+                            byte[] payload = new byte[size];
+                            in.readFully(payload);
+                            if (checkpointListener != null) {
+                                checkpointListener.accept(payload);
+                            }
+                        }
                     }
                 }
-                log.info("[{}] Acceptor loop exited: completed={} hasNextLine={}", jobId, completed.get(), false);
+                log.debug("[{}] Acceptor loop exited: completed={}", jobId, completed.get());
             } catch (Exception e) {
-                log.info("[{}] Acceptor exception: {}", jobId, e.getMessage());
+                log.debug("[{}] Acceptor exception: {}", jobId, e.getMessage());
                 if (!completed.get()) {
-                    failError.set("Socket error: " + e.getMessage());
-                    completed.set(true);
-                    latch.countDown();
+                    controlError.set("Socket error: " + e.getMessage());
                 }
             }
         });
@@ -139,21 +187,19 @@ public class ProcessSupervisor {
         acceptor.start();
 
         try {
-            log.info("[{}] Main thread waiting for process or latch", jobId);
+            log.trace("[{}] Main thread waiting for process or latch", jobId);
             // Wait for either the latch (COMPLETE/FAIL message) or process death
             while (!completed.get() && process.isAlive()) {
                 if (latch.await(1, TimeUnit.SECONDS)) {
                     break;
                 }
             }
-            log.info("[{}] Main thread unblocked: completed={} processAlive={}", jobId, completed.get(), process.isAlive());
+            log.trace("[{}] Main thread unblocked: completed={} processAlive={}", jobId, completed.get(), process.isAlive());
             if (!completed.get()) {
                 int exitCode = process.exitValue();
-                log.info("[{}] Process exited with code {}", jobId, exitCode);
+                log.debug("[{}] Process exited with code {}", jobId, exitCode);
                 if (exitCode != 0) {
-                    if (stderrFile != null && stderrFile.exists()) {
-                        log.error("[{}] Worker process stderr: {}", jobId, Files.readString(stderrFile.toPath()));
-                    }
+                    logWorkerStderr(stderrFile);
                     throw new RuntimeException("Process exited abruptly with code " + exitCode);
                 }
             }
@@ -169,6 +215,9 @@ public class ProcessSupervisor {
         if (resultFile.exists()) {
             return Files.readAllBytes(resultFile.toPath());
         }
+        if (controlError.get() != null) {
+            throw new RuntimeException(controlError.get());
+        }
         return null;
     }
 
@@ -176,26 +225,17 @@ public class ProcessSupervisor {
         if (!killed.compareAndSet(false, true)) {
             return;
         }
-        log.info("ProcessSupervisor.kill() called for job {}", jobId);
-        // #region agent log
-        boolean wasAlive = process != null && process.isAlive();
-        com.aegisos.core.util.DebugLogger.log("ProcessSupervisor.java:174", "kill() invoked",
-            java.util.Map.of("jobId", jobId, "processNull", process == null, "processAlive", wasAlive), "A", "pre-fix");
-        // #endregion
+        log.debug("ProcessSupervisor.kill() called for job {}", jobId);
         if (process == null) {
-            log.warn("Cannot kill process for job {} because process is null", jobId);
+            log.debug("Cannot kill process for job {} because process is null", jobId);
         } else if (!process.isAlive()) {
-            log.warn("Cannot kill process for job {} because process is no longer alive", jobId);
+            log.debug("Cannot kill process for job {} because process is no longer alive", jobId);
         } else {
-            log.info("Killing process tree for job {}", jobId);
+            log.debug("Killing process tree for job {}", jobId);
             process.descendants().forEach(ProcessHandle::destroyForcibly);
             process.destroyForcibly();
             try {
                 boolean exited = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS);
-                // #region agent log
-                com.aegisos.core.util.DebugLogger.log("ProcessSupervisor.java:184", "destroyForcibly result",
-                    java.util.Map.of("jobId", jobId, "exited", exited, "exitCode", process.isAlive() ? "still-alive" : String.valueOf(process.exitValue())), "A", "pre-fix");
-                // #endregion
                 if (!exited) {
                     log.warn("Process for job {} did not exit within 2 seconds after destroyForcibly", jobId);
                 }
@@ -204,6 +244,27 @@ public class ProcessSupervisor {
             }
         }
         closeSockets();
+    }
+
+    private void logWorkerStderr(File stderrFile) {
+        try {
+            if (stderrFile == null || !stderrFile.exists()) {
+                log.debug("[{}] Worker process stderr is unavailable", jobId);
+                return;
+            }
+            String stderr = Files.readString(stderrFile.toPath());
+            if (stderr.isBlank()) {
+                log.debug("[{}] Worker process exited non-zero with empty stderr", jobId);
+                return;
+            }
+            if (killed.get()) {
+                log.debug("[{}] Worker process stderr after supervisor kill: {}", jobId, stderr);
+            } else {
+                log.error("[{}] Worker process stderr: {}", jobId, stderr);
+            }
+        } catch (Exception e) {
+            log.debug("[{}] Failed to read worker stderr: {}", jobId, e.getMessage());
+        }
     }
     
     public void cleanupFiles() {
@@ -222,5 +283,24 @@ public class ProcessSupervisor {
         try { if (in != null) in.close(); } catch (Exception e) {}
         try { if (clientSocket != null) clientSocket.close(); } catch (Exception e) {}
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception e) {}
+    }
+
+    private String readAsciiLine(java.io.DataInputStream in) throws java.io.IOException {
+        StringBuilder sb = new StringBuilder();
+        while (true) {
+            int b;
+            try {
+                b = in.readByte();
+            } catch (java.io.EOFException e) {
+                return sb.length() > 0 ? sb.toString() : null;
+            }
+            if (b == '\n') {
+                break;
+            }
+            if (b != '\r') {
+                sb.append((char) (b & 0xFF));
+            }
+        }
+        return sb.toString();
     }
 }

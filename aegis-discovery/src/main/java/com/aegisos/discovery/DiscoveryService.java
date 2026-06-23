@@ -37,13 +37,17 @@ public final class DiscoveryService implements AutoCloseable {
     private final RoutingTable routingTable;
     private final KademliaRouter router;
     private final ScheduledExecutorService maintenance =
-            Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+            com.aegisos.core.ExecutorRegistry.register("discoveryMaint", Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-discovery-maint");
+                t.setDaemon(true);
+                return t;
+            }));
 
-    public DiscoveryService(NetworkLayer network, IdentityService identity, String selfAddress, com.aegisos.proto.NodeRole role) {
+    public DiscoveryService(NetworkLayer network, IdentityService identity, String selfAddress, com.aegisos.proto.NodeRole role, com.aegisos.core.telemetry.ResourceMonitor resourceMonitor) {
         this.network = network;
         this.identity = identity;
         this.membership = new MembershipList(identity.nodeId(), identity.publicKey(),
-                selfAddress, role, DEFAULT_INTERVAL_MS);
+                selfAddress, role, DEFAULT_INTERVAL_MS, resourceMonitor);
         this.gossip = new GossipProtocol(network, membership, DEFAULT_FANOUT, DEFAULT_INTERVAL_MS);
         this.routingTable = new RoutingTable(identity.nodeId());
         this.router = new KademliaRouter(network, routingTable,
@@ -59,11 +63,12 @@ public final class DiscoveryService implements AutoCloseable {
             connectToSeed(seed);
         }
         maintenance.scheduleAtFixedRate(this::syncRoutingTable,
-                DEFAULT_INTERVAL_MS, DEFAULT_INTERVAL_MS, TimeUnit.MILLISECONDS);
-        log.info("Discovery started with {} seed(s)", seeds.size());
+                com.aegisos.core.SchedulerJitter.jitter(DEFAULT_INTERVAL_MS, DEFAULT_INTERVAL_MS), DEFAULT_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        log.debug("Discovery started with {} seed(s)", seeds.size());
     }
 
     private void connectToSeed(Endpoint seed) {
+        log.debug("Connecting to seed {}", seed);
         try {
             NodeId peerId = network.connect(seed);
             Optional<byte[]> key = identity.getPublicKey(peerId);
@@ -71,9 +76,9 @@ public final class DiscoveryService implements AutoCloseable {
                 membership.observe(peerId, k, seed);
                 routingTable.add(peerId);
             });
-            log.info("Connected to seed {} ({})", seed, peerId.shortId());
+            log.debug("Connected to seed {} ({})", seed, peerId.shortId());
         } catch (IOException e) {
-            log.warn("Could not reach seed {}: {}", seed, e.getMessage());
+            log.warn("DISCOVERY FAIL: Could not reach seed {}: {}", seed, e.getMessage());
         }
     }
 

@@ -36,6 +36,7 @@ import java.util.function.Supplier;
 public final class RaftNode {
 
     private static final Logger log = LoggerFactory.getLogger(RaftNode.class);
+    private static final boolean DIAG = Boolean.getBoolean("aegis.diag");
 
     private static final long ELECTION_MIN_MS = 150;
     private static final long ELECTION_MAX_MS = 300;
@@ -49,10 +50,16 @@ public final class RaftNode {
     private final Supplier<List<NodeId>> votingPeers;
     private final Supplier<List<NodeId>> allPeers;
     private final java.util.function.BooleanSupplier isVotingMember;
+    private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
 
     private final ReentrantLock lock = new ReentrantLock();
     private final ScheduledExecutorService scheduler =
-            Executors.newScheduledThreadPool(2, r -> Thread.ofVirtual().unstarted(r));
+            com.aegisos.core.ExecutorRegistry.register("raftTimer", Executors.newScheduledThreadPool(2, r -> {
+                Thread t = new Thread(r);
+                t.setDaemon(true);
+                t.setName("aegis-raft-sched");
+                return t;
+            }));
     private final ElectionTimer electionTimer;
 
     private volatile RaftRole role = RaftRole.FOLLOWER;
@@ -61,6 +68,13 @@ public final class RaftNode {
     private long lastApplied = 0;
     private final LogReplicator replicator;
     private final Map<Long, CompletableFuture<Long>> pending = new ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentSkipListMap<Long, List<CompletableFuture<Void>>> awaitAppliedPending = new java.util.concurrent.ConcurrentSkipListMap<>();
+
+    private long lastHeartbeatTick = System.currentTimeMillis();
+    private volatile long lastLeaderMessageTick = System.currentTimeMillis();
+    private long lastHeartbeatDiag = 0;
+    private final AtomicInteger queuedBroadcasts = new AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicLong preVoteStarts = new java.util.concurrent.atomic.AtomicLong(0);
 
     // --- snapshot support ---
     private final AtomicInteger snapshotCreatedCount = new AtomicInteger(0);
@@ -89,7 +103,8 @@ public final class RaftNode {
                     RaftTransport transport, RaftStateMachine stateMachine,
                     Supplier<List<NodeId>> votingPeers,
                     Supplier<List<NodeId>> allPeers,
-                    java.util.function.BooleanSupplier isVotingMember) {
+                    java.util.function.BooleanSupplier isVotingMember,
+                    com.aegisos.core.observability.MetricsRegistry metricsRegistry) {
         this.self = self;
         this.raftLog = raftLog;
         this.metadata = metadata;
@@ -99,14 +114,18 @@ public final class RaftNode {
         this.allPeers = allPeers;
         this.isVotingMember = isVotingMember;
         this.replicator = new LogReplicator();
+        this.metricsRegistry = metricsRegistry;
         this.electionTimer = new ElectionTimer(scheduler, ELECTION_MIN_MS, ELECTION_MAX_MS,
                 this::onElectionTimeout);
+        if (metricsRegistry != null) {
+            metricsRegistry.gauge("aegis_raft_current_term").set(metadata.currentTerm());
+        }
     }
 
     public void start() {
         electionTimer.reset();
         scheduler.scheduleAtFixedRate(this::heartbeatTick, HEARTBEAT_MS, HEARTBEAT_MS, TimeUnit.MILLISECONDS);
-        log.info("Raft node {} started as FOLLOWER (term {}, snapshotIndex={})",
+        log.debug("Raft node {} started as FOLLOWER (term {}, snapshotIndex={})",
                 self.shortId(), metadata.currentTerm(), raftLog.snapshotIndex());
     }
 
@@ -143,7 +162,7 @@ public final class RaftNode {
                         snapshotLoader.load(snapshotData);
                         lastApplied = raftLog.snapshotIndex();
                         commitIndex = raftLog.snapshotIndex();
-                        log.info("Loaded snapshot on startup: lastApplied={}, commitIndex={}",
+                        log.debug("Loaded snapshot on startup: lastApplied={}, commitIndex={}",
                                 lastApplied, commitIndex);
                     } catch (Exception e) {
                         log.warn("Failed to load snapshot, falling back to full log replay: {}", e.toString());
@@ -154,29 +173,20 @@ public final class RaftNode {
                 }
             }
 
-            // Replay remaining log entries after the snapshot
+            // Do NOT replay uncommitted log entries on startup.
+            // Raft safety requires that we only apply entries when they are known to be committed.
+            // Uncommitted entries that survived on disk must wait for an active leader to confirm them.
+            // lastApplied and commitIndex remain at 0 (or snapshotIndex if a snapshot was loaded).
+            
             long lastOnDisk = raftLog.lastIndex();
-            if (lastOnDisk == 0 && lastApplied == 0) {
-                return; // fresh node, nothing to replay
+            long uncommitted = lastOnDisk - lastApplied;
+            if (uncommitted > 0) {
+                log.debug("Raft node {} has {} uncommitted log entries on disk (from {} to {}). Waiting for leader to advance commitIndex.",
+                        self.shortId(), uncommitted, lastApplied + 1, lastOnDisk);
+            } else {
+                log.debug("Raft node {} startup complete. No uncommitted entries. (lastApplied={}, commitIndex={})",
+                        self.shortId(), lastApplied, commitIndex);
             }
-            long toReplay = lastOnDisk - lastApplied;
-            if (toReplay > 0) {
-                log.info("Raft node {} replaying {} log entries from disk on startup (from {} to {})",
-                        self.shortId(), toReplay, lastApplied + 1, lastOnDisk);
-            }
-            while (lastApplied < lastOnDisk) {
-                lastApplied++;
-                RaftLogEntry entry = raftLog.get(lastApplied);
-                if (entry != null) {
-                    try {
-                        stateMachine.apply(entry.getIndex(), entry.getCommand().toByteArray());
-                    } catch (Exception e) {
-                        log.error("State machine replay failed at index {}: {}", lastApplied, e.toString());
-                    }
-                }
-            }
-            commitIndex = lastApplied;
-            log.info("Raft node {} startup replay complete (lastApplied={}, commitIndex={})", self.shortId(), lastApplied, commitIndex);
         } finally {
             lock.unlock();
         }
@@ -185,6 +195,33 @@ public final class RaftNode {
     public void stop() {
         electionTimer.stop();
         scheduler.shutdownNow();
+
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(2, TimeUnit.SECONDS);
+            if (!locked) {
+                failAwaitAppliedPending(new RuntimeException("RaftNode is shutting down"));
+                log.warn("Timed out waiting for Raft lock during shutdown on {}", self.shortId());
+                return;
+            }
+            failAwaitAppliedPending(new RuntimeException("RaftNode is shutting down"));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            failAwaitAppliedPending(new RuntimeException("RaftNode shutdown interrupted", e));
+        } finally {
+            if (locked) {
+                lock.unlock();
+            }
+        }
+    }
+
+    private void failAwaitAppliedPending(Throwable cause) {
+        for (List<CompletableFuture<Void>> list : awaitAppliedPending.values()) {
+            for (CompletableFuture<Void> f : list) {
+                f.completeExceptionally(cause);
+            }
+        }
+        awaitAppliedPending.clear();
     }
 
     public RaftRole role() {
@@ -211,6 +248,14 @@ public final class RaftNode {
         return commitIndex;
     }
 
+    public long lastLeaderMessageTick() {
+        return lastLeaderMessageTick;
+    }
+
+    public long getPreVoteStarts() {
+        return preVoteStarts.get();
+    }
+
     public long lastApplied() {
         return lastApplied;
     }
@@ -223,11 +268,29 @@ public final class RaftNode {
         return replicator.matchIndex(peer);
     }
 
+    public CompletableFuture<Void> awaitApplied(long targetIndex) {
+        lock.lock();
+        try {
+            if (lastApplied >= targetIndex) {
+                return CompletableFuture.completedFuture(null);
+            }
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            awaitAppliedPending.computeIfAbsent(targetIndex, k -> new java.util.ArrayList<>()).add(future);
+            return future;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     public RaftLog raftLog() {
         return raftLog;
     }
 
     // --- client submission ----------------------------------------------
+
+    public int getPendingCount() {
+        return pending.size();
+    }
 
     /** Leader-only: appends a command and completes when it is committed. */
     public CompletableFuture<Long> submit(byte[] command) {
@@ -247,7 +310,14 @@ public final class RaftNode {
         } finally {
             lock.unlock();
         }
-        scheduler.execute(this::broadcastAppendEntries);
+        
+        int qSize = queuedBroadcasts.getAndIncrement();
+        if (qSize == 0) {
+            scheduler.execute(() -> {
+                queuedBroadcasts.set(0);
+                this.broadcastAppendEntries();
+            });
+        }
         return future;
     }
 
@@ -263,15 +333,86 @@ public final class RaftNode {
                 electionTimer.reset();
                 return;
             }
+            startPreVote();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void startPreVote() {
+        // PreVote: do NOT increment term, do NOT change role.
+        // Only proceed to real election if a majority grants the pre-vote.
+        long preVoteTerm = metadata.currentTerm() + 1;
+        long lastLogIndex = raftLog.lastIndex();
+        long lastLogTerm = raftLog.lastTerm();
+        List<NodeId> peers = votingPeers.get();
+        int clusterSize = peers.size() + 1;
+        int majority = clusterSize / 2 + 1;
+        AtomicInteger votes = new AtomicInteger(1); // pre-vote for self
+
+        preVoteStarts.incrementAndGet();
+        diag("RAFT_DIAG event=PRE_VOTE_STARTED node={} preVoteTerm={} cluster={}", self.shortId(), preVoteTerm, clusterSize);
+
+        RequestVote req = RequestVote.newBuilder()
+                .setTerm(preVoteTerm)
+                .setCandidateId(ByteString.copyFrom(self.toBytes()))
+                .setLastLogIndex(lastLogIndex)
+                .setLastLogTerm(lastLogTerm)
+                .build();
+
+        electionTimer.reset();
+
+        if (votes.get() >= majority) {
             startElection();
+            return;
+        }
+
+        for (NodeId peer : peers) {
+            transport.sendPreVote(peer, req).whenComplete((result, err) -> {
+                if (err != null || result == null) {
+                    return;
+                }
+                handlePreVoteResponse(preVoteTerm, majority, votes, result);
+            });
+        }
+    }
+
+    private void handlePreVoteResponse(long preVoteTerm, int majority,
+                                       AtomicInteger votes, RequestVoteResult result) {
+        lock.lock();
+        try {
+            // If our term changed since we sent the pre-vote, discard
+            if (metadata.currentTerm() + 1 != preVoteTerm) {
+                diag("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_TERM node={}", self.shortId());
+                return;
+            }
+            // If we're already leader, discard
+            if (role == RaftRole.LEADER) {
+                diag("RAFT_DIAG event=PRE_VOTE_RESP_DISCARD_ROLE node={}", self.shortId());
+                return;
+            }
+            // Do NOT step down on higher term — this is pre-vote
+            if (result.getVoteGranted()) {
+                diag("RAFT_DIAG event=PRE_VOTE_RESP_GRANTED node={} from=peer votes={}/{}", self.shortId(), (votes.get()+1), majority);
+                if (votes.incrementAndGet() >= majority) {
+                    diag("RAFT_DIAG event=PRE_VOTE_GRANTED node={} preVoteTerm={}", self.shortId(), preVoteTerm);
+                    startElection();
+                }
+            } else {
+                diag("RAFT_DIAG event=PRE_VOTE_RESP_REJECTED node={} respTerm={}", self.shortId(), result.getTerm());
+            }
         } finally {
             lock.unlock();
         }
     }
 
     private void startElection() {
+        log.debug("TRANSITION: {} -> CANDIDATE", role);
         long newTerm = metadata.currentTerm() + 1;
         metadata.setCurrentTerm(newTerm);
+        if (metricsRegistry != null) {
+            metricsRegistry.gauge("aegis_raft_current_term").set(newTerm);
+        }
         metadata.setVotedFor(self.toHex());
         role = RaftRole.CANDIDATE;
         leaderId = null;
@@ -284,6 +425,7 @@ public final class RaftNode {
         int majority = clusterSize / 2 + 1;
         AtomicInteger votes = new AtomicInteger(1); // vote for self
 
+        diag("RAFT_DIAG event=ELECTION_STARTED node={} term={} cluster={}", self.shortId(), newTerm, clusterSize);
         log.info("Node {} starting election for term {} (cluster {}, majority {})",
                 self.shortId(), newTerm, clusterSize, majority);
 
@@ -329,6 +471,11 @@ public final class RaftNode {
     }
 
     private void becomeLeader() {
+        log.debug("TRANSITION: {} -> LEADER", role);
+        if (role != RaftRole.LEADER && metricsRegistry != null) {
+            metricsRegistry.counter("aegis_raft_leader_changes_total").increment();
+        }
+        diag("RAFT_DIAG event=LEADER_ELECTED node={} term={}", self.shortId(), metadata.currentTerm());
         role = RaftRole.LEADER;
         leaderId = self;
         electionTimer.stop();
@@ -349,6 +496,13 @@ public final class RaftNode {
     // --- replication / heartbeats ---------------------------------------
 
     private void heartbeatTick() {
+        long now = System.currentTimeMillis();
+        long drift = now - lastHeartbeatTick;
+        if (drift > 100) {
+            log.debug("Heartbeat delayed by {} ms", drift);
+        }
+        lastHeartbeatTick = now;
+
         if (role == RaftRole.LEADER) {
             broadcastAppendEntries();
         }
@@ -519,16 +673,24 @@ public final class RaftNode {
                 }
             }
         }
+        
+        java.util.Map<Long, List<CompletableFuture<Void>>> ready = awaitAppliedPending.headMap(lastApplied, true);
+        for (List<CompletableFuture<Void>> list : ready.values()) {
+            for (CompletableFuture<Void> f : list) {
+                f.complete(null);
+            }
+        }
+        ready.clear();
+        
         // Check snapshot trigger (outside the apply loop for efficiency)
         maybeSnapshot();
     }
 
-    /** Checks if a snapshot should be triggered based on configured thresholds. */
     private void maybeSnapshot() {
-        if (role != RaftRole.LEADER || snapshotTaker == null || snapshotDir == null) {
+        if (snapshotTaker == null || snapshotDir == null) {
             return;
         }
-        long entriesSinceSnapshot = commitIndex - raftLog.snapshotIndex();
+        long entriesSinceSnapshot = lastApplied - raftLog.snapshotIndex();
         if (entriesSinceSnapshot >= snapshotEntryThreshold
                 || raftLog.diskSizeBytes() >= snapshotSizeThresholdBytes) {
             triggerSnapshot();
@@ -553,7 +715,7 @@ public final class RaftNode {
                 return; // already have a snapshot at or past this index
             }
 
-            log.info("Triggering snapshot at index={}, term={}", snapIndex, snapTerm);
+            log.debug("Triggering snapshot at index={}, term={}", snapIndex, snapTerm);
             byte[] snapshotData = snapshotTaker.take(snapIndex, snapTerm);
 
             // Atomic write: tmp -> rename
@@ -569,7 +731,7 @@ public final class RaftNode {
             snapshotCreatedCount.incrementAndGet();
             lastSnapshotDurationMs.set(System.currentTimeMillis() - start);
 
-            log.info("Snapshot complete: index={}, term={}, size={} bytes, remaining log entries={}",
+            log.debug("Snapshot complete: index={}, term={}, size={} bytes, remaining log entries={}",
                     snapIndex, snapTerm, snapshotData.length, raftLog.entryCount());
         } catch (Exception e) {
             log.error("Failed to create snapshot: {}", e.toString(), e);
@@ -579,7 +741,16 @@ public final class RaftNode {
     }
 
     private void stepDown(long newTerm) {
-        metadata.setCurrentTerm(newTerm);
+        log.debug("TRANSITION: {} -> FOLLOWER", role);
+        long current = metadata.currentTerm();
+        diag("RAFT_DIAG event=STEPDOWN node={} oldRole={} oldTerm={} newTerm={}", self.shortId(), role, current, newTerm);
+        if (newTerm > current) {
+            metadata.setCurrentTerm(newTerm);
+            if (metricsRegistry != null) {
+                metricsRegistry.gauge("aegis_raft_current_term").set(newTerm);
+            }
+            metadata.setVotedFor(null);
+        }
         role = RaftRole.FOLLOWER;
         leaderId = null;
         failPending(new NotLeaderException(null));
@@ -597,14 +768,15 @@ public final class RaftNode {
         lock.lock();
         try {
             long term = metadata.currentTerm();
+            NodeId candidate = NodeId.of(req.getCandidateId().toByteArray());
             if (req.getTerm() < term) {
                 return voteResult(term, false);
             }
             if (req.getTerm() > term) {
+                diag("RAFT_DIAG event=VOTE_HIGHER_TERM node={} from={} reqTerm={} myTerm={}", self.shortId(), candidate.shortId(), req.getTerm(), term);
                 stepDown(req.getTerm());
                 term = req.getTerm();
             }
-            NodeId candidate = NodeId.of(req.getCandidateId().toByteArray());
             boolean alreadyVoted = metadata.votedFor().isPresent()
                     && !metadata.votedFor().get().equals(candidate.toHex());
             boolean upToDate = raftLog.isUpToDate(req.getLastLogIndex(), req.getLastLogTerm());
@@ -619,21 +791,54 @@ public final class RaftNode {
         }
     }
 
+    public RequestVoteResult handlePreVote(RequestVote req) {
+        lock.lock();
+        try {
+            long term = metadata.currentTerm();
+            // PreVote: do NOT call stepDown(). Do NOT mutate any state.
+
+            // Reject if candidate's hypothetical term is not higher than ours
+            if (req.getTerm() <= term) {
+                diag("RAFT_DIAG event=PRE_VOTE_REJECT_TERM node={} reqTerm={} myTerm={}", self.shortId(), req.getTerm(), term);
+                return voteResult(term, false);
+            }
+
+            // Reject if we believe a leader is alive (received heartbeat recently)
+            long timeSinceLeaderMsg = System.currentTimeMillis() - lastLeaderMessageTick;
+            if (leaderId != null && timeSinceLeaderMsg < ELECTION_MIN_MS) {
+                diag("RAFT_DIAG event=PRE_VOTE_REJECT_LIVENESS node={} leaderId={} time={}", self.shortId(), leaderId.shortId(), timeSinceLeaderMsg);
+                return voteResult(term, false);
+            }
+
+            // Grant if candidate's log is at least as up-to-date as ours
+            boolean upToDate = raftLog.isUpToDate(req.getLastLogIndex(), req.getLastLogTerm());
+            diag("RAFT_DIAG event=PRE_VOTE_UPTODATE_CHECK node={} upToDate={}", self.shortId(), upToDate);
+            return voteResult(term, upToDate);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     public AppendEntriesResult handleAppendEntries(AppendEntries req) {
         lock.lock();
         try {
-            log.info("RaftNode received AppendEntries: prevLogIndex={}, entries={}, leaderCommit={}", req.getPrevLogIndex(), req.getEntriesCount(), req.getLeaderCommit());
+            log.debug("RaftNode received AppendEntries: prevLogIndex={}, entries={}, leaderCommit={}", req.getPrevLogIndex(), req.getEntriesCount(), req.getLeaderCommit());
             long term = metadata.currentTerm();
             if (req.getTerm() < term) {
+                diag("RAFT_DIAG event=AE_REJECTED node={} leaderTerm={} myTerm={}", self.shortId(), req.getTerm(), term);
                 return appendResult(term, false, raftLog.lastIndex());
             }
             if (req.getTerm() > term) {
-                metadata.setCurrentTerm(req.getTerm());
+                stepDown(req.getTerm());
                 term = req.getTerm();
+            } else if (role == RaftRole.LEADER) {
+                stepDown(term);
+            } else {
+                role = RaftRole.FOLLOWER;
             }
-            role = RaftRole.FOLLOWER;
             leaderId = NodeId.of(req.getLeaderId().toByteArray());
             electionTimer.reset();
+            lastLeaderMessageTick = System.currentTimeMillis();
 
             if (req.getPrevLogIndex() > 0) {
                 long localPrevTerm = raftLog.termAt(req.getPrevLogIndex());
@@ -647,6 +852,11 @@ public final class RaftNode {
             if (req.getLeaderCommit() > commitIndex) {
                 commitIndex = Math.min(req.getLeaderCommit(), raftLog.lastIndex());
                 applyCommitted();
+            }
+            long nowHb = System.currentTimeMillis();
+            if (nowHb - lastHeartbeatDiag > 1000) {
+                lastHeartbeatDiag = nowHb;
+                diag("RAFT_DIAG event=HEARTBEAT_ACCEPTED node={} leaderTerm={} leader={}", self.shortId(), term, leaderId.shortId());
             }
             return appendResult(term, true, raftLog.lastIndex());
         } finally {
@@ -663,10 +873,13 @@ public final class RaftNode {
                 return com.aegisos.proto.InstallSnapshotResponse.newBuilder().setTerm(term).setSuccess(false).build();
             }
             if (req.getTerm() > term) {
-                metadata.setCurrentTerm(req.getTerm());
+                stepDown(req.getTerm());
                 term = req.getTerm();
+            } else if (role == RaftRole.LEADER) {
+                stepDown(term);
+            } else {
+                role = RaftRole.FOLLOWER;
             }
-            role = RaftRole.FOLLOWER;
             leaderId = NodeId.of(req.getLeaderId().toByteArray());
             electionTimer.reset();
 
@@ -701,6 +914,14 @@ public final class RaftNode {
             raftLog.installSnapshot(snapIndex, snapTerm);
             lastApplied = snapIndex;
             commitIndex = snapIndex;
+            
+            java.util.Map<Long, List<CompletableFuture<Void>>> ready = awaitAppliedPending.headMap(lastApplied, true);
+            for (List<CompletableFuture<Void>> list : ready.values()) {
+                for (CompletableFuture<Void> f : list) {
+                    f.complete(null);
+                }
+            }
+            ready.clear();
 
             log.info("Installed snapshot from leader {}: index={}, term={}",
                     leaderId.shortId(), snapIndex, snapTerm);
@@ -727,4 +948,10 @@ public final class RaftNode {
     public int installSnapshotSentCount() { return installSnapshotSentCount.get(); }
     public int installSnapshotReceivedCount() { return installSnapshotReceivedCount.get(); }
     public long lastSnapshotDurationMs() { return lastSnapshotDurationMs.get(); }
+
+    private void diag(String pattern, Object... args) {
+        if (DIAG && log.isDebugEnabled()) {
+            log.debug(pattern, args);
+        }
+    }
 }

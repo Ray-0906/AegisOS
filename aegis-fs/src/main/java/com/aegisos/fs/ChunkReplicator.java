@@ -23,15 +23,20 @@ public final class ChunkReplicator {
 
     private static final Logger log = LoggerFactory.getLogger(ChunkReplicator.class);
     private static final long CHUNK_RPC_TIMEOUT_MS = 15_000;
+    private static final long TRANSIENT_FAILURE_LOG_INTERVAL_MS = 5_000;
 
     private final NetworkLayer network;
     private final ChunkStore store;
     private final NodeId self;
+    private final com.aegisos.discovery.DiscoveryService discovery;
+    private final java.util.concurrent.ConcurrentMap<String, java.util.concurrent.atomic.AtomicLong> transientFailureLogAt =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
-    public ChunkReplicator(NetworkLayer network, ChunkStore store, NodeId self) {
+    public ChunkReplicator(NetworkLayer network, ChunkStore store, NodeId self, com.aegisos.discovery.DiscoveryService discovery) {
         this.network = network;
         this.store = store;
         this.self = self;
+        this.discovery = discovery;
     }
 
     public void start() {
@@ -45,6 +50,11 @@ public final class ChunkReplicator {
             store.put(chunkId, data);
             return true;
         }
+        com.aegisos.proto.PeerStatus status = discovery.membership().statusOf(target);
+        if (status != com.aegisos.proto.PeerStatus.ALIVE) {
+            log.debug("Target {} is not ALIVE (status={}), refusing to store chunk", target.shortId(), status);
+            return false;
+        }
         try {
             StoreChunk req = StoreChunk.newBuilder()
                     .setChunkId(ByteString.copyFrom(chunkId))
@@ -54,7 +64,11 @@ public final class ChunkReplicator {
                     req.toByteArray(), CHUNK_RPC_TIMEOUT_MS).get(CHUNK_RPC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             return StoreChunkAck.parseFrom(reply.payload()).getStored();
         } catch (Exception e) {
-            log.warn("storeOn {} failed: {}", target.shortId(), e.toString(), e);
+            if (isTransientNetworkFailure(e)) {
+                logTransientFailure("storeOn", target, e);
+            } else {
+                log.warn("storeOn {} failed: {}", target.shortId(), e.toString(), e);
+            }
             return false;
         }
     }
@@ -64,6 +78,11 @@ public final class ChunkReplicator {
         if (source.equals(self) && store.has(chunkId)) {
             return store.get(chunkId);
         }
+        com.aegisos.proto.PeerStatus status = discovery.membership().statusOf(source);
+        if (status != com.aegisos.proto.PeerStatus.ALIVE) {
+            log.debug("Source {} is not ALIVE (status={}), refusing to fetch chunk", source.shortId(), status);
+            return null;
+        }
         try {
             FetchChunk req = FetchChunk.newBuilder().setChunkId(ByteString.copyFrom(chunkId)).build();
             AegisMessage reply = network.request(source, MessageType.FETCH_CHUNK,
@@ -71,7 +90,11 @@ public final class ChunkReplicator {
             FetchChunkResult result = FetchChunkResult.parseFrom(reply.payload());
             return result.getFound() ? result.getData().toByteArray() : null;
         } catch (Exception e) {
-            log.warn("fetchFrom {} failed: {}", source.shortId(), e.toString(), e);
+            if (isTransientNetworkFailure(e)) {
+                logTransientFailure("fetchFrom", source, e);
+            } else {
+                log.warn("fetchFrom {} failed: {}", source.shortId(), e.toString(), e);
+            }
             return null;
         }
     }
@@ -106,5 +129,54 @@ public final class ChunkReplicator {
             return new AegisMessage(null, msg.sender(), MessageType.FETCH_CHUNK_RESULT,
                     FetchChunkResult.newBuilder().setFound(false).build().toByteArray());
         }
+    }
+
+    private boolean isTransientNetworkFailure(Throwable throwable) {
+        for (Throwable t = throwable; t != null; t = t.getCause()) {
+            if (t instanceof java.util.concurrent.TimeoutException) {
+                return true;
+            }
+            String message = t.getMessage();
+            if (message == null) {
+                continue;
+            }
+            String normalized = message.toLowerCase(java.util.Locale.ROOT);
+            if (normalized.contains("partitioned from")
+                    || normalized.contains("not connected to")
+                    || normalized.contains("network closed")
+                    || normalized.contains("connection is closed")
+                    || normalized.contains("timed out")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void logTransientFailure(String operation, NodeId node, Exception e) {
+        String key = operation + "#" + node.shortId();
+        java.util.concurrent.atomic.AtomicLong lastLogAt = transientFailureLogAt.computeIfAbsent(
+                key, ignored -> new java.util.concurrent.atomic.AtomicLong(0));
+        long now = System.currentTimeMillis();
+        long last = lastLogAt.get();
+        if (now - last >= TRANSIENT_FAILURE_LOG_INTERVAL_MS && lastLogAt.compareAndSet(last, now)) {
+            log.warn("{} {} unavailable: {}", operation, node.shortId(), compactException(e));
+        } else {
+            log.debug("{} {} unavailable", operation, node.shortId(), e);
+        }
+    }
+
+    private String compactException(Throwable throwable) {
+        Throwable root = throwable;
+        while (root.getCause() != null) {
+            root = root.getCause();
+        }
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) {
+            message = throwable.getMessage();
+        }
+        if (message == null || message.isBlank()) {
+            return root.getClass().getSimpleName();
+        }
+        return root.getClass().getSimpleName() + ": " + message.replaceAll("\\s+", " ").trim();
     }
 }

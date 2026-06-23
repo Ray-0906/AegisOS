@@ -52,10 +52,13 @@ public class Phase8Test {
                 .build();
 
         cluster.nodes().get(0).fileSystem().write("/artifacts/" + artifactId, jarBytes);
-        cluster.nodes().get(0).consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
-                .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
-                .setPayload(record.toByteString())
-                .build()).get(5, java.util.concurrent.TimeUnit.SECONDS);
+        com.aegisos.proto.RegisterArtifact regCmd = com.aegisos.proto.RegisterArtifact.newBuilder().setArtifact(record).build();
+        cluster.nodes().get(0).consensus().propose(
+                com.aegisos.proto.StateCommand.newBuilder()
+                        .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
+                        .setPayload(regCmd.toByteString())
+                        .build()
+        ).get(5, java.util.concurrent.TimeUnit.SECONDS);
 
         // wait for all nodes to apply REGISTER_ARTIFACT
         for (com.aegisos.node.AegisNode n : cluster.nodes()) {

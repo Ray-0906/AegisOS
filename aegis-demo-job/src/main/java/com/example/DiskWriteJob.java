@@ -4,7 +4,7 @@ import com.aegisos.runtime.AegisJob;
 import com.aegisos.runtime.JobContext;
 import java.io.File;
 import java.io.FileWriter;
-import java.io.Serializable;
+
 
 public class DiskWriteJob implements AegisJob<String> {
     public DiskWriteJob() {}
@@ -21,8 +21,6 @@ public class DiskWriteJob implements AegisJob<String> {
         return "Done";
     }
 
-    @Override
-    public Serializable captureState() { return null; }
-    @Override
-    public void restoreState(Serializable state) {}
+    
+    
 }

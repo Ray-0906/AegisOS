@@ -11,7 +11,7 @@ import com.aegisos.cli.commands.StartCommand;
 import com.aegisos.cli.commands.StatusCommand;
 import com.aegisos.cli.commands.TestCommand;
 import com.aegisos.cli.commands.AllocatorCommand;
-import com.aegisos.cli.commands.RaftCommand;
+import com.aegisos.cli.commands.AdminCommand;
 import com.aegisos.cli.commands.JobsCommand;
 import picocli.CommandLine;
 
@@ -32,8 +32,12 @@ import picocli.CommandLine;
                 ArtifactCommand.class,
                 TestCommand.class,
                 AllocatorCommand.class,
-                RaftCommand.class,
-                JobsCommand.class
+                AdminCommand.class,
+                JobsCommand.class,
+                com.aegisos.cli.commands.ClusterHealthCommand.class,
+                com.aegisos.cli.commands.HealthCommand.class,
+                com.aegisos.cli.commands.LeaderCommand.class,
+                com.aegisos.cli.commands.ProcessCommand.class
         })
 // NOTE: all subcommands are wired now; their implementations are completed across phases.
 public final class AegisCLI implements Runnable {

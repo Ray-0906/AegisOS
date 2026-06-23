@@ -63,6 +63,8 @@ public class RepairTaskRestartTest {
             NodeConfig config = new NodeConfig()
                     .homeDir(home)
                     .port(0)
+                .restPort(0)
+                .apiPort(0)
                     .advertiseHost("127.0.0.1")
                     .reaperIntervalMs(2_000)
                     .checkpointIntervalMs(1_000);
@@ -186,6 +188,10 @@ public class RepairTaskRestartTest {
 
         // Verify a PENDING repair task exists
         List<RepairTaskStore.RepairTask> tasks = A.fileSystem().repairTaskStore().all();
+        System.out.println("DEBUG: tasks.size() = " + tasks.size());
+        for (RepairTaskStore.RepairTask t : tasks) {
+            System.out.println("DEBUG: task = " + t.repairId() + " status=" + t.status());
+        }
         assertFalse(tasks.isEmpty(), "Phase 2: Repair task store must have at least one task");
 
         // Find the PENDING task
@@ -230,6 +236,8 @@ public class RepairTaskRestartTest {
             NodeConfig config = new NodeConfig()
                     .homeDir(dirs.get(i))
                     .port(0)
+                .restPort(0)
+                .apiPort(0)
                     .advertiseHost("127.0.0.1")
                     .reaperIntervalMs(2_000)
                     .checkpointIntervalMs(1_000);

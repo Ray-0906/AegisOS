@@ -16,6 +16,10 @@ public final class StatusCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        return ClientCommands.runStatus(seeds, jobId);
+        System.err.println("[DEPRECATED] Use: aegis jobs status " + jobId + "\n");
+        JobsStatusCommand cmd = new JobsStatusCommand();
+        cmd.jobId = this.jobId;
+        cmd.seeds = this.seeds;
+        return cmd.call();
     }
 }

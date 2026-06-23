@@ -51,18 +51,34 @@ public class ObservedStateCollector {
                 .setType(com.aegisos.proto.QueryType.LOCAL_CHUNKS)
                 .build();
 
+        java.util.Map<com.aegisos.core.identity.NodeId, java.util.concurrent.CompletableFuture<com.aegisos.core.message.AegisMessage>> futures = new java.util.HashMap<>();
+        
         for (com.aegisos.proto.PeerEntry peer : membership.allPeers()) {
             com.aegisos.core.identity.NodeId targetId = com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray());
             
             if (targetId.equals(self)) continue; // Already did local
 
-            try {
-                com.aegisos.core.message.AegisMessage response = network.request(
-                        targetId,
-                        com.aegisos.core.message.MessageType.CLIENT_QUERY,
-                        query.toByteArray()
-                ).get(5, java.util.concurrent.TimeUnit.SECONDS);
+            futures.put(targetId, network.request(
+                    targetId,
+                    com.aegisos.core.message.MessageType.CLIENT_QUERY,
+                    query.toByteArray()
+            ));
+        }
 
+        try {
+            java.util.concurrent.CompletableFuture.allOf(futures.values().toArray(new java.util.concurrent.CompletableFuture[0]))
+                    .get(3, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception e) {
+            // Best effort: if some timeout, we just collect what we have
+        }
+
+        for (java.util.Map.Entry<com.aegisos.core.identity.NodeId, java.util.concurrent.CompletableFuture<com.aegisos.core.message.AegisMessage>> entry : futures.entrySet()) {
+            try {
+                if (!entry.getValue().isDone() || entry.getValue().isCompletedExceptionally() || entry.getValue().isCancelled()) {
+                    continue; // Skip node on timeout or error
+                }
+                
+                com.aegisos.core.message.AegisMessage response = entry.getValue().get();
                 com.aegisos.proto.ClientQueryResult res = com.aegisos.proto.ClientQueryResult.parseFrom(response.payload());
                 if (!res.getError().isEmpty()) {
                     continue; // Skip node on error
@@ -73,11 +89,10 @@ public class ObservedStateCollector {
                 if (!chunksCsv.isEmpty()) {
                     chunks.addAll(java.util.Arrays.asList(chunksCsv.split(",")));
                 }
-                result.put(targetId, chunks);
-
+                
+                result.put(entry.getKey(), chunks);
             } catch (Exception e) {
-                // Node down or unresponsive, skip it for this observation cycle.
-                // It will be treated as having missing chunks and will be repaired when it comes back.
+                // Ignore parsing errors
             }
         }
         return result;

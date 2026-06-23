@@ -23,6 +23,30 @@ public final class ClusterHarness implements AutoCloseable {
     private Endpoint seedEndpoint;
     private int replicationFactor = 3;
     private int snapshotEntryThreshold = 1000;
+    private int workspaceCleanupDelaySeconds = 300; // default 5m
+    private int repairTaskTimeoutSeconds = 300; // default 5m
+
+    public ClusterHarness() {
+        // H6 instrumentation: set current test name for event correlation
+        String testName = "unknown";
+        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+            if (frame.getClassName().endsWith("Test") && !frame.getClassName().equals(getClass().getName())) {
+                testName = frame.getClassName().substring(frame.getClassName().lastIndexOf('.') + 1);
+                break;
+            }
+        }
+        com.aegisos.consensus.RaftLagMonitor.currentTestName = testName;
+        StatsTracker.dump("TEST_BEGIN", java.util.Collections.emptyList());
+        System.out.println("BEGIN_TIMESTAMP=" + System.currentTimeMillis());
+    }
+
+    public void setRepairTaskTimeoutSeconds(int seconds) {
+        this.repairTaskTimeoutSeconds = seconds;
+    }
+
+    public void setWorkspaceCleanupDelaySeconds(int delay) {
+        this.workspaceCleanupDelaySeconds = delay;
+    }
 
     public void setSnapshotEntryThreshold(int threshold) {
         this.snapshotEntryThreshold = threshold;
@@ -34,9 +58,45 @@ public final class ClusterHarness implements AutoCloseable {
 
     /** Starts {@code n} nodes and returns them. The first node is the seed. */
     public List<AegisNode> start(int n) throws IOException {
+        long t0 = System.currentTimeMillis();
+        Thread monitor = new Thread(() -> {
+            long leaderTime = -1;
+            long discoverTime = -1;
+            while (leaderTime == -1 || discoverTime == -1) {
+                if (leaderTime == -1 && currentLeader() != null) {
+                    leaderTime = System.currentTimeMillis() - t0;
+                    System.out.println("INITIAL_LEADER_ELECTION_DURATION_MS=" + leaderTime);
+                }
+                if (discoverTime == -1) {
+                    try {
+                        boolean all = nodes.size() == n;
+                        if (all) {
+                            for (AegisNode node : nodes) {
+                                if (node.discovery().membership().aliveCount() < n) {
+                                    all = false; break;
+                                }
+                            }
+                            if (all) {
+                                discoverTime = System.currentTimeMillis() - t0;
+                                System.out.println("FULL_CLUSTER_DISCOVERY_DURATION_MS=" + discoverTime);
+                            }
+                        }
+                    } catch (Exception e) {}
+                }
+                try { Thread.sleep(50); } catch (InterruptedException e) { break; }
+            }
+            long bootTime = System.currentTimeMillis() - t0;
+            System.out.println("BOOT_DURATION_MS=" + bootTime);
+        });
+        monitor.start();
+
         for (int i = 0; i < n; i++) {
             addNode();
         }
+
+        System.out.println("BOOT_DURATION=" + (System.currentTimeMillis() - t0));
+        
+        try { monitor.join(1000); } catch (Exception e){}
         return List.copyOf(nodes);
     }
 
@@ -53,9 +113,15 @@ public final class ClusterHarness implements AutoCloseable {
     public AegisNode addNode() throws IOException {
         Path home = Files.createTempDirectory("aegis-node-");
         tempDirs.add(home);
+        return addNodeWithHome(home);
+    }
+
+    public AegisNode addNodeWithHome(Path home) throws IOException {
         NodeConfig config = new NodeConfig()
                 .homeDir(home)
                 .port(0)
+                .restPort(0)
+                .apiPort(0)
                 .advertiseHost("127.0.0.1")
                 .reaperIntervalMs(2_000)
                 .checkpointIntervalMs(1_000)
@@ -63,7 +129,9 @@ public final class ClusterHarness implements AutoCloseable {
                 .snapshotEntryThreshold(snapshotEntryThreshold)
                 .jobSupervisorEnabled(jobSupervisorEnabled)
                 .repairEnabled(repairEnabled)
-                .auditIntervalSeconds(2);
+                .auditIntervalSeconds(2)
+                .workspaceCleanupDelaySeconds(workspaceCleanupDelaySeconds)
+                .repairTaskTimeoutSeconds(repairTaskTimeoutSeconds);
 
         boolean isBootstrap = nodes.isEmpty() && seedEndpoint == null;
         config.bootstrap(isBootstrap);
@@ -79,6 +147,7 @@ public final class ClusterHarness implements AutoCloseable {
         }
 
         AegisNode node = new AegisNode(config);
+        StatsTracker.NODE_COUNT.incrementAndGet();
         node.start();
         if (seedEndpoint == null) {
             // Record the first node's address as the canonical bootstrap seed
@@ -89,38 +158,28 @@ public final class ClusterHarness implements AutoCloseable {
 
         if (!isBootstrap) {
             try {
-                // Find leader node
-                AegisNode leaderNode = null;
-                for (int attempt = 0; attempt < 200; attempt++) {
-                    for (AegisNode existing : nodes) {
-                        if (existing.consensus().isLeader()) {
-                            leaderNode = existing;
-                            break;
-                        }
-                    }
-                    if (leaderNode != null) {
-                        break;
-                    }
-                    Thread.sleep(50);
-                }
+                AegisNode leaderNode = awaitLeader(10_000);
                 if (leaderNode == null) {
                     throw new IllegalStateException("No leader found to add node as voter");
                 }
 
-                final AegisNode finalLeader = leaderNode;
-                // Wait for Gossip to discover the new node and mark it alive
                 boolean joinedGossip = await(30_000, () -> {
-                    com.aegisos.proto.PeerStatus status = finalLeader.discovery().membership().statusOf(node.identity().nodeId());
-                    return status == com.aegisos.proto.PeerStatus.ALIVE || status == com.aegisos.proto.PeerStatus.SUSPECT;
+                    AegisNode leaderSeeingNode = currentLeaderSeeing(node);
+                    return leaderSeeingNode != null;
                 });
                 if (!joinedGossip) {
-                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not join Gossip on leader " + finalLeader.identity().nodeId().shortId() + " within 30s");
+                    AegisNode currentLeader = awaitLeader(1_000);
+                    String leaderId = currentLeader == null ? "none" : currentLeader.identity().nodeId().shortId();
+                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not join Gossip on any leader within 30s (current leader " + leaderId + ")");
                 }
 
-                // Wait for replicator to catch up (so lag is <= 10)
                 boolean caughtUp = await(30_000, () -> {
-                    long leaderLast = finalLeader.consensus().raftNode().lastLogIndex();
-                    long nodeMatch = finalLeader.consensus().raftNode().matchIndex(node.identity().nodeId());
+                    AegisNode currentLeader = currentLeaderSeeing(node);
+                    if (currentLeader == null) {
+                        return false;
+                    }
+                    long leaderLast = currentLeader.consensus().raftNode().lastLogIndex();
+                    long nodeMatch = currentLeader.consensus().raftNode().matchIndex(node.identity().nodeId());
                     return (leaderLast - nodeMatch) <= 10;
                 });
                 if (!caughtUp) {
@@ -132,7 +191,7 @@ public final class ClusterHarness implements AutoCloseable {
                         .setType(com.aegisos.proto.CommandType.ADD_VOTER)
                         .setPayload(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
                         .build();
-                finalLeader.consensus().propose(addCmd).get(30, java.util.concurrent.TimeUnit.SECONDS);
+                proposeOnCurrentLeader(addCmd, node);
 
                 // Wait for the new node to actually apply the ADD_VOTER command and become a voter locally
                 boolean appliedLocally = await(30_000, () -> node.consensus().clusterConfiguration().isVoter(node.identity().nodeId()));
@@ -144,6 +203,198 @@ public final class ClusterHarness implements AutoCloseable {
             }
         }
         return node;
+    }
+
+    private AegisNode awaitLeader(long timeoutMs) throws InterruptedException {
+        final AegisNode[] found = new AegisNode[1];
+        await(timeoutMs, () -> {
+            found[0] = currentLeader();
+            return found[0] != null;
+        });
+        return found[0];
+    }
+
+    public AegisNode currentLeader() {
+        for (AegisNode existing : nodes) {
+            if (existing.consensus().isLeader()) {
+                return existing;
+            }
+        }
+        return null;
+    }
+
+    public boolean hasQuorum() {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            int alive = leader.discovery().membership().aliveCount();
+            return alive >= nodes.size() / 2 + 1;
+        }
+        return false;
+    }
+
+    public com.aegisos.proto.JobState getJobState(String jobId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var job = leader.runtimeAgent().registry().get(jobId);
+            if (job.isPresent()) {
+                return job.get().getState();
+            }
+        }
+        return null;
+    }
+
+    public boolean isJobPresent(String jobId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            return leader.runtimeAgent().registry().get(jobId).isPresent();
+        }
+        return false;
+    }
+
+    public boolean hasCheckpoint(String jobId, int minSequence) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var chk = leader.runtimeAgent().registry().getCheckpoint(jobId);
+            return chk.isPresent() && chk.get().metadata().getSequence() >= minSequence;
+        }
+        return false;
+    }
+
+    public boolean hasPendingRepair(String repairId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            return leader.fileSystem().repairTaskStore().pendingByRepairId(repairId).isPresent();
+        }
+        return false;
+    }
+
+    public boolean hasRepairTask(String repairId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            return leader.fileSystem().repairTaskStore().all().stream()
+                    .anyMatch(t -> t.repairId().equals(repairId));
+        }
+        return false;
+    }
+
+    public boolean hasCheckpoint(String jobId, long minSeq) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var chk = leader.runtimeAgent().registry().getCheckpoint(jobId);
+            return chk.isPresent() && chk.get().metadata().getSequence() >= minSeq;
+        }
+        return false;
+    }
+
+    public boolean isArtifactReadable(AegisNode node, String sha256) {
+        try {
+            return node.api().getProcessManager().downloadArtifact(sha256) != null;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public boolean isJobRecovered(String jobId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var record = leader.runtimeAgent().registry().get(jobId).orElse(null);
+            if (record != null) {
+                boolean isRunningOrCompleted = record.getState() == com.aegisos.proto.JobState.RUNNING 
+                                            || record.getState() == com.aegisos.proto.JobState.COMPLETED;
+                return isRunningOrCompleted && record.getExecutionId() >= 2;
+            }
+        }
+        return false;
+    }
+
+    public boolean isRepairComplete(String repairId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var all = leader.fileSystem().repairTaskStore().all();
+            boolean match = all.stream()
+                    .anyMatch(t -> t.repairId().equals(repairId) && 
+                            t.status() == com.aegisos.fs.audit.RepairTaskStore.TaskStatus.COMPLETE);
+            if (!match) {
+                System.out.println("isRepairComplete FALSE. Current tasks on leader " + leader.identity().nodeId().shortId() + ":");
+                for (var t : all) {
+                    System.out.println("  - " + t.repairId() + " " + t.status());
+                }
+            }
+            return match;
+        }
+        return false;
+    }
+
+    public boolean isArtifactReplicated(String artifactId) {
+        for (AegisNode node : nodes) {
+            boolean hasIt = node.artifactRegistry().listAll().stream()
+                    .anyMatch(a -> a.getArtifactId().equals(artifactId));
+            if (!hasIt) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public boolean isWorkerLeaseExpired(NodeId nodeId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            var allJobs = leader.runtimeAgent().registry().all();
+            boolean hadJobs = false;
+            for (var j : allJobs) {
+                if (!j.getAssignedNodeId().isEmpty()) {
+                    NodeId assigned = NodeId.of(j.getAssignedNodeId().toByteArray());
+                    if (nodeId.equals(assigned)) {
+                        hadJobs = true;
+                        if (j.getState() == com.aegisos.proto.JobState.RUNNING || j.getState() == com.aegisos.proto.JobState.QUEUED) {
+                            return false; // Still active
+                        }
+                    }
+                }
+            }
+            return hadJobs; // Lease expired on all its jobs
+        }
+        return false;
+    }
+
+    public boolean isNodeDead(NodeId nodeId) {
+        AegisNode leader = currentLeader();
+        if (leader != null) {
+            return leader.discovery().membership().statusOf(nodeId) == com.aegisos.proto.PeerStatus.DEAD;
+        }
+        return false;
+    }
+
+    private AegisNode currentLeaderSeeing(AegisNode node) {
+        NodeId nodeId = node.identity().nodeId();
+        for (AegisNode existing : nodes) {
+            if (existing == node || !existing.consensus().isLeader()) {
+                continue;
+            }
+            com.aegisos.proto.PeerStatus status = existing.discovery().membership().statusOf(nodeId);
+            if (status == com.aegisos.proto.PeerStatus.ALIVE || status == com.aegisos.proto.PeerStatus.SUSPECT) {
+                return existing;
+            }
+        }
+        return null;
+    }
+
+    private void proposeOnCurrentLeader(com.aegisos.proto.StateCommand command, AegisNode joiningNode) throws Exception {
+        long deadline = System.currentTimeMillis() + 30_000;
+        Exception lastFailure = null;
+        while (System.currentTimeMillis() < deadline) {
+            AegisNode currentLeader = currentLeaderSeeing(joiningNode);
+            if (currentLeader != null) {
+                try {
+                    currentLeader.consensus().propose(command).get(10, java.util.concurrent.TimeUnit.SECONDS);
+                    return;
+                } catch (Exception e) {
+                    lastFailure = e;
+                }
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("Failed to propose ADD_VOTER on a stable leader", lastFailure);
     }
 
 
@@ -160,6 +411,8 @@ public final class ClusterHarness implements AutoCloseable {
         AegisNode newNode = new AegisNode(new com.aegisos.node.NodeConfig()
                 .homeDir(oldConfig.homeDir())
                 .port(0)
+                .restPort(0)
+                .apiPort(0)
                 .advertiseHost(oldConfig.advertiseHost())
                 .reaperIntervalMs(oldConfig.reaperIntervalMs())
                 .checkpointIntervalMs(oldConfig.checkpointIntervalMs())
@@ -168,6 +421,7 @@ public final class ClusterHarness implements AutoCloseable {
                 .jobSupervisorEnabled(oldConfig.jobSupervisorEnabled())
                 .repairEnabled(oldConfig.repairEnabled())
                 .auditIntervalSeconds(oldConfig.auditIntervalSeconds())
+                .repairTaskTimeoutSeconds(oldConfig.repairTaskTimeoutSeconds())
                 .bootstrap(oldConfig.bootstrap()));
         
         if (!newNode.config().bootstrap()) {
@@ -254,6 +508,8 @@ public final class ClusterHarness implements AutoCloseable {
 
     @Override
     public void close() {
+        System.out.println("END_TIMESTAMP=" + System.currentTimeMillis());
+        StatsTracker.dump("TEST_END", nodes);
         for (AegisNode node : nodes) {
             try {
                 node.close();
@@ -267,14 +523,18 @@ public final class ClusterHarness implements AutoCloseable {
         tempDirs.clear();
     }
 
-    private static void deleteRecursive(java.io.File f) {
+    private static boolean deleteRecursive(java.io.File f) {
+        if (!f.exists()) {
+            return true;
+        }
+        boolean success = true;
         java.io.File[] children = f.listFiles();
         if (children != null) {
             for (java.io.File c : children) {
-                deleteRecursive(c);
+                success &= deleteRecursive(c);
             }
         }
-        //noinspection ResultOfMethodCallIgnored
-        f.delete();
+        boolean deleted = f.delete();
+        return success && deleted;
     }
 }

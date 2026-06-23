@@ -69,7 +69,7 @@ public class TestJobRecovery {
             else nodeToKill = "node1";
             
             System.out.println("Killing " + nodeToKill);
-            Process jcmdP = Runtime.getRuntime().exec("jcmd");
+            Process jcmdP = Runtime.getRuntime().exec(new String[]{"jcmd"});
             Scanner jcmdSc = new Scanner(jcmdP.getInputStream());
             while (jcmdSc.hasNextLine()) {
                 String line = jcmdSc.nextLine();

@@ -1,13 +1,11 @@
 package com.aegisos.cli.commands;
 
-import com.aegisos.cli.client.AegisClient;
-import com.aegisos.proto.ClientQuery;
-import com.aegisos.proto.ClientQueryResult;
-import com.aegisos.proto.MembershipList;
-import com.aegisos.proto.PeerEntry;
-import com.aegisos.proto.QueryType;
+import com.aegisos.api.dto.cluster.NodeResponse;
+import com.aegisos.cli.util.RestCliHelper;
+import com.aegisos.client.AegisClient;
 import picocli.CommandLine;
 
+import java.util.List;
 import java.util.concurrent.Callable;
 
 @CommandLine.Command(name = "nodes", description = "List alive cluster nodes.")
@@ -23,26 +21,18 @@ public final class NodesCommand implements Callable<Integer> {
             return 2;
         }
 
-        try (AegisClient client = new AegisClient()) {
-            client.start();
+        try {
+            AegisClient client = RestCliHelper.createClient(seeds);
+            List<NodeResponse> nodes = client.getNodes();
 
-            ClientQuery query = ClientQuery.newBuilder()
-                    .setType(QueryType.LIST_NODES)
-                    .build();
-
-            ClientQueryResult result = client.query(seeds, query);
-
-            if (!result.getError().isEmpty()) {
-                System.err.println("Query failed: " + result.getError());
-                return 1;
-            }
-
-            MembershipList list = MembershipList.parseFrom(result.getPayload());
-
-            System.out.printf("%-14s %-22s %-8s%n", "NODE", "ADDRESS", "STATUS");
-            for (PeerEntry p : list.getPeersList()) {
-                String id = com.aegisos.core.util.HexUtil.shortId(p.getNodeId().toByteArray());
-                System.out.printf("%-14s %-22s %-8s%n", id, p.getAddress(), p.getStatus());
+            System.out.printf("%-14s %-22s %-8s%n", "NODE", "API_PORT", "STATUS");
+            for (NodeResponse n : nodes) {
+                // Shorten node id for display
+                String id = n.nodeId;
+                if (id != null && id.length() > 12) {
+                    id = id.substring(0, 12);
+                }
+                System.out.printf("%-14s %-22s %-8s%n", id, n.apiPort, n.status);
             }
             return 0;
 

@@ -29,16 +29,16 @@ public class Phase7Test {
     private static File testJar;
     private static String artifactId;
 
+    private static com.aegisos.testing.ClusterAwaiter awaiter;
+
     @BeforeAll
     static void setup() throws Exception {
         cluster = new ClusterHarness();
         cluster.start(3);
+        awaiter = new com.aegisos.testing.ClusterAwaiter(cluster);
         
-        ClusterHarness.await(10000, () -> cluster.nodes().stream()
-                .allMatch(n -> n.consensus().leaderId() != null));
-
-        // Wait for gossip to converge so AegisFS can satisfy replication factor 3
-        ClusterHarness.await(5000, () -> cluster.node(0).discovery().membership().alivePeerIds().size() >= 2);
+        awaiter.awaitLeaderElection(java.time.Duration.ofSeconds(10));
+        awaiter.awaitQuorum(java.time.Duration.ofSeconds(5));
 
         // Create a dummy jar for testing
         testJar = File.createTempFile("dummy-job", ".jar");
@@ -77,14 +77,16 @@ public class Phase7Test {
                 .setStatus(com.aegisos.proto.ArtifactStatus.ARTIFACT_ACTIVE)
                 .build();
 
-        cluster.node(1).consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
-                .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
-                .setPayload(record.toByteString())
-                .build()).get(5, java.util.concurrent.TimeUnit.SECONDS);
+        com.aegisos.proto.RegisterArtifact regCmd = com.aegisos.proto.RegisterArtifact.newBuilder().setArtifact(record).build();
+        cluster.nodes().get(0).consensus().propose(
+                com.aegisos.proto.StateCommand.newBuilder()
+                        .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
+                        .setPayload(regCmd.toByteString())
+                        .build()
+        ).get(5, java.util.concurrent.TimeUnit.SECONDS);
 
-        // Wait for replication to node 2
-        ClusterHarness.await(5000, () -> cluster.node(2).artifactRegistry().listAll()
-                .stream().anyMatch(a -> a.getArtifactId().equals(artifactId)));
+        // Wait for replication
+        awaiter.awaitArtifactReplication(artifactId, java.time.Duration.ofSeconds(5));
 
         List<com.aegisos.proto.ArtifactRecord> artifacts = cluster.node(2).artifactRegistry().listAll();
         assertTrue(artifacts.stream().anyMatch(a -> a.getArtifactId().equals(artifactId)));

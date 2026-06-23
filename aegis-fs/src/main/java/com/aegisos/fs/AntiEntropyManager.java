@@ -28,7 +28,12 @@ public final class AntiEntropyManager implements AutoCloseable {
     private final LocalHealthStore localHealth;
     private final NodeId self;
     private final ConsensusModule consensus;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+    private final ScheduledExecutorService scheduler =
+            com.aegisos.core.ExecutorRegistry.register("antiEntropy", Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-anti-entropy");
+                t.setDaemon(true);
+                return t;
+            }));
 
     public AntiEntropyManager(AegisFS fs, LocalHealthStore localHealth, NodeId self, ConsensusModule consensus) {
         this.fs = fs;
@@ -38,7 +43,7 @@ public final class AntiEntropyManager implements AutoCloseable {
     }
 
     public void start() {
-        scheduler.scheduleWithFixedDelay(this::reconcileSafe, 30, 30, TimeUnit.SECONDS);
+        scheduler.scheduleWithFixedDelay(this::reconcileSafe, com.aegisos.core.SchedulerJitter.jitter(30, 30), 30, TimeUnit.SECONDS);
         log.info("AntiEntropyManager started");
     }
 
@@ -79,13 +84,13 @@ public final class AntiEntropyManager implements AutoCloseable {
 
             // 1. Orphan Cleanup
             List<String> physicalChunks = fs.chunkStore().listChunkIds();
-            log.info("Node {} physical chunks: {}", self.toString(), physicalChunks);
-            log.info("Node {} expected chunks: {}", self.toString(), expectedLocalChunks);
+            log.debug("Node {} physical chunks: {}", self.toString(), physicalChunks);
+            log.debug("Node {} expected chunks: {}", self.toString(), expectedLocalChunks);
             
             for (String physicalId : physicalChunks) {
                 if (!expectedLocalChunks.contains(physicalId)) {
                     boolean older = fs.chunkStore().isOlderThan(HexUtil.decode(physicalId), 30_000);
-                    log.info("Node {} checking orphan {}. isOlderThan: {}", self.toString(), physicalId, older);
+                    log.debug("Node {} checking orphan {}. isOlderThan: {}", self.toString(), physicalId, older);
                     if (older) {
                         log.info("Orphan chunk detected locally: {}. Quarantining.", physicalId);
                         fs.chunkStore().quarantine(HexUtil.decode(physicalId));

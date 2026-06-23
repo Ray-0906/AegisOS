@@ -1,65 +1,30 @@
-# AegisOS Git Ignore Configuration
-
-# Maven Build Output
+# Build outputs
 target/
-**/target/
+dist/
 
-# Log & Debug Files
-*.log
-debug-*.log
-logs/
-
-# Dump / Temporary Files
-dump-*.md
-dump-*.txt
-
-# IDE / Editor Settings
-# VS Code / Cursor
-.cursor/
-.vscode/
-
-# IntelliJ IDEA
+# IDE files
 .idea/
 *.iml
-*.iws
-*.ipr
-out/
+.vscode/
 
-# Eclipse
-.classpath
-.project
-.settings/
-.factorypath
-
-# NetBeans
-nbproject/private/
-nbbuild/
-dist/
-nbdist/
-.nb-gradle/
-
-# OS Specific Files
-.DS_Store
-Thumbs.db
-
-# Other Binary / Temp Files
-*.class
-*.jar
-*.war
-*.ear
-*.swp
-*.bin
-
-*~
-/data
-/node1
-/node2 
-/node3 
-my_test_file.txt
-
-recovered_*.txt
+# Logs
 *.log
-*.txt
+*.err
+*.out
 
-# Benchmarks
-aegis-test-cluster/benchmarks/
+# Mac
+.DS_Store
+
+# Agent
+.gemini/
+
+# Runtime Generated
+
+data/
+test-cluster/
+recovered.txt
+test_downloaded.txt
+build_artifacts/
+test--cluster-n1/
+test--cluster-n2/
+test--cluster-n3/

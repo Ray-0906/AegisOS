@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "debugger": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "skillPath": "skills/debugger/SKILL.md",
+      "computedHash": "05de914bb6b5e13335bc5c7256bbe1c4586bd041a2a716d9fbdd8aa6a808a3bd"
+    }
+  }
+}

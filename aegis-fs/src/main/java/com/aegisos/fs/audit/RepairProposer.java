@@ -67,7 +67,7 @@ public final class RepairProposer {
      * for those that pass all guards.
      * Called after runOnce() on the leader.
      */
-    public List<RepairOutcome> proposeRepairs() {
+    public java.util.List<java.util.concurrent.CompletableFuture<RepairOutcome>> proposeRepairs() {
         // First expire stale tasks
         List<RepairTaskStore.RepairTask> expiredTasks = taskStore.expireStaleTasks(taskTimeoutMs);
         for (RepairTaskStore.RepairTask exp : expiredTasks) {
@@ -75,24 +75,24 @@ public final class RepairProposer {
             proposedRepairIds.remove(exp.repairId());
         }
 
-        List<RepairOutcome> outcomes = new ArrayList<>();
+        java.util.List<java.util.concurrent.CompletableFuture<RepairOutcome>> futures = new ArrayList<>();
         List<RepairRecommendation> recommendations = auditScheduler.getRecommendations();
 
         for (RepairRecommendation rec : recommendations) {
             String chunkIdHex = rec.chunkId();
 
             if (!isFresh(rec)) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.STALE, "Recommendation is stale", null));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.STALE, "Recommendation is stale", null)));
                 continue;
             }
 
             if (hasBlockingTask(chunkIdHex)) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.BLOCKED, "Another repair task is already PENDING for this chunk", null));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.BLOCKED, "Another repair task is already PENDING for this chunk", null)));
                 continue;
             }
 
             if (!reVerifyDivergence(rec)) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.NO_LONGER_NEEDED, "Divergence is no longer valid upon re-verification", null));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.NO_LONGER_NEEDED, "Divergence is no longer valid upon re-verification", null)));
                 continue;
             }
 
@@ -110,18 +110,31 @@ public final class RepairProposer {
                     .setPayload(repairChunkCmd.toByteString())
                     .build();
 
+            proposedRepairIds.add(repairId);
             try {
-                consensus.propose(stateCmd).get(5, TimeUnit.SECONDS);
-                proposedRepairIds.add(repairId);
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.REPAIR_PROPOSED, "REPAIR_CHUNK proposed and committed", repairId));
-                log.info("Successfully proposed REPAIR_CHUNK for chunk {} with repairId {}", chunkIdHex, repairId);
+                java.util.concurrent.CompletableFuture<RepairOutcome> future = consensus.propose(stateCmd).handle((idx, e) -> {
+                    if (e != null) {
+                        log.warn("Failed to propose REPAIR_CHUNK for chunk {}: {}", chunkIdHex, e.toString());
+                        proposedRepairIds.remove(repairId);
+                        return new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Consensus proposal failed: " + e.getMessage(), repairId);
+                    } else {
+                        log.info("Successfully proposed REPAIR_CHUNK for chunk {} with repairId {}", chunkIdHex, repairId);
+                        return new RepairOutcome(chunkIdHex, RepairOutcome.Status.REPAIR_PROPOSED, "REPAIR_CHUNK proposed", repairId);
+                    }
+                });
+                futures.add(future);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                proposedRepairIds.remove(repairId);
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Raft executor shutting down", repairId)));
+                log.debug("Failed to propose REPAIR_CHUNK for chunk {} (node shutting down)", chunkIdHex);
             } catch (Exception e) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Consensus proposal failed: " + e.getMessage(), repairId));
+                proposedRepairIds.remove(repairId);
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Consensus proposal failed: " + e.getMessage(), repairId)));
                 log.warn("Failed to propose REPAIR_CHUNK for chunk {}: {}", chunkIdHex, e.toString());
             }
         }
 
-        return outcomes;
+        return futures;
     }
 
     /**
@@ -129,8 +142,8 @@ public final class RepairProposer {
      * attempt physical copy and propose REPAIR_COMPLETE on success.
      * Called after proposeRepairs() on the leader.
      */
-    public List<RepairOutcome> executeAndComplete() {
-        List<RepairOutcome> outcomes = new ArrayList<>();
+    public java.util.List<java.util.concurrent.CompletableFuture<RepairOutcome>> executeAndComplete() {
+        java.util.List<java.util.concurrent.CompletableFuture<RepairOutcome>> futures = new ArrayList<>();
         List<RepairTaskStore.RepairTask> pendingTasks = taskStore.all();
 
         for (RepairTaskStore.RepairTask task : pendingTasks) {
@@ -163,20 +176,20 @@ public final class RepairProposer {
             }
 
             if (fileMeta == null) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.NO_LONGER_NEEDED, "File containing chunk no longer exists", task.repairId()));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.NO_LONGER_NEEDED, "File containing chunk no longer exists", task.repairId())));
                 proposedRepairIds.remove(task.repairId());
                 continue;
             }
 
             Optional<NodeId> sourceOpt = selectSource(chunkIdHex, fileMeta);
             if (sourceOpt.isEmpty()) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.NO_SOURCE, "No healthy source node holding replica", task.repairId()));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.NO_SOURCE, "No healthy source node holding replica", task.repairId())));
                 continue;
             }
 
             Optional<NodeId> targetOpt = selectTarget(chunkIdHex, fileMeta);
             if (targetOpt.isEmpty()) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.NO_TARGET, "No valid target node available for replication", task.repairId()));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.NO_TARGET, "No valid target node available for replication", task.repairId())));
                 continue;
             }
 
@@ -187,14 +200,14 @@ public final class RepairProposer {
             log.info("Executing copy for chunk {} from source {} to target {}", chunkIdHex, source.shortId(), target.shortId());
             byte[] data = fileSystem.fetchChunk(source, chunkId);
             if (data == null) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.COPY_FAILED, "Failed to fetch chunk from source " + source.shortId(), task.repairId()));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.COPY_FAILED, "Failed to fetch chunk from source " + source.shortId(), task.repairId())));
                 log.warn("Failed to fetch chunk {} from source {}", chunkIdHex, source.shortId());
                 continue;
             }
 
             boolean copySuccess = fileSystem.replicateChunk(target, chunkId, data);
             if (!copySuccess) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.COPY_FAILED, "Failed to store chunk on target " + target.shortId(), task.repairId()));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.COPY_FAILED, "Failed to store chunk on target " + target.shortId(), task.repairId())));
                 log.warn("Failed to store chunk {} on target {}", chunkIdHex, target.shortId());
                 continue;
             }
@@ -214,17 +227,27 @@ public final class RepairProposer {
                     .build();
 
             try {
-                consensus.propose(stateCmd).get(5, TimeUnit.SECONDS);
-                proposedRepairIds.remove(task.repairId());
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.COPY_SUCCEEDED, "REPAIR_COMPLETE proposed and committed", task.repairId()));
-                log.info("Successfully completed repair for chunk {}, target: {}", chunkIdHex, target.shortId());
+                java.util.concurrent.CompletableFuture<RepairOutcome> future = consensus.propose(stateCmd).handle((idx, e) -> {
+                    if (e != null) {
+                        log.warn("Failed to propose REPAIR_COMPLETE for chunk {}: {}", chunkIdHex, e.toString());
+                        return new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Failed to propose REPAIR_COMPLETE: " + e.getMessage(), task.repairId());
+                    } else {
+                        log.info("Successfully completed repair for chunk {}, target: {}", chunkIdHex, target.shortId());
+                        proposedRepairIds.remove(task.repairId());
+                        return new RepairOutcome(chunkIdHex, RepairOutcome.Status.COPY_SUCCEEDED, "REPAIR_COMPLETE proposed", task.repairId());
+                    }
+                });
+                futures.add(future);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Raft executor shutting down", task.repairId())));
+                log.debug("Failed to propose REPAIR_COMPLETE for chunk {} (node shutting down)", chunkIdHex);
             } catch (Exception e) {
-                outcomes.add(new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Failed to propose REPAIR_COMPLETE: " + e.getMessage(), task.repairId()));
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(new RepairOutcome(chunkIdHex, RepairOutcome.Status.PROPOSAL_FAILED, "Failed to propose REPAIR_COMPLETE: " + e.getMessage(), task.repairId())));
                 log.warn("Failed to propose REPAIR_COMPLETE for chunk {}: {}", chunkIdHex, e.toString());
             }
         }
 
-        return outcomes;
+        return futures;
     }
 
     boolean isFresh(RepairRecommendation rec) {
@@ -341,7 +364,7 @@ public final class RepairProposer {
         Map<NodeId, Set<String>> observed = collector.observeRemoteState(
                 network, discovery.membership(), self, fileSystem.chunkStore());
 
-        Set<NodeId> voters = consensus.clusterConfiguration().voters();
+        var voters = consensus.clusterConfiguration().voters();
         for (NodeId voter : voters) {
             if (discovery.membership().statusOf(voter) == PeerStatus.ALIVE) {
                 Set<String> chunks = observed.get(voter);

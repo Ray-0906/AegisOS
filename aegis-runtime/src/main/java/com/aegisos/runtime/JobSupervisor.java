@@ -10,6 +10,7 @@ import com.aegisos.proto.JobState;
 import com.aegisos.proto.PeerStatus;
 import com.aegisos.proto.RunJob;
 import com.aegisos.scheduler.Scheduler;
+import com.aegisos.core.observability.MetricsRegistry;
 import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,11 +51,19 @@ public final class JobSupervisor implements AutoCloseable {
     private final NetworkLayer network;
     private final NodeId self;
     private final ProcessRuntimeAgent agent;
+    private final MetricsRegistry metricsRegistry;
     private final Map<String, Long> recentlyMigrated = new ConcurrentHashMap<>();
     private final Map<String, Long> lastHeartbeat = new ConcurrentHashMap<>();
     private final Map<String, Long> firstSeenQueued = new ConcurrentHashMap<>();
+    private final java.util.Set<String> pendingScheduling = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService executor =
-            Executors.newSingleThreadScheduledExecutor(r -> Thread.ofVirtual().unstarted(r));
+            com.aegisos.core.ExecutorRegistry.register("jobSupervisor", Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-job-supervisor");
+                t.setDaemon(true);
+                return t;
+            }));
+    private final java.util.concurrent.ExecutorService schedulingExecutor =
+            com.aegisos.core.ExecutorRegistry.register("jobWorker", Executors.newVirtualThreadPerTaskExecutor());
 
     /** Tracks whether we were leader on the previous scan, to detect leadership transitions. */
     private volatile boolean wasLeader = false;
@@ -62,21 +71,28 @@ public final class JobSupervisor implements AutoCloseable {
     public final java.util.concurrent.atomic.AtomicLong jobsLost = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong jobsRequeued = new java.util.concurrent.atomic.AtomicLong(0);
 
+    private final TerminalPublicationScheduler terminalScheduler;
+
     public JobSupervisor(DiscoveryService discovery, ConsensusModule consensus,
                                 Scheduler scheduler, NetworkLayer network, NodeId self,
-                                ProcessRuntimeAgent agent) {
+                                ProcessRuntimeAgent agent, MetricsRegistry metricsRegistry) {
         this.discovery = discovery;
         this.consensus = consensus;
         this.scheduler = scheduler;
         this.network = network;
         this.self = self;
         this.agent = agent;
+        this.metricsRegistry = metricsRegistry;
+        this.terminalScheduler = new TerminalPublicationScheduler(consensus, (jobId, execId) -> {
+            java.util.Optional<com.aegisos.proto.JobRecord> opt = agent.registry().get(jobId);
+            return opt.isPresent() && opt.get().getExecutionId() > execId;
+        });
     }
 
     public void start() {
         network.registerHandler(MessageType.JOB_HEARTBEAT, this::onHeartbeat);
-        executor.scheduleAtFixedRate(this::scanSafe, SCAN_INTERVAL_MS, SCAN_INTERVAL_MS, TimeUnit.MILLISECONDS);
-        log.info("Job supervisor started (lease={}ms)", LEASE_DURATION_MS);
+        executor.scheduleAtFixedRate(this::scanSafe, com.aegisos.core.SchedulerJitter.jitter(SCAN_INTERVAL_MS, SCAN_INTERVAL_MS), SCAN_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        log.debug("Job supervisor started (lease={}ms)", LEASE_DURATION_MS);
     }
 
     private com.aegisos.core.message.AegisMessage onHeartbeat(com.aegisos.core.message.AegisMessage msg) {
@@ -108,10 +124,11 @@ public final class JobSupervisor implements AutoCloseable {
 
         // Detect leadership transition: clear stale state from previous leader
         if (!wasLeader) {
-            log.info("Became leader — clearing migration cooldowns and heartbeat state");
+            log.debug("Became leader — clearing migration cooldowns and heartbeat state");
             recentlyMigrated.clear();
             lastHeartbeat.clear();
             firstSeenQueued.clear();
+            pendingScheduling.clear();
             wasLeader = true;
             leadershipAcquiredTime = System.currentTimeMillis();
         }
@@ -127,24 +144,32 @@ public final class JobSupervisor implements AutoCloseable {
             
             // Handle PENDING jobs — schedule them
             if (record.getState() == JobState.PENDING) {
-                try {
-                    NodeId target = scheduler.schedule(record.getSpec(), 1L);
-                    JobRecord assignedRecord = record.toBuilder()
-                            .setAssignedNodeId(ByteString.copyFrom(target.toBytes()))
-                            .setState(JobState.QUEUED)
-                            .setExecutionId(1L)
-                            .build();
-                    if (target.equals(self)) {
-                        agent.dispatchLocal(assignedRecord);
-                    } else {
-                        network.sendAsync(target, MessageType.RUN_JOB,
-                                RunJob.newBuilder().setRecord(assignedRecord).build().toByteArray());
-                    }
-                    log.info("Scheduled PENDING job {} to {}", jobId, target.shortId());
-                } catch (Exception e) {
-                    // It's normal if no node has capacity, we just leave it PENDING
-                    log.info("Could not schedule PENDING job {}: {}", jobId, e.getMessage());
+                if (!pendingScheduling.add(jobId)) {
+                    // Another virtual thread is already scheduling this job
+                    continue;
                 }
+                schedulingExecutor.submit(() -> {
+                    try {
+                        com.aegisos.core.identity.NodeId target = scheduler.schedule(record.getSpec(), 1L, record.getCheckpointFileId());
+                        JobRecord assignedRecord = record.toBuilder()
+                                .setAssignedNodeId(ByteString.copyFrom(target.toBytes()))
+                                .setState(JobState.QUEUED)
+                                .setExecutionId(1L)
+                                .build();
+                        if (target.equals(self)) {
+                            agent.dispatchLocal(assignedRecord);
+                        } else {
+                            network.sendAsync(target, MessageType.RUN_JOB,
+                                    RunJob.newBuilder().setRecord(assignedRecord).build().toByteArray());
+                        }
+                        log.info("Scheduled PENDING job {} to {}", jobId, target.shortId());
+                    } catch (Exception e) {
+                        // It's normal if no node has capacity, we just leave it PENDING
+                        log.debug("Could not schedule PENDING job {}: {}", jobId, e.getMessage());
+                    } finally {
+                        pendingScheduling.remove(jobId);
+                    }
+                });
                 continue;
             }
 
@@ -195,8 +220,11 @@ public final class JobSupervisor implements AutoCloseable {
 
             // RUNNING + lease expired → emit LOST
             if (leaseExpired) {
-                log.info("Job {} on node {}: execution lease expired ({}ms since last heartbeat). Emitting LOST.",
+                log.warn("Job {} on node {}: execution lease expired ({}ms since last heartbeat). Emitting LOST.",
                         jobId, assigned.shortId(), now - lastHeartbeat.getOrDefault(jobId, 0L));
+                if (metricsRegistry != null) {
+                    metricsRegistry.counter("aegis_job_lease_expirations_total").increment();
+                }
                 emitLostState(jobId, record);
             }
         }
@@ -204,32 +232,40 @@ public final class JobSupervisor implements AutoCloseable {
 
     private void emitLostState(String jobId, JobRecord record) {
         try {
-            com.aegisos.proto.JobUpdate lostUpdate = com.aegisos.proto.JobUpdate.newBuilder()
-                    .setJobId(jobId)
-                    .setExecutionId(record.getExecutionId())
-                    .setState(JobState.LOST)
-                    .build();
-            consensus.propose(com.aegisos.proto.StateCommand.newBuilder()
-                    .setType(com.aegisos.proto.CommandType.UPDATE_JOB)
-                    .setPayload(lostUpdate.toByteString())
-                    .build()).get(5, TimeUnit.SECONDS);
+            terminalScheduler.enqueue(jobId, record.getExecutionId(), JobState.LOST, null, null);
             jobsLost.incrementAndGet();
 
             // Test hook for Test Q (Race Condition)
             if (System.getProperty("aegis.test.delay_after_lost") != null) {
-                log.info("TEST HOOK: Pausing Leader after emitting LOST for {}", jobId);
+                log.debug("TEST HOOK: Pausing Leader after emitting LOST for {}", jobId);
                 Thread.sleep(5000);
             }
         } catch (Exception e) {
-            log.warn("Failed to emit LOST state for job {}: {}", jobId, e.getMessage());
+            log.warn("Failed to enqueue LOST state for job {}: {}", jobId, e.getMessage());
         }
     }
+
+    private void emitTerminalFailure(String jobId, JobRecord record, String errorMsg) {
+        try {
+            terminalScheduler.enqueue(jobId, record.getExecutionId(), JobState.FAILED, null, errorMsg);
+            log.warn("Emitted FAILED for job {} due to: {}", jobId, errorMsg);
+        } catch (Exception e) {
+            log.warn("Failed to enqueue FAILED state for job {}: {}", jobId, e.getMessage());
+        }
+    }
+
+    private static final int DEFAULT_MAX_RETRIES = 3;
 
     private void requeueJob(String jobId, JobRecord record) {
         try {
             long nextExecutionId = record.getExecutionId() + 1;
+            if (nextExecutionId > DEFAULT_MAX_RETRIES + 1) {
+                log.warn("Job {} exceeded max retries ({}). Marking FAILED.", jobId, DEFAULT_MAX_RETRIES);
+                emitTerminalFailure(jobId, record, "exceeded max retries (" + DEFAULT_MAX_RETRIES + ")");
+                return;
+            }
 
-            NodeId newNode = scheduler.schedule(record.getSpec(), nextExecutionId);
+            com.aegisos.core.identity.NodeId newNode = scheduler.schedule(record.getSpec(), nextExecutionId, record.getCheckpointFileId());
 
             // Send cancel to old node — even if it appears dead, it might come back.
             // MUST be done AFTER schedule() commits the new executionId, so if the old node
@@ -238,8 +274,12 @@ public final class JobSupervisor implements AutoCloseable {
             if (!oldNode.equals(self)) {
                 log.info("Sending CANCEL_JOB to old node {} for job {} (superseded by executionId={})",
                         oldNode.shortId(), jobId, nextExecutionId);
-                network.sendAsync(oldNode, MessageType.CANCEL_JOB,
-                        jobId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                try {
+                    network.sendAsync(oldNode, MessageType.CANCEL_JOB,
+                            jobId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Exception e) {
+                    log.debug("Failed to send CANCEL_JOB to old node (it may be dead): {}", e.getMessage());
+                }
             }
 
             JobRecord resumed = record.toBuilder()
@@ -264,6 +304,17 @@ public final class JobSupervisor implements AutoCloseable {
 
     @Override
     public void close() {
+        log.debug("JobSupervisor shutdown starting: pendingSchedulingSize={}", pendingScheduling.size());
+        terminalScheduler.shutdown();
         executor.shutdownNow();
+        schedulingExecutor.shutdownNow();
+        try {
+            executor.awaitTermination(2, TimeUnit.SECONDS);
+            schedulingExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        log.debug("JobSupervisor shutdown complete: executor.isTerminated={}, schedulingExecutor.isTerminated={}",
+                 executor.isTerminated(), schedulingExecutor.isTerminated());
     }
 }

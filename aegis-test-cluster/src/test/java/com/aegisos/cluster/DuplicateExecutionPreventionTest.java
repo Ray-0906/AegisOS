@@ -69,10 +69,10 @@ public class DuplicateExecutionPreventionTest {
             @SuppressWarnings("unchecked")
             Map<String, Long> lastHeartbeat = (Map<String, Long>) lhField.get(js);
 
-            // Force lease expiration: keep clearing lastHeartbeat for 16 seconds.
-            // The supervisor scans every 3s and requires 15s of no heartbeat.
+            // Force lease expiration: keep clearing lastHeartbeat for 25 seconds.
+            // The supervisor scans every 3s and requires 15s of no heartbeat. Worst case 23s.
             System.out.println("Dropping heartbeats to simulate network partition...");
-            long deadline = System.currentTimeMillis() + 16_000;
+            long deadline = System.currentTimeMillis() + 25_000;
             while (System.currentTimeMillis() < deadline) {
                 lastHeartbeat.remove(handle.jobId());
                 Thread.sleep(100);

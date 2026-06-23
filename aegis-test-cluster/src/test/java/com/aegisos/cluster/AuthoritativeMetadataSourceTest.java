@@ -50,6 +50,8 @@ public class AuthoritativeMetadataSourceTest {
             NodeConfig config = new NodeConfig()
                     .homeDir(home)
                     .port(0)
+                .restPort(0)
+                .apiPort(0)
                     .advertiseHost("127.0.0.1");
             
             boolean isBootstrap = nodes.isEmpty();
@@ -65,6 +67,7 @@ public class AuthoritativeMetadataSourceTest {
             if (!isBootstrap) {
                 // Wait for Gossip and replicator catch up, then add voter.
                 AegisNode leader = nodes.get(0);
+                ClusterHarness.await(10000, () -> leader.consensus().isLeader());
                 ClusterHarness.await(10000, () -> {
                     com.aegisos.proto.PeerStatus status = leader.discovery().membership().statusOf(node.identity().nodeId());
                     return status == com.aegisos.proto.PeerStatus.ALIVE || status == com.aegisos.proto.PeerStatus.SUSPECT;
@@ -112,6 +115,8 @@ public class AuthoritativeMetadataSourceTest {
             NodeConfig config = new NodeConfig()
                     .homeDir(dirs.get(i))
                     .port(0)
+                .restPort(0)
+                .apiPort(0)
                     .advertiseHost("127.0.0.1");
             
             if (!nodes.isEmpty()) {

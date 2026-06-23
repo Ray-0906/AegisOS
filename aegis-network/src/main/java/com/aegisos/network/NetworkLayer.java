@@ -49,17 +49,33 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     private final HandshakeHandler handshakeHandler;
     private final TcpConnectionPool pool = new TcpConnectionPool();
     private final Map<MessageType, MessageHandler> handlers = new ConcurrentHashMap<>();
-    private final Map<Long, CompletableFuture<AegisMessage>> pending = new ConcurrentHashMap<>();
+    private static class PendingRequest {
+        final NodeId target;
+        final CompletableFuture<AegisMessage> future;
+        
+        PendingRequest(NodeId target, CompletableFuture<AegisMessage> future) {
+            this.target = target;
+            this.future = future;
+        }
+    }
+
+    private final Map<Long, PendingRequest> pending = new ConcurrentHashMap<>();
     private final AtomicLong correlationCounter = new AtomicLong(1);
+    
+    private final Map<String, VirtualInputStream> activeStreams = new ConcurrentHashMap<>();
 
-    private static volatile java.util.function.BiPredicate<NodeId, NodeId> messageFilter = (from, to) -> true;
+    public interface MessageFilter {
+        boolean test(NodeId from, NodeId to, MessageType type, byte[] payload);
+    }
 
-    public static void setMessageFilter(java.util.function.BiPredicate<NodeId, NodeId> filter) {
-        messageFilter = filter != null ? filter : (from, to) -> true;
+    private static volatile MessageFilter messageFilter = (from, to, type, payload) -> true;
+
+    public static void setMessageFilter(MessageFilter filter) {
+        messageFilter = filter != null ? filter : (from, to, type, payload) -> true;
     }
 
     public static void clearMessageFilter() {
-        messageFilter = (from, to) -> true;
+        messageFilter = (from, to, type, payload) -> true;
     }
 
     /**
@@ -93,7 +109,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
      * block gracefully on I/O, and impose no artificial parallelism limit.
      */
     private final ExecutorService handlerExecutor =
-            Executors.newVirtualThreadPerTaskExecutor();
+            com.aegisos.core.ExecutorRegistry.register("networkLayer", Executors.newVirtualThreadPerTaskExecutor());
 
     private volatile Function<NodeId, Optional<Endpoint>> addressResolver = id -> Optional.empty();
     private TcpServer server;
@@ -104,6 +120,16 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         this.advertiseHost = advertisedHost;
         this.advertisedAddress = advertisedHost + ":" + port;
         this.handshakeHandler = new HandshakeHandler(identity, () -> advertisedAddress);
+        
+        registerHandler(MessageType.IPC_DATA, message -> {
+            handleIpcData(message.sender(), message.payload());
+            return null;
+        });
+        
+        registerHandler(MessageType.IPC_EOF, message -> {
+            handleIpcEof(message.sender(), message.payload());
+            return null;
+        });
     }
 
     public void setAddressResolver(Function<NodeId, Optional<Endpoint>> resolver) {
@@ -131,14 +157,16 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         server.start();
         // Now that the ephemeral/real port is known, advertise the correct address.
         this.advertisedAddress = advertiseHost + ":" + server.boundPort();
-        log.info("NetworkLayer started, node {} advertising {}", localNodeId().shortId(), advertisedAddress);
+        log.debug("NetworkLayer started, node {} advertising {}", localNodeId().shortId(), advertisedAddress);
     }
 
     private void acceptSocket(Socket socket) {
         try {
+            socket.setSoTimeout(CONNECT_TIMEOUT_MS);
             DataInputStream in = new DataInputStream(socket.getInputStream());
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
             EstablishedSession session = handshakeHandler.respond(in, out);
+            socket.setSoTimeout(0);
             registerConnection(socket, in, out, session);
         } catch (IOException e) {
             log.debug("Inbound handshake failed: {}", e.getMessage());
@@ -151,9 +179,11 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         Socket socket = new Socket();
         socket.connect(new InetSocketAddress(endpoint.host(), endpoint.port()), CONNECT_TIMEOUT_MS);
         socket.setTcpNoDelay(true);
+        socket.setSoTimeout(CONNECT_TIMEOUT_MS);
         DataInputStream in = new DataInputStream(socket.getInputStream());
         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
         EstablishedSession session = handshakeHandler.initiate(in, out);
+        socket.setSoTimeout(0);
         PeerConnection conn = registerConnection(socket, in, out, session);
         return conn.remoteNodeId();
     }
@@ -195,7 +225,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     /** Fire-and-forget send. Returns false if the peer is unreachable. */
     public boolean sendAsync(NodeId nodeId, MessageType type, byte[] payload) {
-        if (!messageFilter.test(localNodeId(), nodeId)) {
+        if (!messageFilter.test(localNodeId(), nodeId, type, payload)) {
             return false;
         }
         Optional<PeerConnection> conn = ensureConnected(nodeId);
@@ -203,7 +233,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
             return false;
         }
         try {
-            conn.get().send(type, payload, 0L);
+            conn.get().send(type, payload, 0L, false);
             return true;
         } catch (IOException e) {
             log.debug("Send to {} failed: {}", nodeId.shortId(), e.getMessage());
@@ -219,7 +249,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     public CompletableFuture<AegisMessage> request(NodeId nodeId, MessageType type,
                                                    byte[] payload, long timeoutMs) {
-        if (!messageFilter.test(localNodeId(), nodeId)) {
+        if (!messageFilter.test(localNodeId(), nodeId, type, payload)) {
             return CompletableFuture.failedFuture(new IOException("partitioned from " + nodeId.shortId()));
         }
         Optional<PeerConnection> conn = ensureConnected(nodeId);
@@ -228,9 +258,9 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         }
         long correlation = correlationCounter.getAndIncrement();
         CompletableFuture<AegisMessage> future = new CompletableFuture<>();
-        pending.put(correlation, future);
+        pending.put(correlation, new PendingRequest(nodeId, future));
         try {
-            conn.get().send(type, payload, correlation);
+            conn.get().send(type, payload, correlation, false);
         } catch (IOException e) {
             pool.remove(nodeId);
             pending.remove(correlation);
@@ -240,9 +270,50 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
                 .whenComplete((r, t) -> pending.remove(correlation));
     }
 
+    public VirtualInputStream registerIpcStream(String processId) {
+        VirtualInputStream stream = new VirtualInputStream();
+        activeStreams.put(processId, stream);
+        return stream;
+    }
+
+    public void unregisterIpcStream(String processId) {
+        VirtualInputStream stream = activeStreams.remove(processId);
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (IOException e) {
+                // ignore
+            }
+        }
+    }
+
+    private void handleIpcData(NodeId from, byte[] payload) {
+        try {
+            com.aegisos.proto.IpcChunkProto chunk = com.aegisos.proto.IpcChunkProto.parseFrom(payload);
+            VirtualInputStream stream = activeStreams.get(chunk.getProcessId());
+            if (stream != null) {
+                stream.enqueueChunk(chunk.getData().toByteArray());
+            }
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            log.error("Failed to parse IPC chunk from {}", from.shortId(), e);
+        }
+    }
+
+    private void handleIpcEof(NodeId from, byte[] payload) {
+        try {
+            com.aegisos.proto.IpcChunkProto chunk = com.aegisos.proto.IpcChunkProto.parseFrom(payload);
+            VirtualInputStream stream = activeStreams.get(chunk.getProcessId());
+            if (stream != null) {
+                stream.enqueueChunk(new byte[0]);
+            }
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            log.error("Failed to parse IPC EOF from {}", from.shortId(), e);
+        }
+    }
+
     @Override
-    public void onMessage(PeerConnection connection, AegisMessage message, long correlation) {
-        if (!messageFilter.test(message.sender(), localNodeId())) {
+    public void onMessage(PeerConnection connection, AegisMessage message, long correlation, boolean isResponse) {
+        if (!messageFilter.test(message.sender(), localNodeId(), message.type(), message.payload())) {
             log.debug("Partition dropped inbound message from {} to {}", message.sender().shortId(), localNodeId().shortId());
             return;
         }
@@ -252,10 +323,10 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         // Complete the waiting future immediately on the receive thread.
         // This is always safe: future.complete() is non-blocking.
         // ----------------------------------------------------------------
-        if (correlation != 0) {
-            CompletableFuture<AegisMessage> waiting = pending.remove(correlation);
-            if (waiting != null) {
-                waiting.complete(message);
+        if (correlation != 0 && isResponse) {
+            PendingRequest req = pending.remove(correlation);
+            if (req != null) {
+                req.future.complete(message);
                 return;
             }
         }
@@ -274,9 +345,9 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
             // the per-connection serialisation that Raft depends on.
             // ----------------------------------------------------------------
             try {
-                AegisMessage reply = handler.handle(message);
-                if (reply != null) {
-                    connection.send(reply.type(), reply.payload(), correlation);
+                AegisMessage response = handler.handle(message);
+                if (response != null && correlation != 0) {
+                    connection.send(response.type(), response.payload(), correlation, true);
                 }
             } catch (Exception e) {
                 log.warn("Handler for {} threw: {}", message.type(), e.toString());
@@ -299,7 +370,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
                                 message.type(), message.sender().shortId(), elapsedMs);
                     }
                     if (reply != null) {
-                        connection.send(reply.type(), reply.payload(), correlationId);
+                        connection.send(reply.type(), reply.payload(), correlationId, true);
                     }
                 } catch (Exception e) {
                     log.warn("Handler for {} threw: {}", message.type(), e.toString());
@@ -310,8 +381,23 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     @Override
     public void onConnectionClosed(PeerConnection connection) {
+        NodeId remote = connection.remoteNodeId();
         if (pool.isWinner(connection)) {
-            pool.remove(connection.remoteNodeId());
+            pool.remove(remote);
+        }
+        
+        java.util.List<Long> toFail = new java.util.ArrayList<>();
+        pending.forEach((corr, req) -> {
+            if (req.target.equals(remote)) {
+                toFail.add(corr);
+            }
+        });
+        
+        for (Long corr : toFail) {
+            PendingRequest req = pending.remove(corr);
+            if (req != null) {
+                req.future.completeExceptionally(new IOException("Connection to " + remote.shortId() + " closed"));
+            }
         }
     }
 
@@ -320,14 +406,8 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         handlerExecutor.shutdownNow();
         try {
             boolean terminated = handlerExecutor.awaitTermination(3, TimeUnit.SECONDS);
-            // #region agent log
-            java.util.Map<String, Object> data = new java.util.HashMap<>();
-            data.put("terminated", terminated);
-            data.put("isShutdown", handlerExecutor.isShutdown());
-            data.put("isTerminated", handlerExecutor.isTerminated());
-            com.aegisos.core.util.DebugLogger.log("NetworkLayer.java:319", "handlerExecutor shutdown status",
-                data, "D", "pre-fix");
-            // #endregion
+            log.trace("handlerExecutor shutdown status: terminated={} isShutdown={} isTerminated={}",
+                    terminated, handlerExecutor.isShutdown(), handlerExecutor.isTerminated());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -335,7 +415,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
             server.close();
         }
         pool.closeAll();
-        pending.values().forEach(f -> f.completeExceptionally(new IOException("network closed")));
+        pending.values().forEach(req -> req.future.completeExceptionally(new IOException("network closed")));
         pending.clear();
     }
 

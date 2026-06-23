@@ -53,11 +53,14 @@ public final class HandshakeHandler {
 
     /** Client side of the handshake (we dialed the peer). */
     public EstablishedSession initiate(DataInputStream in, DataOutputStream out) throws IOException {
+        log.trace("HANDSHAKE START (initiator)");
         X25519.EphemeralKeyPair eph = X25519.generate();
         byte[] nonceA = randomChallenge();
 
+        log.trace("HELLO SENT (initiator)");
         sendHello(out, eph.publicKey(), nonceA);
 
+        log.trace("HELLO RECEIVED (initiator)");
         Envelope peerHelloEnv = readEnvelope(in);
         Hello peerHello = parseHello(peerHelloEnv);
         NodeId peerId = trustPeer(peerHello, peerHelloEnv);
@@ -65,35 +68,42 @@ public final class HandshakeHandler {
         byte[] sessionKey = deriveKey(eph.privateKey(), peerHello.getEphemeralPublicKey().toByteArray(),
                 nonceA, peerHello.getNonce().toByteArray());
 
+        log.trace("VERIFY SENT (initiator)");
         sendVerify(out, peerHello.getNonce().toByteArray());
 
+        log.trace("VERIFY RECEIVED (initiator)");
         Envelope peerVerifyEnv = readEnvelope(in);
         verifyPeerVerify(peerVerifyEnv, peerHello, nonceA);
 
-        log.info("Handshake complete (initiator) with peer {}", peerId.shortId());
+        log.trace("Handshake complete (initiator) with peer {}", peerId.shortId());
         return new EstablishedSession(peerId, peerHello.getEd25519PublicKey().toByteArray(),
                 peerHello.getAddress(), new SessionCipher(sessionKey));
     }
 
     /** Server side of the handshake (the peer dialed us). */
     public EstablishedSession respond(DataInputStream in, DataOutputStream out) throws IOException {
+        log.trace("HANDSHAKE START (responder)");
+        log.trace("HELLO RECEIVED (responder)");
         Envelope peerHelloEnv = readEnvelope(in);
         Hello peerHello = parseHello(peerHelloEnv);
         NodeId peerId = trustPeer(peerHello, peerHelloEnv);
 
         X25519.EphemeralKeyPair eph = X25519.generate();
         byte[] nonceB = randomChallenge();
+        log.trace("HELLO SENT (responder)");
         sendHello(out, eph.publicKey(), nonceB);
 
         byte[] sessionKey = deriveKey(eph.privateKey(), peerHello.getEphemeralPublicKey().toByteArray(),
                 nonceB, peerHello.getNonce().toByteArray());
 
+        log.trace("VERIFY RECEIVED (responder)");
         Envelope peerVerifyEnv = readEnvelope(in);
         verifyPeerVerify(peerVerifyEnv, peerHello, nonceB);
 
+        log.trace("VERIFY SENT (responder)");
         sendVerify(out, peerHello.getNonce().toByteArray());
 
-        log.info("Handshake complete (responder) with peer {}", peerId.shortId());
+        log.trace("Handshake complete (responder) with peer {}", peerId.shortId());
         return new EstablishedSession(peerId, peerHello.getEd25519PublicKey().toByteArray(),
                 peerHello.getAddress(), new SessionCipher(sessionKey));
     }

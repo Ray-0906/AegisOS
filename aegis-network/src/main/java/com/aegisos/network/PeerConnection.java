@@ -19,6 +19,10 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
 import java.time.Instant;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -28,9 +32,11 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class PeerConnection implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(PeerConnection.class);
+    private static final boolean DIAG = Boolean.getBoolean("aegis.diag");
+    private static final int OUTBOUND_QUEUE_CAPACITY = 256;
 
     public interface InboundHandler {
-        void onMessage(PeerConnection connection, AegisMessage message, long correlation);
+        void onMessage(PeerConnection connection, AegisMessage message, long correlation, boolean isResponse);
         void onConnectionClosed(PeerConnection connection);
     }
 
@@ -43,8 +49,11 @@ public final class PeerConnection implements AutoCloseable {
     private final InboundHandler handler;
 
     private final AtomicLong sequence = new AtomicLong(1);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final BlockingQueue<byte[]> outbound = new ArrayBlockingQueue<>(OUTBOUND_QUEUE_CAPACITY);
     private volatile boolean running = true;
     private Thread receiveThread;
+    private Thread writerThread;
 
     public PeerConnection(Socket socket, DataInputStream in, DataOutputStream out,
                           EstablishedSession session, IdentityService identity,
@@ -67,13 +76,23 @@ public final class PeerConnection implements AutoCloseable {
     }
 
     public void startReceiving() {
-        receiveThread = Thread.ofVirtual()
+        writerThread = Thread.ofPlatform()
+                .daemon()
+                .name("aegis-send-" + remoteNodeId().shortId())
+                .start(this::writeLoop);
+        // Platform daemon thread: receive loops are few (one per peer) and long-lived,
+        // and message delivery must not depend on the virtual thread scheduler.
+        receiveThread = Thread.ofPlatform()
+                .daemon()
                 .name("aegis-recv-" + remoteNodeId().shortId())
                 .start(this::receiveLoop);
     }
 
     /** Sends an encrypted, signed application message to the peer. */
-    public synchronized void send(MessageType type, byte[] payload, long correlation) throws IOException {
+    public void send(MessageType type, byte[] payload, long correlation, boolean isResponse) throws IOException {
+        if (!running) {
+            throw new IOException("connection is closed");
+        }
         byte[] nonce = session.cipher().newNonce();
         MessageHeader header = MessageHeader.newBuilder()
                 .setSenderId(ByteString.copyFrom(identity.nodeId().toBytes()))
@@ -84,11 +103,38 @@ public final class PeerConnection implements AutoCloseable {
                 .setSequence(sequence.getAndIncrement())
                 .setCorrelation(correlation)
                 .setHandshake(false)
+                .setIsResponse(isResponse)
                 .build();
         byte[] aad = header.toByteArray();
         byte[] cipherText = session.cipher().encrypt(nonce, payload, aad);
         Envelope env = EnvelopeCodec.build(header, cipherText, identity::sign);
-        Framing.writeFrame(out, env.toByteArray());
+        int size = outbound.size();
+        if (DIAG && size > 200 && log.isDebugEnabled()) {
+            log.debug("HIGH_QUEUE timestamp={} remoteNode={} messageType={} queueSize={}",
+                    System.currentTimeMillis(), remoteNodeId().shortId(), type, size);
+        }
+
+        if (!outbound.offer(env.toByteArray())) {
+            log.warn("QUEUE_FULL remoteNode={} messageType={}", remoteNodeId().shortId(), type);
+            closeQuietly();
+            throw new IOException("outbound queue full for " + remoteNodeId().shortId());
+        }
+    }
+
+    private void writeLoop() {
+        try {
+            while (running) {
+                Framing.writeFrame(out, outbound.take());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            if (running) {
+                log.debug("Connection write to {} failed: {}", remoteNodeId().shortId(), e.getMessage());
+            }
+        } finally {
+            closeQuietly();
+        }
     }
 
     private void receiveLoop() {
@@ -125,7 +171,11 @@ public final class PeerConnection implements AutoCloseable {
 
             MessageType type = MessageType.fromCode(header.getMessageType());
             AegisMessage msg = new AegisMessage(remoteNodeId(), identity.nodeId(), type, payload);
-            handler.onMessage(this, msg, header.getCorrelation());
+            handler.onMessage(this, msg, header.getCorrelation(), header.getIsResponse());
+        } catch (RejectedExecutionException e) {
+            log.debug("Dropping inbound frame from {} during handler shutdown: {}",
+                    remoteNodeId().shortId(), e.toString());
+            closeQuietly();
         } catch (Exception e) {
             log.warn("Failed to handle inbound frame from {}: {}",
                     remoteNodeId().shortId(), e.toString());
@@ -134,14 +184,23 @@ public final class PeerConnection implements AutoCloseable {
 
     @Override
     public void close() {
-        running = false;
         closeQuietly();
     }
 
     private void closeQuietly() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        running = false;
         try {
             socket.close();
         } catch (IOException ignored) {
+        }
+        if (writerThread != null && writerThread != Thread.currentThread()) {
+            writerThread.interrupt();
+        }
+        if (receiveThread != null && receiveThread != Thread.currentThread()) {
+            receiveThread.interrupt();
         }
         try {
             handler.onConnectionClosed(this);

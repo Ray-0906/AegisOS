@@ -10,79 +10,226 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Stream;
 
 /**
  * Local disk cache for downloaded artifacts.
  * Verifies SHA-256 on first download. Subsequent loads from cache
  * use a quick size/mtime check to trust the local copy.
+ * Supports LRU eviction, pinning, and configurable max size.
+ *
+ * <p>Thread safety: guarded by {@link ReentrantLock}s rather than {@code synchronized}.
+ * {@link #resolve} blocks on a cluster network read (AegisFS chunk fetch) while holding
+ * the per-artifact lock. In Java 21, blocking inside a {@code synchronized} block — or
+ * blocking on contended monitor entry — pins a virtual thread to its carrier thread.
+ * With many concurrent jobs resolving the same artifact, every carrier thread became
+ * pinned simultaneously, starving the virtual thread scheduler JVM-wide (handshake
+ * "Read timed out" failures, executors unable to terminate). {@code ReentrantLock}
+ * parks without pinning in both cases.
  */
 public final class ArtifactCache {
     private static final Logger log = LoggerFactory.getLogger(ArtifactCache.class);
 
     private final Path cacheDir;
     private final AegisFS fileSystem;
-    private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
+    private final long maxSizeBytes;
 
-    public ArtifactCache(Path cacheDir, AegisFS fileSystem) {
+    private final ConcurrentHashMap<String, ReentrantLock> locks = new ConcurrentHashMap<>();
+
+    private final ReentrantLock lruLock = new ReentrantLock();
+    private final Map<String, CacheEntry> index = new LinkedHashMap<>(16, 0.75f, true);
+    private long currentSizeBytes = 0;
+
+    public ArtifactCache(Path cacheDir, AegisFS fileSystem, long maxSizeBytes) {
         this.cacheDir = cacheDir;
         this.fileSystem = fileSystem;
+        this.maxSizeBytes = maxSizeBytes;
         try {
             Files.createDirectories(cacheDir);
+            recover();
         } catch (IOException e) {
-            throw new IllegalStateException("Failed to create artifact cache dir", e);
+            throw new IllegalStateException("Failed to create/recover artifact cache dir", e);
         }
     }
 
-    /**
-     * Resolves an artifact locally, downloading it from AegisFS if necessary.
-     */
+    private void recover() throws IOException {
+        lruLock.lock();
+        try {
+            try (Stream<Path> stream = Files.list(cacheDir)) {
+                stream.filter(p -> p.toString().endsWith(".meta")).forEach(meta -> {
+                    String name = meta.getFileName().toString();
+                    String artifactId = name.substring(0, name.length() - 5);
+                    Path local = cacheDir.resolve(artifactId + ".jar");
+                    if (Files.exists(local)) {
+                        CachedMeta cached = readMeta(meta);
+                        if (cached != null) {
+                            try {
+                                long size = Files.size(local);
+                                if (size == cached.size) {
+                                    index.put(artifactId, new CacheEntry(size, cached.mtime));
+                                    currentSizeBytes += size;
+                                    return;
+                                }
+                            } catch (IOException e) {
+                                // ignore
+                            }
+                        }
+                        try {
+                            Files.deleteIfExists(local);
+                            Files.deleteIfExists(meta);
+                        } catch (IOException e) {}
+                    } else {
+                        try { Files.deleteIfExists(meta); } catch (IOException e) {}
+                    }
+                });
+            }
+        } finally {
+            lruLock.unlock();
+        }
+        log.debug("Recovered ArtifactCache: {} items, {} bytes", index.size(), currentSizeBytes);
+    }
+
+    public void pin(String artifactId) {
+        lruLock.lock();
+        try {
+            CacheEntry entry = index.get(artifactId);
+            if (entry != null) {
+                entry.pinCount++;
+            }
+        } finally {
+            lruLock.unlock();
+        }
+    }
+
+    public void unpin(String artifactId) {
+        lruLock.lock();
+        try {
+            CacheEntry entry = index.get(artifactId);
+            if (entry != null && entry.pinCount > 0) {
+                entry.pinCount--;
+            }
+        } finally {
+            lruLock.unlock();
+        }
+    }
+
+    private void reserveSpace(long sizeBytes) throws IOException {
+        lruLock.lock();
+        try {
+            if (sizeBytes > maxSizeBytes) {
+                throw new IOException("Artifact too large for cache: " + sizeBytes + " > " + maxSizeBytes);
+            }
+            java.util.Iterator<Map.Entry<String, CacheEntry>> it = index.entrySet().iterator();
+            while (currentSizeBytes + sizeBytes > maxSizeBytes && it.hasNext()) {
+                Map.Entry<String, CacheEntry> entry = it.next();
+                if (entry.getValue().pinCount == 0) {
+                    currentSizeBytes -= entry.getValue().size;
+                    it.remove();
+                    try {
+                        Files.deleteIfExists(cacheDir.resolve(entry.getKey() + ".jar"));
+                        Files.deleteIfExists(cacheDir.resolve(entry.getKey() + ".meta"));
+                        log.debug("Evicted artifact {} from cache", entry.getKey());
+                    } catch (IOException e) {
+                        log.warn("Failed to delete evicted artifact files for {}", entry.getKey(), e);
+                    }
+                }
+            }
+            if (currentSizeBytes + sizeBytes > maxSizeBytes) {
+                throw new IOException("Cache full, cannot reserve " + sizeBytes + " bytes (all remaining artifacts pinned?)");
+            }
+        } finally {
+            lruLock.unlock();
+        }
+    }
+
     public Path resolve(String artifactId, String fsPath) throws IOException {
-        Object lock = locks.computeIfAbsent(artifactId, k -> new Object());
-        synchronized (lock) {
+        ReentrantLock lock = locks.computeIfAbsent(artifactId, k -> new ReentrantLock());
+        lock.lock();
+        try {
             Path local = cacheDir.resolve(artifactId + ".jar");
             Path meta = cacheDir.resolve(artifactId + ".meta");
 
-        if (Files.exists(local) && Files.exists(meta)) {
-            CachedMeta cached = readMeta(meta);
-            long currentSize = Files.size(local);
-            long currentMtime = Files.getLastModifiedTime(local).toMillis();
-            if (cached != null && currentSize == cached.size && currentMtime == cached.mtime) {
-                log.info("CACHE HIT: {}", artifactId);
-                return local; // trust cache
+            if (Files.exists(local) && Files.exists(meta)) {
+                CachedMeta cached = readMeta(meta);
+                long currentSize = Files.size(local);
+                long currentMtime = Files.getLastModifiedTime(local).toMillis();
+                if (cached != null && currentSize == cached.size && currentMtime == cached.mtime) {
+                    log.trace("CACHE HIT: {}", artifactId);
+                    lruLock.lock();
+                    try {
+                        index.get(artifactId); // touch for LRU
+                    } finally {
+                        lruLock.unlock();
+                    }
+                    return local;
+                }
+                log.warn("Cache integrity mismatch for {}, re-downloading", artifactId);
+                Files.deleteIfExists(local);
+                lruLock.lock();
+                try {
+                    CacheEntry e = index.remove(artifactId);
+                    if (e != null) currentSizeBytes -= e.size;
+                } finally {
+                    lruLock.unlock();
+                }
             }
-            log.warn("Cache integrity mismatch for {}, re-downloading", artifactId);
-            Files.deleteIfExists(local);
-        }
 
-        log.info("CACHE MISS: {}", artifactId);
-        log.info("Artifact {} not cached locally, fetching from {}", artifactId, fsPath);
-        byte[] data = fileSystem.read(fsPath);
-        if (data == null) {
-            throw new IOException("Failed to read artifact from AegisFS: " + fsPath);
-        }
+            log.debug("CACHE MISS: {}", artifactId);
+            byte[] data = fileSystem.read(fsPath);
+            if (data == null) {
+                throw new IOException("Failed to read artifact from AegisFS: " + fsPath);
+            }
 
-        // Verify SHA-256
-        String actualSha = HexUtil.encode(Hashing.sha256(data));
-        if (!actualSha.equals(artifactId)) {
-            throw new SecurityException(
-                    "Artifact integrity check failed: expected " + artifactId + " but got " + actualSha);
-        }
+            String actualSha = HexUtil.encode(Hashing.sha256(data));
+            if (!actualSha.equals(artifactId)) {
+                throw new SecurityException("Artifact integrity check failed: expected " + artifactId + " but got " + actualSha);
+            }
 
-        // Atomic write
-        Path tmp = local.resolveSibling(artifactId + "_" + System.nanoTime() + ".tmp");
-        Files.write(tmp, data);
-        Files.move(tmp, local, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            reserveSpace(data.length);
 
-            writeMeta(meta, Files.size(local), Files.getLastModifiedTime(local).toMillis());
+            Path tmp = local.resolveSibling(artifactId + "_" + System.nanoTime() + ".tmp");
+            Files.write(tmp, data);
+            Files.move(tmp, local, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+
+            long mtime = Files.getLastModifiedTime(local).toMillis();
+            writeMeta(meta, data.length, mtime);
+
+            lruLock.lock();
+            try {
+                index.put(artifactId, new CacheEntry(data.length, mtime));
+                currentSizeBytes += data.length;
+            } finally {
+                lruLock.unlock();
+            }
 
             return local;
+        } finally {
+            lock.unlock();
         }
     }
 
     public boolean isCached(String artifactId) {
-        return Files.exists(cacheDir.resolve(artifactId + ".jar"));
+        lruLock.lock();
+        try {
+            return index.containsKey(artifactId);
+        } finally {
+            lruLock.unlock();
+        }
+    }
+
+    public long getCachedSizeBytes(String artifactId) {
+        lruLock.lock();
+        try {
+            CacheEntry entry = index.get(artifactId);
+            return entry != null ? entry.size : 0L;
+        } finally {
+            lruLock.unlock();
+        }
     }
 
     private CachedMeta readMeta(Path metaFile) {
@@ -91,9 +238,7 @@ public final class ArtifactCache {
             if (lines.size() >= 2) {
                 return new CachedMeta(Long.parseLong(lines.get(0)), Long.parseLong(lines.get(1)));
             }
-        } catch (Exception e) {
-            // ignore, return null to force re-download
-        }
+        } catch (Exception e) {}
         return null;
     }
 
@@ -106,4 +251,15 @@ public final class ArtifactCache {
     }
 
     private record CachedMeta(long size, long mtime) {}
+
+    private static class CacheEntry {
+        final long size;
+        final long mtime;
+        int pinCount = 0;
+
+        CacheEntry(long size, long mtime) {
+            this.size = size;
+            this.mtime = mtime;
+        }
+    }
 }

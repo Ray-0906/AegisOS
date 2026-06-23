@@ -21,11 +21,9 @@ public final class Framing {
         if (payload.length > MAX_FRAME) {
             throw new IOException("frame too large: " + payload.length);
         }
-        synchronized (out) {
-            out.writeInt(payload.length);
-            out.write(payload);
-            out.flush();
-        }
+        out.writeInt(payload.length);
+        out.write(payload);
+        out.flush();
     }
 
     public static byte[] readFrame(DataInputStream in) throws IOException {

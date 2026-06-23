@@ -29,17 +29,18 @@ import java.util.function.Supplier;
  * Raft messages, and provides {@link #propose} with automatic leader forwarding so any
  * node can submit a command.
  */
-public final class ConsensusModule implements RaftTransport, AutoCloseable {
+public class ConsensusModule implements RaftTransport, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(ConsensusModule.class);
+    private static final boolean DIAG = Boolean.getBoolean("aegis.diag");
     private static final long COMMIT_TIMEOUT_MS = 25_000;
-
     private final NetworkLayer network;
     private final RaftNode raftNode;
     private final ClusterStateMachine stateMachine;
     private final ClusterConfiguration clusterConfiguration;
     private final java.util.function.Function<NodeId, com.aegisos.proto.PeerStatus> peerStatusSupplier;
     private final int lagThreshold;
+    private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
 
     public ConsensusModule(NetworkLayer network, NodeId self, Path raftDir,
                            Supplier<List<NodeId>> votingPeers,
@@ -47,12 +48,14 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                            java.util.function.BooleanSupplier isVotingMember,
                            boolean bootstrap,
                            int lagThreshold,
-                           java.util.function.Function<NodeId, com.aegisos.proto.PeerStatus> peerStatusSupplier) {
+                           java.util.function.Function<NodeId, com.aegisos.proto.PeerStatus> peerStatusSupplier,
+                           com.aegisos.core.observability.MetricsRegistry metricsRegistry) {
         this.network = network;
         this.stateMachine = new ClusterStateMachine();
         this.clusterConfiguration = new ClusterConfiguration();
         this.peerStatusSupplier = peerStatusSupplier;
         this.lagThreshold = lagThreshold;
+        this.metricsRegistry = metricsRegistry;
 
         // Register configuration appliers.
         this.stateMachine.register(CommandType.ADD_VOTER, clusterConfiguration::applyAddVoter);
@@ -73,7 +76,7 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                             .setPayload(ByteString.copyFrom(self.toBytes()))
                             .build();
                     raftLog.append(0, initCmd.toByteArray());
-                    log.info("Appended genesis ADD_VOTER for self ({}) at index 1", self.shortId());
+                    log.debug("Appended genesis ADD_VOTER for self ({}) at index 1", self.shortId());
                 } catch (Exception e) {
                     log.error("Failed to append genesis configuration", e);
                 }
@@ -83,16 +86,17 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
             }
         }
 
-        this.raftNode = new RaftNode(self, raftLog, metadata, this, stateMachine, votingPeers, allPeers, isVotingMember);
+        this.raftNode = new RaftNode(self, raftLog, metadata, this, stateMachine, votingPeers, allPeers, isVotingMember, metricsRegistry);
     }
 
     public void start() {
         network.registerHandler(MessageType.REQUEST_VOTE, this::onRequestVote);
+        network.registerHandler(MessageType.PRE_VOTE, this::onPreVote);
         network.registerHandler(MessageType.APPEND_ENTRIES, this::onAppendEntries);
         network.registerHandler(MessageType.CLIENT_COMMAND, this::onClientCommand);
         network.registerHandler(MessageType.INSTALL_SNAPSHOT, this::onInstallSnapshot);
         raftNode.start();
-        log.info("Consensus module started");
+        log.debug("Consensus module started");
     }
 
     public RaftNode raftNode() {
@@ -101,6 +105,10 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
 
     public ClusterConfiguration clusterConfiguration() {
         return clusterConfiguration;
+    }
+
+    public CompletableFuture<Void> awaitApplied(long index) {
+        return raftNode.awaitApplied(index);
     }
 
     public ClusterStateMachine stateMachine() {
@@ -120,6 +128,28 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
      */
     public void replayFromLog() {
         raftNode.replayCommitted();
+        
+        // Raft dictates that configuration changes take effect immediately upon being added to the log,
+        // regardless of whether they are committed. Because we no longer replay uncommitted entries
+        // into the general state machine on startup (to prevent safety violations), we must manually
+        // pre-scan the uncommitted log entries and apply any membership changes.
+        // Without this, nodes restarting without a snapshot would forget they are voters, leading
+        // to a cluster deadlock where no elections can start.
+        for (long i = raftNode.lastApplied() + 1; i <= raftNode.lastLogIndex(); i++) {
+            com.aegisos.proto.RaftLogEntry entry = raftNode.raftLog().get(i);
+            if (entry != null) {
+                try {
+                    StateCommand cmd = StateCommand.parseFrom(entry.getCommand());
+                    if (cmd.getType() == CommandType.ADD_VOTER) {
+                        clusterConfiguration.applyAddVoter(i, cmd);
+                    } else if (cmd.getType() == CommandType.REMOVE_VOTER) {
+                        clusterConfiguration.applyRemoveVoter(i, cmd);
+                    }
+                } catch (Exception e) {
+                    // Ignore parsing errors for pre-scan
+                }
+            }
+        }
     }
 
     public NodeId leaderId() {
@@ -196,41 +226,83 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
         return false;
     }
 
+    private NodeId currentRoutableLeader() {
+        NodeId leader = raftNode.leaderId();
+        if (leader == null) {
+            return null;
+        }
+        com.aegisos.proto.PeerStatus status = peerStatusSupplier.apply(leader);
+        if (status != com.aegisos.proto.PeerStatus.ALIVE) {
+            log.debug("Leader {} is known, but not ALIVE (status={}), refusing to route", leader.shortId(), status);
+            return null;
+        }
+        return leader;
+    }
+
     /**
      * Proposes a command to the cluster. If this node is the leader it submits directly,
      * otherwise it forwards to the known leader. Completes when the command is committed.
      */
     public CompletableFuture<Long> propose(StateCommand command) {
+        long t0 = System.currentTimeMillis();
+        String cmdType = command.getType().name();
+        
+        CompletableFuture<Long> future;
         if (raftNode.isLeader()) {
             try {
                 validateMembershipChange(command);
+                byte[] bytes = command.toByteArray();
+                future = raftNode.submit(bytes);
             } catch (Exception e) {
-                return CompletableFuture.failedFuture(e);
+                future = CompletableFuture.failedFuture(e);
             }
+        } else {
             byte[] bytes = command.toByteArray();
-            return raftNode.submit(bytes);
+            NodeId leader = currentRoutableLeader();
+            if (leader == null) {
+                future = CompletableFuture.failedFuture(new NotLeaderException(raftNode.leaderId()));
+            } else {
+                future = network.request(leader, MessageType.CLIENT_COMMAND, bytes, COMMIT_TIMEOUT_MS + 5_000)
+                        .thenApply(reply -> {
+                            try {
+                                ClientCommandResult result = ClientCommandResult.parseFrom(reply.payload());
+                                if (!result.getSuccess()) {
+                                    if ("not leader".equals(result.getError()) || !result.getLeaderId().isEmpty()) {
+                                        throw new NotLeaderException(parseLeaderId(result.getLeaderId()));
+                                    } else {
+                                        throw new IllegalStateException(result.getError() != null && !result.getError().isEmpty() ? result.getError() : "Unknown error");
+                                    }
+                                }
+                                return result.getIndex();
+                            } catch (CompletionException ce) {
+                                throw ce;
+                            } catch (Exception e) {
+                                throw new CompletionException(e);
+                            }
+                        });
+            }
         }
-        byte[] bytes = command.toByteArray();
-        NodeId leader = raftNode.leaderId();
-        if (leader == null) {
-            return CompletableFuture.failedFuture(new NotLeaderException(null));
-        }
+        
+        return future.whenComplete((idx, err) -> {
+            if (DIAG && log.isDebugEnabled()) {
+                long duration = System.currentTimeMillis() - t0;
+                String status = err == null ? "SUCCESS" : "FAILURE (" + err.getClass().getSimpleName() + ")";
+                int qDepth = raftNode.getPendingCount();
+                log.debug("RAFT_DIAG event=CLIENT_COMMAND_RESULT type={} queueDepth={} durationMs={} status={}",
+                        cmdType, qDepth, duration, status);
+            }
+        });
+    }
 
-        return network.request(leader, MessageType.CLIENT_COMMAND, bytes, COMMIT_TIMEOUT_MS + 5_000)
-                .thenApply(reply -> {
-                    try {
-                        ClientCommandResult result = ClientCommandResult.parseFrom(reply.payload());
-                        if (!result.getSuccess()) {
-                            throw new NotLeaderException(result.getLeaderId().isEmpty() ? null
-                                     : NodeId.of(result.getLeaderId().toByteArray()));
-                        }
-                        return result.getIndex();
-                    } catch (CompletionException ce) {
-                        throw ce;
-                    } catch (Exception e) {
-                        throw new CompletionException(e);
-                    }
-                });
+    private NodeId parseLeaderId(ByteString leaderId) {
+        if (leaderId.isEmpty()) {
+            return null;
+        }
+        if (leaderId.size() != 32) {
+            log.debug("Ignoring malformed leader id in client command result: {} bytes", leaderId.size());
+            return null;
+        }
+        return NodeId.of(leaderId.toByteArray());
     }
 
     // --- inbound handlers ------------------------------------------------
@@ -241,6 +313,16 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
             return new AegisMessage(null, msg.sender(), MessageType.REQUEST_VOTE_RESULT, result.toByteArray());
         } catch (Exception e) {
             log.warn("Bad RequestVote: {}", e.toString());
+            return null;
+        }
+    }
+
+    private AegisMessage onPreVote(AegisMessage msg) {
+        try {
+            RequestVoteResult result = raftNode.handlePreVote(RequestVote.parseFrom(msg.payload()));
+            return new AegisMessage(null, msg.sender(), MessageType.PRE_VOTE_RESULT, result.toByteArray());
+        } catch (Exception e) {
+            log.warn("Bad PreVote: {}", e.toString());
             return null;
         }
     }
@@ -274,6 +356,10 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
                 result.setLeaderId(ByteString.copyFrom(leader.toBytes()));
             }
             result.setError("not leader");
+            if (DIAG && log.isDebugEnabled()) {
+                log.debug("RAFT_DIAG event=CLIENT_COMMAND_REJECTED role={} leaderId={} term={}",
+                        raftNode.role(), leader == null ? "null" : leader.shortId(), raftNode.currentTerm());
+            }
         } else {
             try {
                 StateCommand cmd = StateCommand.parseFrom(msg.payload());
@@ -292,6 +378,12 @@ public final class ConsensusModule implements RaftTransport, AutoCloseable {
     @Override
     public CompletableFuture<RequestVoteResult> sendRequestVote(NodeId peer, RequestVote request) {
         return network.request(peer, MessageType.REQUEST_VOTE, request.toByteArray(), 1_000)
+                .thenApply(msg -> parse(msg.payload(), RequestVoteResult::parseFrom));
+    }
+
+    @Override
+    public CompletableFuture<RequestVoteResult> sendPreVote(NodeId peer, RequestVote request) {
+        return network.request(peer, MessageType.PRE_VOTE, request.toByteArray(), 1_000)
                 .thenApply(msg -> parse(msg.payload(), RequestVoteResult::parseFrom));
     }
 

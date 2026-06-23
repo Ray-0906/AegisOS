@@ -92,7 +92,7 @@ public final class ClusterStateMachine implements RaftStateMachine {
     /** Registers a snapshot participant for inclusion in snapshot creation and loading. */
     public void registerSnapshotParticipant(SnapshotParticipant participant) {
         participants.add(participant);
-        log.info("Registered snapshot participant: {}", participant.id());
+        log.debug("Registered snapshot participant: {}", participant.id());
     }
 
     /** Returns all registered snapshot participants (including the internal KV store). */
@@ -106,11 +106,11 @@ public final class ClusterStateMachine implements RaftStateMachine {
     public void apply(long index, byte[] command) {
         try {
             StateCommand cmd = StateCommand.parseFrom(command);
-            log.info("ClusterStateMachine applying {} at {}", cmd.getType(), index);
+            log.debug("ClusterStateMachine applying {} at {}", cmd.getType(), index);
             if (cmd.getType() == CommandType.UPDATE_JOB) {
                 try {
                     com.aegisos.proto.JobUpdate update = com.aegisos.proto.JobUpdate.parseFrom(cmd.getPayload());
-                    log.info("Applying UPDATE_JOB for {}: state={}", update.getJobId(), update.getState());
+                    log.debug("Applying UPDATE_JOB for {}: state={}", update.getJobId(), update.getState());
                 } catch (Exception e) {}
             }
             List<BiConsumer<Long, StateCommand>> list = appliers.get(cmd.getType());
@@ -141,7 +141,7 @@ public final class ClusterStateMachine implements RaftStateMachine {
                     .setId(p.id())
                     .setData(ByteString.copyFrom(data))
                     .build());
-            log.info("Snapshot participant '{}' serialized {} bytes", p.id(), data.length);
+            log.debug("Snapshot participant '{}' serialized {} bytes", p.id(), data.length);
         }
 
         // Compute checksum over all component data
@@ -160,7 +160,7 @@ public final class ClusterStateMachine implements RaftStateMachine {
                 .build();
 
         byte[] result = snapshotFile.toByteArray();
-        log.info("Snapshot taken: index={}, term={}, components={}, size={} bytes",
+        log.debug("Snapshot taken: index={}, term={}, components={}, size={} bytes",
                 lastIncludedIndex, lastIncludedTerm, components.size(), result.length);
         return result;
     }
@@ -202,7 +202,7 @@ public final class ClusterStateMachine implements RaftStateMachine {
                 SnapshotParticipant participant = byId.get(component.getId());
                 if (participant != null) {
                     participant.restore(component.getData().toByteArray());
-                    log.info("Restored snapshot participant '{}' ({} bytes)",
+                    log.debug("Restored snapshot participant '{}' ({} bytes)",
                             component.getId(), component.getData().size());
                 } else {
                     log.warn("Unknown snapshot component '{}' — skipping (forward compatibility)",
@@ -210,7 +210,7 @@ public final class ClusterStateMachine implements RaftStateMachine {
                 }
             }
 
-            log.info("Snapshot loaded: index={}, term={}, version={}, components={}",
+            log.debug("Snapshot loaded: index={}, term={}, version={}, components={}",
                     snapshotFile.getLastIncludedIndex(), snapshotFile.getLastIncludedTerm(),
                     snapshotFile.getSnapshotVersion(), snapshotFile.getComponentsCount());
 

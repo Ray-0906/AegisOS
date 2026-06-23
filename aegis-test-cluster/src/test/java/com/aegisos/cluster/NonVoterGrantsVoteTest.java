@@ -64,6 +64,8 @@ public class NonVoterGrantsVoteTest {
         NodeConfig configA = new NodeConfig()
                 .homeDir(homeA)
                 .port(0)
+                .restPort(0)
+                .apiPort(0)
                 .advertiseHost("127.0.0.1")
                 .bootstrap(true);
         AegisNode nodeA = new AegisNode(configA);
@@ -80,6 +82,8 @@ public class NonVoterGrantsVoteTest {
         NodeConfig configB = new NodeConfig()
                 .homeDir(homeB)
                 .port(0)
+                .restPort(0)
+                .apiPort(0)
                 .advertiseHost("127.0.0.1")
                 .bootstrap(false);
         configB.addSeed(new Endpoint("127.0.0.1", nodeA.network().boundPort()));
@@ -147,6 +151,8 @@ public class NonVoterGrantsVoteTest {
         NodeConfig configA2 = new NodeConfig()
                 .homeDir(homeA)
                 .port(0)
+                .restPort(0)
+                .apiPort(0)
                 .advertiseHost("127.0.0.1");
         configA2.addSeed(new Endpoint("127.0.0.1", nodeB.network().boundPort()));
         AegisNode nodeA2 = new AegisNode(configA2);

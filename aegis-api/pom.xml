@@ -29,9 +29,5 @@
             <groupId>com.aegisos</groupId>
             <artifactId>aegis-scheduler</artifactId>
         </dependency>
-        <dependency>
-            <groupId>com.aegisos</groupId>
-            <artifactId>aegis-runtime</artifactId>
-        </dependency>
     </dependencies>
 </project>

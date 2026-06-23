@@ -259,7 +259,7 @@ public class Sprint4SignOffTest {
     }
 
     private String fetchEndpoint(AegisNode node, String path) throws Exception {
-        int port = node.metrics().boundPort();
+        int port = node.metricsServer().boundPort();
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:" + port + path))
                 .GET()

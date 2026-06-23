@@ -19,58 +19,84 @@ public final class JobExecutor {
     private final NodeId self;
     private final AegisFS fileSystem;
     private final ArtifactClassLoader artifactClassLoader;
+    private final java.nio.file.Path workspaceRoot;
     private final java.util.Map<String, ProcessSupervisor> activeSupervisors = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public JobExecutor(NodeId self, AegisFS fileSystem, ArtifactClassLoader artifactClassLoader) {
+    public JobExecutor(NodeId self, AegisFS fileSystem, ArtifactClassLoader artifactClassLoader, java.nio.file.Path workspaceRoot) {
         this.self = self;
         this.fileSystem = fileSystem;
         this.artifactClassLoader = artifactClassLoader;
+        this.workspaceRoot = workspaceRoot;
     }
 
     /** Deserializes, optionally restores, and runs the job, returning the serialized result. */
-    public byte[] run(String jobId, byte[] jobBytes, byte[] restoreState, int memoryMb) throws Exception {
+    public byte[] run(String jobId, long executionId, byte[] jobBytes, byte[] restoreState, int memoryMb, 
+                      java.util.Map<String, String> mountPaths, java.util.function.Consumer<byte[]> checkpointListener) throws Exception {
         Object[] args = new Object[] {
-            jobId, self.toBytes(), null, null, jobBytes, restoreState, null, null
+            jobId, self.toBytes(), null, null, jobBytes, restoreState, null, null, executionId
         };
-        ProcessSupervisor supervisor = new ProcessSupervisor(self, jobId, memoryMb);
-        activeSupervisors.put(jobId, supervisor);
+        java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
+        WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
+        ProcessSupervisor supervisor = new ProcessSupervisor(jobId, memoryMb, workspace);
+        supervisor.setCheckpointListener(checkpointListener);
+        String supervisorKey = supervisorKey(jobId, executionId);
+        activeSupervisors.put(supervisorKey, supervisor);
         try {
+            supervisor.mountArtifacts(mountPaths);
             return supervisor.runWorker(args);
         } finally {
-            activeSupervisors.remove(jobId);
+            activeSupervisors.remove(supervisorKey, supervisor);
         }
     }
 
     /** Artifact-based execution with isolated classloader. */
-    public byte[] runFromArtifact(String jobId, String artifactId, String fsPath,
+    public byte[] runFromArtifact(String jobId, long executionId, String artifactId, String fsPath,
                                   String className, String[] artifactArgs,
-                                  byte[] restoreState, int memoryMb) throws Exception {
+                                  byte[] restoreState, int memoryMb, 
+                                  java.util.Map<String, String> mountPaths, java.util.function.Consumer<byte[]> checkpointListener) throws Exception {
         byte[] artifactArgsBytes = Serialization.serialize(artifactArgs);
         String localJarPath = artifactClassLoader.getCache().resolve(artifactId, fsPath).toAbsolutePath().toString();
         Object[] args = new Object[] {
-            jobId, self.toBytes(), artifactId, className, null, restoreState, artifactArgsBytes, localJarPath
+            jobId, self.toBytes(), artifactId, className, null, restoreState, artifactArgsBytes, localJarPath, executionId
         };
-        ProcessSupervisor supervisor = new ProcessSupervisor(self, jobId, memoryMb);
-        activeSupervisors.put(jobId, supervisor);
+        java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
+        WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
+        ProcessSupervisor supervisor = new ProcessSupervisor(jobId, memoryMb, workspace);
+        supervisor.setCheckpointListener(checkpointListener);
+        String supervisorKey = supervisorKey(jobId, executionId);
+        activeSupervisors.put(supervisorKey, supervisor);
         try {
+            supervisor.mountArtifacts(mountPaths);
             return supervisor.runWorker(args);
         } finally {
-            activeSupervisors.remove(jobId);
+            activeSupervisors.remove(supervisorKey, supervisor);
         }
     }
     
     public void cancelJob(String jobId) {
         log.info("JobExecutor asked to cancel job: {}. Active supervisors: {}", jobId, activeSupervisors.keySet());
-        // #region agent log
-        com.aegisos.core.util.DebugLogger.log("JobExecutor.java:62", "cancelJob invoked",
-            java.util.Map.of("jobId", jobId, "supervisorCount", activeSupervisors.size(), "supervisorFound", activeSupervisors.containsKey(jobId)), "A", "pre-fix");
-        // #endregion
-        ProcessSupervisor supervisor = activeSupervisors.get(jobId);
-        if (supervisor != null) {
-            log.info("Supervisor found for job {}, calling kill()", jobId);
-            supervisor.kill();
-        } else {
+        String prefix = jobId + "#";
+        java.util.List<ProcessSupervisor> supervisors = activeSupervisors.entrySet().stream()
+                .filter(entry -> entry.getKey().startsWith(prefix))
+                .map(java.util.Map.Entry::getValue)
+                .toList();
+        if (supervisors.isEmpty()) {
             log.warn("No supervisor found for job {}", jobId);
+            return;
+        }
+        log.info("Found {} supervisor(s) for job {}, calling kill()", supervisors.size(), jobId);
+        supervisors.forEach(ProcessSupervisor::kill);
+    }
+
+    private static String supervisorKey(String jobId, long executionId) {
+        return jobId + "#" + executionId;
+    }
+
+    public void close() {
+        int count = activeSupervisors.size();
+        log.info("JobExecutor closing {} active supervisor(s)", count);
+        for (ProcessSupervisor supervisor : activeSupervisors.values()) {
+            supervisor.kill();
         }
     }
 
@@ -80,18 +106,4 @@ public final class JobExecutor {
         return state == null ? null : Serialization.serialize(state);
     }
 
-    public void close() {
-        int count = activeSupervisors.size();
-        // #region agent log
-        com.aegisos.core.util.DebugLogger.log("JobExecutor.java:80", "JobExecutor.close() start",
-            java.util.Map.of("activeSupervisorCount", count, "supervisorJobIds", activeSupervisors.keySet().toString()), "A", "pre-fix");
-        // #endregion
-        for (ProcessSupervisor supervisor : activeSupervisors.values()) {
-            supervisor.kill();
-        }
-        // #region agent log
-        com.aegisos.core.util.DebugLogger.log("JobExecutor.java:86", "JobExecutor.close() end",
-            java.util.Map.of("remainingSupervisorCount", activeSupervisors.size()), "A", "pre-fix");
-        // #endregion
-    }
 }

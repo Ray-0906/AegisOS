@@ -22,9 +22,9 @@ public class VoterPromotionTest {
             // Now stop node0 (leader)
             harness.stop(node0);
 
-            // Node 1 should now time out and start election (role CANDIDATE)
-            boolean becameCandidate = ClusterHarness.await(5000, () -> node1.consensus().raftNode().role() == RaftRole.CANDIDATE);
-            assertTrue(becameCandidate, "Promoted node failed to start election after leader died");
+            // Node 1 should now time out and start a PreVote election
+            boolean startedPreVote = ClusterHarness.await(5000, () -> node1.consensus().raftNode().getPreVoteStarts() > 0);
+            assertTrue(startedPreVote, "Promoted node failed to start PreVote election after leader died");
         }
     }
 }

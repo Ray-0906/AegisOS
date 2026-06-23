@@ -57,8 +57,9 @@ public class SnapshotDuringExecutionTest {
             assertEquals(0, submitter.runtimeAgent().registry().invalidTransitionCount(), "No invalid transitions should occur");
             
             // Check logs exist
-            var metaOpt = submitter.fileSystem().fileIndex().byName("/jobs/" + jobId + "/1/stdout");
-            assertTrue(metaOpt.isPresent(), "Stdout should exist in AegisFS");
+            assertTrue(ClusterHarness.await(5_000, () ->
+                submitter.fileSystem().fileIndex().byName("/jobs/" + jobId + "/1/stdout").isPresent()
+            ), "Stdout should exist in AegisFS");
         } finally {
             System.clearProperty("aegis.snapshot.entryThreshold");
         }

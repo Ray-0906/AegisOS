@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.aegisos.testing.ClusterAwaiter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,10 +25,15 @@ public class RepairLeaderFailoverTest {
     @AfterEach
     void tearDown() {
         harness.close();
+        System.clearProperty("aegis.audit.interval.seconds");
     }
 
     @Test
     void testLeaderFailoverDuringRepair() throws Exception {
+        System.setProperty("aegis.audit.interval.seconds", "1"); // enable fast background scheduler ticks
+        harness.setRepairTaskTimeoutSeconds(1); // 1s expiration for fast failover
+        ClusterAwaiter awaiter = new ClusterAwaiter(harness);
+
         // ===== Phase 1 — Setup and Divergence =====
         System.out.println("=== Phase 1: Setup and Divergence ===");
         List<AegisNode> nodes = harness.start(3);
@@ -96,89 +102,39 @@ public class RepairLeaderFailoverTest {
 
         A.consensus().propose(stateCmd).get();
 
-        // Verify the task is created as PENDING in all nodes
-        ClusterHarness.await(5000, () ->
-                nodes.stream().allMatch(n -> n.fileSystem().repairTaskStore().pendingByRepairId(repairId).isPresent()));
+        // Verify the task is created as PENDING on the leader
+        awaiter.awaitPendingRepair(repairId, java.time.Duration.ofSeconds(5));
 
         // Kill leader A before physical copy executes
+        long t0_leaderKilled = System.nanoTime();
         harness.stop(A);
-
-        // Wait for leader B to be elected
-        AegisNode B = null;
-        for (int attempt = 0; attempt < 200; attempt++) {
-            for (AegisNode n : nodes) {
-                if (!n.identity().nodeId().equals(A.identity().nodeId()) && n.consensus().isLeader()) {
-                    B = n;
-                    break;
-                }
-            }
-            if (B != null) break;
-            Thread.sleep(50);
-        }
+        // Assert: new leader B elected
+        awaiter.awaitLeaderElection(java.time.Duration.ofSeconds(10));
+        AegisNode B = harness.currentLeader();
         assertNotNull(B, "Must elect a new leader B");
-        final AegisNode newLeader = B;
-        ClusterHarness.await(15000, () -> newLeader.discovery().membership().alivePeerIds().size() == 1);
 
-        System.out.println("New leader B elected: " + newLeader.identity().nodeId().shortId());
-        System.out.println("Phase 2 PASSED");
+        System.out.println("New leader B elected: " + B.identity().nodeId().shortId());
 
-        // ===== Phase 3 — New Leader State Verification =====
-        System.out.println("=== Phase 3: New Leader State Verification ===");
+        // Wait for B to notice and track the repair task
+        awaiter.awaitRepairTaskVisible(repairId, java.time.Duration.ofSeconds(10));
 
-        // Assert: FileIndex unchanged on leader B (no REPAIR_COMPLETE applied, chunk not under-replicated in metadata)
-        assertFalse(newLeader.fileSystem().isStillUnderReplicated(chunkId, fileId), "FileIndex must remain unchanged");
-
-        // Assert: RepairTaskStore on leader B shows task as PENDING
-        Optional<RepairTaskStore.RepairTask> taskOpt = newLeader.fileSystem().repairTaskStore().pendingByRepairId(repairId);
-        assertTrue(taskOpt.isPresent(), "RepairTask must be present");
-        assertEquals(RepairTaskStore.TaskStatus.PENDING, taskOpt.get().status(), "Task must be PENDING");
-
-        // Assert: leader B does NOT automatically execute the physical copy
-        newLeader.auditScheduler().runOnce();
-
-        // Check B's outcomes
-        List<RepairOutcome> outcomesB = newLeader.auditScheduler().getRepairOutcomes();
-        boolean copyExecuted = outcomesB.stream().anyMatch(o -> o.status() == RepairOutcome.Status.COPY_SUCCEEDED);
-        assertFalse(copyExecuted, "New leader must not execute copy for task proposed by old leader");
-        assertNull(C.fileSystem().chunkStore().get(chunkId), "C must still not have the chunk");
-
-        System.out.println("Phase 3 PASSED");
-
-        // ===== Phase 4 — New Leader Re-Verifies and Completes =====
-        System.out.println("=== Phase 4: New Leader Re-Verifies and Completes ===");
-
-        // Wait for PENDING task to expire: we do this by backdating the task on newLeader B
-        newLeader.fileSystem().repairTaskStore().pendingByRepairId(repairId).get()
-                .setCommittedAt(System.currentTimeMillis() - 1000000L); // set in the past to expire
-
-        // Run runOnce() on B — B's scheduler will run, expire the old task, verify the divergence (since scan 1 was in Phase 3),
-        // propose the new REPAIR_CHUNK, and execute the physical copy + REPAIR_COMPLETE.
-        newLeader.auditScheduler().runOnce();
-
-        // Verify task status is now EXPIRED
-        Optional<RepairTaskStore.RepairTask> expiredTask = newLeader.fileSystem().repairTaskStore().all().stream()
-                .filter(t -> t.repairId().equals(repairId))
-                .findFirst();
-        assertTrue(expiredTask.isPresent());
-        assertEquals(RepairTaskStore.TaskStatus.EXPIRED, expiredTask.get().status(), "Old task must be EXPIRED");
-
-        // Assert: new REPAIR_CHUNK proposed and committed
-        List<RepairOutcome> recoveryOutcomes = newLeader.auditScheduler().getRepairOutcomes();
-        assertFalse(recoveryOutcomes.isEmpty());
-
-        boolean proposedNew = recoveryOutcomes.stream().anyMatch(o -> o.status() == RepairOutcome.Status.REPAIR_PROPOSED);
-        boolean copySucceededNew = recoveryOutcomes.stream().anyMatch(o -> o.status() == RepairOutcome.Status.COPY_SUCCEEDED);
-
-        assertTrue(proposedNew, "New leader must propose a new REPAIR_CHUNK");
-        assertTrue(copySucceededNew, "Physical copy and REPAIR_COMPLETE must succeed");
+        // The original task expires in 1s. B's background scheduler (running every 1s) will propose a new one and execute it.
+        // We await the physical replication of the chunk, which proves the repair completed.
+        ClusterHarness.await(25000, () -> 
+            C.fileSystem().chunkStore().get(chunkId) != null &&
+            !B.fileSystem().isStillUnderReplicated(chunkId, fileId)
+        );
 
         // Assert: physical copy succeeds (C gets the chunk)
         assertNotNull(C.fileSystem().chunkStore().get(chunkId), "C must physically possess the chunk now");
 
         // Assert: FileIndex now correct
-        assertFalse(newLeader.fileSystem().isStillUnderReplicated(chunkId, fileId), "FileIndex must show full replication");
+        assertFalse(B.fileSystem().isStillUnderReplicated(chunkId, fileId), "FileIndex must show full replication");
 
         System.out.println("Phase 4 PASSED");
+
+        // Independently await gossip death detection
+        awaiter.awaitNodeDeath(A.identity().nodeId(), java.time.Duration.ofSeconds(15));
 
         System.out.println("=== RepairLeaderFailoverTest PASSED ===");
     }

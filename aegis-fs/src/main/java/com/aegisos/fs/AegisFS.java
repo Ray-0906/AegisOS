@@ -60,7 +60,7 @@ public final class AegisFS implements AutoCloseable {
         this.replicationFactor = replicationFactor;
         this.cipher = new ChunkCipher(clusterKey);
         this.store = new ChunkStore(chunkDir);
-        this.replicator = new ChunkReplicator(network, store, self);
+        this.replicator = new ChunkReplicator(network, store, self, discovery);
         this.placement = new ChunkPlacement(discovery, self);
         
         this.localHealth = new LocalHealthStore(chunkDir);
@@ -94,7 +94,7 @@ public final class AegisFS implements AutoCloseable {
             try {
                 RepairChunk repair = RepairChunk.parseFrom(cmd.getPayload());
                 repairTaskStore.applyRepairChunk(index, repair);
-                log.info("REPAIR_CHUNK at {}: task {} created for chunk {}",
+                log.debug("REPAIR_CHUNK at {}: task {} created for chunk {}",
                     index, repair.getRepairId(), HexUtil.encode(repair.getChunkId().toByteArray()));
             } catch (Exception e) {
                 log.warn("bad REPAIR_CHUNK at {}", index);
@@ -106,7 +106,7 @@ public final class AegisFS implements AutoCloseable {
                 Optional<RepairTaskStore.RepairTask> task =
                     repairTaskStore.pendingByRepairId(complete.getRepairId());
                 if (task.isEmpty()) {
-                    log.info("REPAIR_COMPLETE at {} ignored: no PENDING task for {}",
+                    log.debug("REPAIR_COMPLETE at {} ignored: no PENDING task for {}",
                         index, complete.getRepairId());
                     return;
                 }
@@ -127,7 +127,7 @@ public final class AegisFS implements AutoCloseable {
         replicator.start();
         scrubber.start();
         antiEntropy.start();
-        log.info("AegisFS started (replication factor {})", replicationFactor);
+        log.debug("AegisFS started (replication factor {})", replicationFactor);
     }
 
     public ChunkStore chunkStore() {
@@ -188,6 +188,9 @@ public final class AegisFS implements AutoCloseable {
             for (NodeId target : targets) {
                 if (replicator.storeOn(target, chunkId, enc.ciphertext())) {
                     storedOn.add(ByteString.copyFrom(target.toBytes()));
+                }
+                if (storedOn.size() >= replicationFactor) {
+                    break;
                 }
             }
             if (storedOn.size() < replicationFactor) {
@@ -272,7 +275,8 @@ public final class AegisFS implements AutoCloseable {
 
     private void commit(StateCommand command) throws IOException {
         try {
-            consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            long index = consensus.propose(command).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            consensus.awaitApplied(index).get(COMMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             throw new IOException("failed to commit file metadata: " + e.getMessage(), e);
         }

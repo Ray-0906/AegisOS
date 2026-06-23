@@ -3,7 +3,7 @@ package com.example;
 import com.aegisos.runtime.AegisJob;
 import com.aegisos.runtime.JobContext;
 
-import java.io.Serializable;
+
 
 public class LongRunningJob implements AegisJob<String> {
 
@@ -26,16 +26,7 @@ public class LongRunningJob implements AegisJob<String> {
         return "Finished! Node=" + context.executingNode() + ", Final progress=" + progress;
     }
 
-    @Override
-    public Serializable captureState() {
-        return progress;
-    }
+    
 
-    @Override
-    public void restoreState(Serializable state) {
-        if (state instanceof Integer) {
-            this.progress = (Integer) state;
-            System.out.println("LongRunningJob restored state: progress=" + progress);
-        }
-    }
+    
 }

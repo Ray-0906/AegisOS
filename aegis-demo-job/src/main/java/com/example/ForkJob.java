@@ -2,7 +2,7 @@ package com.example;
 
 import com.aegisos.runtime.AegisJob;
 import com.aegisos.runtime.JobContext;
-import java.io.Serializable;
+
 
 public class ForkJob implements AegisJob<String> {
     public ForkJob() {}
@@ -17,8 +17,6 @@ public class ForkJob implements AegisJob<String> {
         return "Done";
     }
 
-    @Override
-    public Serializable captureState() { return null; }
-    @Override
-    public void restoreState(Serializable state) {}
+    
+    
 }

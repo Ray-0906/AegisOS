@@ -64,10 +64,11 @@ public class ChaosSoakTest {
                 .build();
 
         cluster.nodes().get(0).fileSystem().write("/artifacts/" + artifactId, mutated);
+        com.aegisos.proto.RegisterArtifact regCmd = com.aegisos.proto.RegisterArtifact.newBuilder().setArtifact(record).build();
         cluster.nodes().get(0).consensus().propose(
                 com.aegisos.proto.StateCommand.newBuilder()
                         .setType(com.aegisos.proto.CommandType.REGISTER_ARTIFACT)
-                        .setPayload(record.toByteString())
+                        .setPayload(regCmd.toByteString())
                         .build()
         ).get(5, TimeUnit.SECONDS);
 

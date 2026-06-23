@@ -20,6 +20,7 @@ public final class NodeConfig {
     private String advertiseHost = "127.0.0.1";
     private int port = 9000;
     private int apiPort = 0;  // 0 = metrics server disabled
+    private int restPort = 20001;
     private final List<Endpoint> seeds = new ArrayList<>();
     private int replicationFactor = 3;
     private long reaperIntervalMs = 60_000;
@@ -38,7 +39,12 @@ public final class NodeConfig {
     private boolean jobSupervisorEnabled = true;
     /** When false, RepairProposer is not started, so divergences are audited but not automatically repaired. */
     private boolean repairEnabled = true;
-    private long auditIntervalSeconds = 60;
+    private long auditIntervalSeconds = Long.getLong("aegis.audit.interval.seconds", 60);
+    
+    // Sprint 9: Workspaces
+    private int workspaceCleanupDelaySeconds = 300; // 5 minutes
+    private long artifactCacheSizeMb = 1024; // 1GB default
+    private int maxConcurrentReservations = 10; // Default limit
 
     public boolean bootstrap() {
         return bootstrap;
@@ -142,6 +148,37 @@ public final class NodeConfig {
         return dataDir().resolve("artifacts");
     }
 
+    public Path workspaceDir() {
+        return dataDir().resolve("workspaces");
+    }
+
+    public int workspaceCleanupDelaySeconds() {
+        return workspaceCleanupDelaySeconds;
+    }
+
+    public NodeConfig workspaceCleanupDelaySeconds(int sec) {
+        this.workspaceCleanupDelaySeconds = sec;
+        return this;
+    }
+
+    public long artifactCacheSizeMb() {
+        return artifactCacheSizeMb;
+    }
+
+    public NodeConfig artifactCacheSizeMb(long mb) {
+        this.artifactCacheSizeMb = mb;
+        return this;
+    }
+
+    public int maxConcurrentReservations() {
+        return maxConcurrentReservations;
+    }
+
+    public NodeConfig maxConcurrentReservations(int limit) {
+        this.maxConcurrentReservations = limit;
+        return this;
+    }
+
     public Path raftDir() {
         return dataDir().resolve("raft");
     }
@@ -179,6 +216,15 @@ public final class NodeConfig {
 
     public NodeConfig apiPort(int p) {
         this.apiPort = p;
+        return this;
+    }
+
+    public int restPort() {
+        return restPort;
+    }
+
+    public NodeConfig restPort(int p) {
+        this.restPort = p;
         return this;
     }
 

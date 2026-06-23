@@ -43,16 +43,13 @@ public class JobCancellationTest {
             // Wait for status to become CANCELLED
             assertTrue(ClusterHarness.await(5_000, () -> {
                 JobState state = submitter.api().getProcessManager().status(jobId);
-                // Depending on races with the local executor, it might eventually transition to FAILED.
-                // But we assert it reaches CANCELLED first or FAILED if the kill happened very fast.
-                return state == JobState.CANCELLED || state == JobState.FAILED;
-            }), "Job should transition to CANCELLED (or FAILED if local kill raced)");
+                return state == JobState.CANCELLED;
+            }), "Job should transition to CANCELLED");
             
             // Wait a moment and check it is terminal
             Thread.sleep(2000);
             JobState finalState = submitter.api().getProcessManager().status(jobId);
-            assertTrue(finalState == JobState.CANCELLED || finalState == JobState.FAILED, 
-                    "Job should remain in terminal state");
+            assertEquals(JobState.CANCELLED, finalState, "Cancelled job must not be overwritten by worker failure");
         }
     }
 }

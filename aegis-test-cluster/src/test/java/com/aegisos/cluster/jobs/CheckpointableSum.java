@@ -27,20 +27,24 @@ public final class CheckpointableSum implements AegisJob<Long> {
         while (current <= target) {
             sum += current;
             current++;
+            ctx.checkpoint();
             Thread.sleep(stepMillis);
         }
         return sum;
     }
 
     @Override
-    public Serializable captureState() {
-        return new long[]{current, sum};
+    public byte[] captureState() {
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(12);
+        buf.putInt(current);
+        buf.putLong(sum);
+        return buf.array();
     }
 
     @Override
-    public void restoreState(Serializable state) {
-        long[] s = (long[]) state;
-        this.current = (int) s[0];
-        this.sum = s[1];
+    public void restoreState(byte[] state) {
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(state);
+        this.current = buf.getInt();
+        this.sum = buf.getLong();
     }
 }
