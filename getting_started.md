@@ -8,34 +8,34 @@
 Build the project and start the first node (the bootstrap node):
 ```bash
 mvn clean install -DskipTests
-java -jar aegis-cli/target/aegis.jar start --bootstrap --api-port 20000 --port 7000 --data-dir node1-data
+java -jar aegis-cli/target/aegis.jar start --bootstrap --rest-port 18000 --port 7000 --home node1-data
 ```
 
 In a new terminal window, start a second node and join the cluster:
 
 ```bash
-java -jar aegis-cli/target/aegis.jar start --seed 127.0.0.1:7000 --api-port 20001 --port 7001 --data-dir node2-data
+java -jar aegis-cli/target/aegis.jar start --seed 127.0.0.1:7000 --rest-port 18001 --port 7001 --home node2-data
 ```
 
 ## 2. Cluster Inspection
 Verify the cluster is healthy and nodes can see each other:
 ```bash
-java -jar aegis-cli/target/aegis.jar nodes --seed 127.0.0.1:20000
-java -jar aegis-cli/target/aegis.jar leader --seed 127.0.0.1:20000
-java -jar aegis-cli/target/aegis.jar cluster-health --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar nodes --seed 127.0.0.1:18000
+java -jar aegis-cli/target/aegis.jar leader --seed 127.0.0.1:18000
+java -jar aegis-cli/target/aegis.jar cluster-health --seed 127.0.0.1:18000
 ```
 
 ## 3. Distributed File System Operations
 You can use AegisFS as a highly available, decentralized storage system:
 ```bash
 # Upload a file
-java -jar aegis-cli/target/aegis.jar put path/to/local/file.txt --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar put path/to/local/file.txt --seed 127.0.0.1:18000
 
 # List files
-java -jar aegis-cli/target/aegis.jar ls --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar ls --seed 127.0.0.1:18000
 
 # Download a file
-java -jar aegis-cli/target/aegis.jar get <FILE_ID> output.txt --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar get <FILE_ID> output.txt --seed 127.0.0.1:18000
 ```
 
 ## 4. Uploading an Executable Artifact
@@ -43,13 +43,27 @@ java -jar aegis-cli/target/aegis.jar get <FILE_ID> output.txt --seed 127.0.0.1:2
 Before you can run a workload, you must upload the `.jar` binary to the artifact registry (which is backed by `AegisFS`):
 
 ```bash
-java -jar aegis-cli/target/aegis.jar artifact upload path/to/your-job.jar --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar artifact upload path/to/your-job.jar --seed 127.0.0.1:18000
 ```
 *Note the returned `Artifact ID` (a SHA-256 hash).*
 
+**Example (Uploading a Java `.jar`):**
+```bash
+PS C:\> java -jar aegis-cli/target/aegis.jar artifact upload aegis-demo-job-1.0.jar --seed 127.0.0.1:18000
+19:24:50.957 INFO  [main] c.a.c.LeaderResolver - Discovered leader: 6928e01... at http://127.0.0.1:18000
+Uploaded aegis-demo-job-1.0.jar (artifact: 9e5cb04c2ce8b949cee7e44af4b121badd9a46f868aa91ac067b2f0fb4dac76d, size: 9720 bytes)
+```
+
+**Example (Uploading a Python `.py` script):**
+```bash
+PS C:\> java -jar aegis-cli/target/aegis.jar artifact upload agent_payload.py --seed 127.0.0.1:18000
+19:24:59.667 INFO  [main] c.a.c.LeaderResolver - Discovered leader: 6928e01... at http://127.0.0.1:18000
+Uploaded agent_payload.py (artifact: 55450d21017499c1960ef071303de3c592347aeac44bdd65ec0eb4958b150908, size: 368 bytes)
+```
+
 To verify it was registered:
 ```bash
-java -jar aegis-cli/target/aegis.jar artifact list --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar artifact list --seed 127.0.0.1:18000
 ```
 
 ## 5. Submitting a Process
@@ -57,19 +71,33 @@ java -jar aegis-cli/target/aegis.jar artifact list --seed 127.0.0.1:20000
 Submit your workload to the cluster, requesting specific hardware resources:
 
 ```bash
-java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --cpu 1 --memory 256 --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --cpu 1 --memory 256 --seed 127.0.0.1:18000
+```
+
+**Example (Submitting a Java Process):**
+```bash
+PS C:\> java -jar aegis-cli/target/aegis.jar process submit --artifact 9e5cb04c2ce8b949cee7e44af4b121badd9a46f868aa91ac067b2f0fb4dac76d --cpu 1 --memory 256 --seed 127.0.0.1:18000
+19:25:38.405 INFO  [main] c.a.c.LeaderResolver - Discovered leader: 6928e01... at http://127.0.0.1:18000
+b9afc5fd-d51b-4566-80af-df48e0bd36a5
 ```
 
 By default, the process runs via the JVM (`java -jar {artifact}`). However, AegisOS v2.0.0 is a Polyglot Engine. You can execute Python, Node.js, bash scripts, or native binaries by supplying a custom command:
 
 ```bash
-java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --command "python {artifact}" --cpu 1 --memory 256 --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --command "python {artifact}" --cpu 1 --memory 256 --seed 127.0.0.1:18000
+```
+
+**Example (Submitting a Python Process):**
+```bash
+PS C:\> java -jar aegis-cli/target/aegis.jar process submit --artifact 55450d21017499c1960ef071303de3c592347aeac44bdd65ec0eb4958b150908 --command "python {artifact}" --cpu 1 --memory 256 --seed 127.0.0.1:18000
+19:27:26.139 INFO  [main] c.a.c.LeaderResolver - Discovered leader: 6928e01... at http://127.0.0.1:18000
+1c9f7d0d-5ea4-4fed-9eb8-b7a3996a0444
 ```
 
 To pipe the output of this process to another process running on the cluster (Virtual IPC Overlay), provide the target `--pipe-to` Process ID:
 
 ```bash
-java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --command "python {artifact}" --pipe-to <RECEIVER_PROCESS_ID> --cpu 1 --memory 256 --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar process submit --artifact <ARTIFACT_ID> --command "python {artifact}" --pipe-to <RECEIVER_PROCESS_ID> --cpu 1 --memory 256 --seed 127.0.0.1:18000
 ```
 
 The scheduler will evaluate the Gossip topology, find a node with 256MB of free RAM, and assign the process.
@@ -79,25 +107,30 @@ The scheduler will evaluate the Gossip topology, find a node with 256MB of free 
 Check the status of your distributed process (`PLACED`, `RUNNING`, `COMPLETED`, etc.):
 
 ```bash
-java -jar aegis-cli/target/aegis.jar process status <PROCESS_ID> --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar process status <PROCESS_ID> --seed 127.0.0.1:18000
+```
+
+**Example:**
+```bash
+PS C:\> java -jar aegis-cli/target/aegis.jar process status 1c9f7d0d-5ea4-4fed-9eb8-b7a3996a0444 --seed 127.0.0.1:18000
+19:27:35.229 INFO  [main] c.a.c.LeaderResolver - Discovered leader: 6928e01... at http://127.0.0.1:18000
+Process ID: 1c9f7d0d-5ea4-4fed-9eb8-b7a3996a0444
+Artifact ID: 55450d21017499c1960ef071303de3c592347aeac44bdd65ec0eb4958b150908
+State: RUNNING
+Node: 72dc83ec91a487b911f9ae851c06db9280f769497f5044395d7b3ee78ac5ff5f
+Resources: 1 cores, 256 MB
 ```
 
 To list all historical and running jobs:
 ```bash
-java -jar aegis-cli/target/aegis.jar process list --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar process list --seed 127.0.0.1:18000
 ```
 
-To stream the live standard output from the executing node across the network:
-
-```bash
-# Wait for the process to be RUNNING before requesting logs
-java -jar aegis-cli/target/aegis.jar logs <PROCESS_ID> --seed 127.0.0.1:20000
-```
 
 To forcefully terminate the process:
 
 ```bash
-java -jar aegis-cli/target/aegis.jar process cancel <PROCESS_ID> --seed 127.0.0.1:20000
+java -jar aegis-cli/target/aegis.jar process cancel <PROCESS_ID> --seed 127.0.0.1:18000
 ```
 
 ## Full CLI Command Reference
@@ -118,4 +151,3 @@ Here is a comprehensive list of commands supported by the `aegis` CLI tool:
 * `health`: Show the health status of the cluster subsystems.
 * `leader`: Show the cluster leader.
 * `process`: Process management commands (`submit`, `list`, `status`, `cancel`).
-* `logs`: Stream live logs for a running process.
