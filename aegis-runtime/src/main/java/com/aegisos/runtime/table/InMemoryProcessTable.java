@@ -46,6 +46,12 @@ public class InMemoryProcessTable implements ProcessTable {
     }
 
     @Override
+    public void put(ProcessRecord record) {
+        table.put(record.processId(), record);
+        notifyListeners(record);
+    }
+
+    @Override
     public void updateState(String processId, ProcessState state, long stateTimestamp, String ownerNodeId, long executionId) {
         ProcessRecord updated = table.computeIfPresent(processId, (id, existing) -> new ProcessRecord(
                 existing.processId(),

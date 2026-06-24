@@ -139,6 +139,8 @@ public class Router implements HttpHandler {
                     adminHandler.removeVoter(exchange, path.substring("/v1/admin/membership/".length()));
                 } else if (path.startsWith("/v1/jobs/")) {
                     jobHandler.cancelJob(exchange, path.substring("/v1/jobs/".length()));
+                } else if (path.startsWith("/v1/files/")) {
+                    artifactHandler.handleDelete(exchange, path.substring("/v1/files/".length()));
                 } else {
                     ResponseWriter.writeError(exchange, 405, "METHOD_NOT_ALLOWED");
                 }

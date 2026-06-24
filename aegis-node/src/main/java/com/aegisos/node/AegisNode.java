@@ -186,6 +186,34 @@ public final class AegisNode implements AutoCloseable {
         consensus.stateMachine().register(com.aegisos.proto.CommandType.UPDATE_PROCESS_STATE, (index, cmd) -> applier.applyUpdate(cmd.getPayload().toByteArray()));
         consensus.stateMachine().register(com.aegisos.proto.CommandType.CANCEL_PROCESS, (index, cmd) -> applier.applyCancel(cmd.getPayload().toByteArray()));
         consensus.stateMachine().register(com.aegisos.proto.CommandType.SAVE_CHECKPOINT, (index, cmd) -> applier.applyCheckpoint(cmd.getPayload().toByteArray()));
+        
+        consensus.stateMachine().register(com.aegisos.proto.CommandType.PURGE_DATA, (index, cmd) -> {
+            try {
+                com.aegisos.proto.PurgeDataProto proto = com.aegisos.proto.PurgeDataProto.parseFrom(cmd.getPayload());
+                if (proto.getTargetType() == com.aegisos.proto.PurgeTargetTypeProto.TARGET_PROCESS) {
+                    processTable.remove(proto.getTargetId());
+                    java.nio.file.Path logFile = config.chunkDir().getParent().resolve("logs").resolve(proto.getTargetId() + ".log");
+                    java.nio.file.Files.deleteIfExists(logFile);
+                    java.nio.file.Path cpDir = config.chunkDir().getParent().resolve("checkpoints").resolve(proto.getTargetId());
+                    if (java.nio.file.Files.exists(cpDir)) {
+                        try (java.util.stream.Stream<java.nio.file.Path> stream = java.nio.file.Files.list(cpDir)) {
+                            stream.forEach(p -> {
+                                try {
+                                    java.nio.file.Files.deleteIfExists(p);
+                                } catch (java.io.IOException e) {}
+                            });
+                        }
+                        java.nio.file.Files.deleteIfExists(cpDir);
+                    }
+                } else if (proto.getTargetType() == com.aegisos.proto.PurgeTargetTypeProto.TARGET_ARTIFACT) {
+                    artifactRegistry.remove(proto.getTargetId());
+                    java.nio.file.Path artifactFile = config.chunkDir().resolve(proto.getTargetId());
+                    java.nio.file.Files.deleteIfExists(artifactFile);
+                }
+            } catch (Exception e) {
+                log.error("Failed to purge data", e);
+            }
+        });
 
         // 2. Configure Snapshots
         consensus.stateMachine().registerSnapshotParticipant(consensus.clusterConfiguration());
@@ -193,6 +221,7 @@ public final class AegisNode implements AutoCloseable {
         consensus.stateMachine().registerSnapshotParticipant(runtimeAgent.registry());
         consensus.stateMachine().registerSnapshotParticipant(fileSystem.fileIndex());
         consensus.stateMachine().registerSnapshotParticipant(fileSystem.repairTaskStore());
+        consensus.stateMachine().registerSnapshotParticipant(new com.aegisos.runtime.core.RuntimeSnapshotParticipant(processTable, pipelineTable));
 
         consensus.raftNode().configureSnapshots(
                 config.raftDir().resolve("snapshots"),
@@ -258,6 +287,17 @@ public final class AegisNode implements AutoCloseable {
         if (config.restPort() >= 0 && !isClient) {
             apiServer = new com.aegisos.node.api.ApiServer(this, config.restPort());
             apiServer.start();
+            
+            com.aegisos.node.api.handlers.LogEndpoint logEndpoint = new com.aegisos.node.api.handlers.LogEndpoint(
+                processTable, identity, new ClusterInfo(discovery), config.chunkDir().resolve("logs"));
+            
+            apiServer.server().createContext("/v1/processes/", exchange -> {
+                if (exchange.getRequestURI().getPath().endsWith("/logs")) {
+                    logEndpoint.handle(exchange);
+                } else {
+                    new com.aegisos.node.api.Router(AegisNode.this).handle(exchange);
+                }
+            });
         }
 
         started = true;

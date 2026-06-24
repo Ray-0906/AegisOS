@@ -82,7 +82,8 @@ public class DefaultRuntimeManagerTest {
             "127.0.0.1:0",
             com.aegisos.proto.NodeRole.CLUSTER_MEMBER,
             1000,
-            new com.aegisos.core.telemetry.ResourceMonitor()
+            new com.aegisos.core.telemetry.ResourceMonitor(),
+            null
         );
 
         com.aegisos.discovery.DiscoveryService discovery = org.mockito.Mockito.mock(com.aegisos.discovery.DiscoveryService.class);

@@ -66,6 +66,11 @@ To verify it was registered:
 java -jar aegis-cli/target/aegis.jar artifact list --seed 127.0.0.1:18000
 ```
 
+To remove an artifact from the cluster:
+```bash
+java -jar aegis-cli/target/aegis.jar rm <ARTIFACT_ID> --seed 127.0.0.1:18000
+```
+
 ## 5. Submitting a Process
 
 Submit your workload to the cluster, requesting specific hardware resources:
@@ -133,6 +138,18 @@ To forcefully terminate the process:
 java -jar aegis-cli/target/aegis.jar process cancel <PROCESS_ID> --seed 127.0.0.1:18000
 ```
 
+To view or stream the logs of a process:
+
+```bash
+java -jar aegis-cli/target/aegis.jar logs <PROCESS_ID> --seed 127.0.0.1:18000
+```
+
+To follow the logs (similar to `tail -f`):
+
+```bash
+java -jar aegis-cli/target/aegis.jar logs -f <PROCESS_ID> --seed 127.0.0.1:18000
+```
+
 ## Full CLI Command Reference
 Here is a comprehensive list of commands supported by the `aegis` CLI tool:
 * `start`: Start an AegisOS node in this process.
@@ -151,3 +168,5 @@ Here is a comprehensive list of commands supported by the `aegis` CLI tool:
 * `health`: Show the health status of the cluster subsystems.
 * `leader`: Show the cluster leader.
 * `process`: Process management commands (`submit`, `list`, `status`, `cancel`).
+* `logs`: Stream process logs.
+* `rm`: Remove an artifact from the cluster.
