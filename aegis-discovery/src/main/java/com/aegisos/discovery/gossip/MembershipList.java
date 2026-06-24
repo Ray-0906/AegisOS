@@ -48,10 +48,12 @@ public final class MembershipList {
     private final long deadTimeoutMs;
     private final long evictTimeoutMs;
     private final com.aegisos.core.telemetry.ResourceMonitor resourceMonitor;
+    private final com.aegisos.core.telemetry.HardwareMonitor hardwareMonitor;
 
     public MembershipList(NodeId selfId, byte[] selfPublicKey, String selfAddress,
                           com.aegisos.proto.NodeRole selfRole, long gossipIntervalMs,
-                          com.aegisos.core.telemetry.ResourceMonitor resourceMonitor) {
+                          com.aegisos.core.telemetry.ResourceMonitor resourceMonitor,
+                          com.aegisos.core.telemetry.HardwareMonitor hardwareMonitor) {
         this.selfId = selfId;
         this.selfPublicKey = selfPublicKey.clone();
         this.selfAddress = selfAddress;
@@ -60,11 +62,12 @@ public final class MembershipList {
         this.deadTimeoutMs = 10 * gossipIntervalMs;
         this.evictTimeoutMs = 30 * gossipIntervalMs;
         this.resourceMonitor = resourceMonitor;
+        this.hardwareMonitor = hardwareMonitor;
         peers.put(selfId, selfEntry());
     }
 
     private PeerEntry selfEntry() {
-        return PeerEntry.newBuilder()
+        PeerEntry.Builder builder = PeerEntry.newBuilder()
                 .setNodeId(ByteString.copyFrom(selfId.toBytes()))
                 .setPublicKey(ByteString.copyFrom(selfPublicKey))
                 .setAddress(selfAddress)
@@ -72,13 +75,22 @@ public final class MembershipList {
                 .setStatus(PeerStatus.ALIVE)
                 .setVersion(selfVersion.get())
                 .setRole(selfRole)
-                .setResources(resourceMonitor != null ? resourceMonitor.gather(selfId.toBytes()) : com.aegisos.proto.NodeResources.getDefaultInstance())
-                .build();
+                .setResources(resourceMonitor != null ? resourceMonitor.gather(selfId.toBytes()) : com.aegisos.proto.NodeResources.getDefaultInstance());
+                
+        if (hardwareMonitor != null) {
+            var telemetry = hardwareMonitor.getSnapshot();
+            builder.setTelemetry(com.aegisos.proto.TelemetrySnapshotProto.newBuilder()
+                    .setAvailableCpuCores(telemetry.getAvailableCpuCores())
+                    .setAvailableMemoryMb(telemetry.getAvailableMemoryMb())
+                    .setHasGpu(telemetry.hasGpu())
+                    .build());
+        }
+        return builder.build();
     }
 
     /** Refreshes our own entry before a gossip round. */
     public void touchSelf() {
-        peers.put(selfId, PeerEntry.newBuilder()
+        PeerEntry.Builder builder = PeerEntry.newBuilder()
                 .setNodeId(ByteString.copyFrom(selfId.toBytes()))
                 .setPublicKey(ByteString.copyFrom(selfPublicKey))
                 .setAddress(selfAddress)
@@ -86,8 +98,17 @@ public final class MembershipList {
                 .setStatus(PeerStatus.ALIVE)
                 .setVersion(selfVersion.incrementAndGet())
                 .setRole(selfRole)
-                .setResources(resourceMonitor != null ? resourceMonitor.gather(selfId.toBytes()) : com.aegisos.proto.NodeResources.getDefaultInstance())
-                .build());
+                .setResources(resourceMonitor != null ? resourceMonitor.gather(selfId.toBytes()) : com.aegisos.proto.NodeResources.getDefaultInstance());
+
+        if (hardwareMonitor != null) {
+            var telemetry = hardwareMonitor.getSnapshot();
+            builder.setTelemetry(com.aegisos.proto.TelemetrySnapshotProto.newBuilder()
+                    .setAvailableCpuCores(telemetry.getAvailableCpuCores())
+                    .setAvailableMemoryMb(telemetry.getAvailableMemoryMb())
+                    .setHasGpu(telemetry.hasGpu())
+                    .build());
+        }
+        peers.put(selfId, builder.build());
     }
 
     /** Records a directly-observed peer (e.g. right after a handshake). */

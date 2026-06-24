@@ -29,9 +29,18 @@ public final class ClusterInfo {
     }
 
     private static NodeInfo toInfo(PeerEntry p) {
+        com.aegisos.core.telemetry.TelemetrySnapshot telemetry = null;
+        if (p.hasTelemetry()) {
+            telemetry = new com.aegisos.core.telemetry.TelemetrySnapshot(
+                p.getTelemetry().getAvailableCpuCores(),
+                p.getTelemetry().getAvailableMemoryMb(),
+                p.getTelemetry().getHasGpu()
+            );
+        }
         return new NodeInfo(
                 com.aegisos.core.util.HexUtil.encode(p.getNodeId().toByteArray()),
                 p.getAddress(),
-                p.getStatus().name());
+                p.getStatus().name(),
+                telemetry);
     }
 }

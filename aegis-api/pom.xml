@@ -25,9 +25,5 @@
             <groupId>com.aegisos</groupId>
             <artifactId>aegis-fs</artifactId>
         </dependency>
-        <dependency>
-            <groupId>com.aegisos</groupId>
-            <artifactId>aegis-scheduler</artifactId>
-        </dependency>
     </dependencies>
 </project>

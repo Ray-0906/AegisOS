@@ -8,6 +8,7 @@ public interface ProcessTable {
     void updateState(String processId, ProcessState state, long stateTimestamp, String ownerNodeId, long executionId);
     Optional<ProcessRecord> lookup(String processId);
     List<ProcessRecord> list();
+    void put(ProcessRecord record);
     void remove(String processId);
     void addListener(ProcessStateListener listener);
     void saveCheckpoint(String processId, byte[] stateData);

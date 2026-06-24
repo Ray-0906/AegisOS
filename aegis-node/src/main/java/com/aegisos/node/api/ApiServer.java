@@ -52,4 +52,8 @@ public class ApiServer {
     public int boundPort() {
         return server != null ? server.getAddress().getPort() : port;
     }
+
+    public HttpServer server() {
+        return server;
+    }
 }

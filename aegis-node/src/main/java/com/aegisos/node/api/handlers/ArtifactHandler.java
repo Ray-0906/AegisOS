@@ -110,4 +110,22 @@ public class ArtifactHandler {
             ResponseWriter.writeError(exchange, 503, "SERVICE_UNAVAILABLE");
         }
     }
+    public void handleDelete(HttpExchange exchange, String id) throws IOException {
+        try {
+            com.aegisos.proto.PurgeDataProto purgeCmd = com.aegisos.proto.PurgeDataProto.newBuilder()
+                    .setTargetType(com.aegisos.proto.PurgeTargetTypeProto.TARGET_ARTIFACT)
+                    .setTargetId(id)
+                    .build();
+
+            node.consensus().propose(com.aegisos.proto.StateCommand.newBuilder()
+                    .setType(com.aegisos.proto.CommandType.PURGE_DATA)
+                    .setPayload(purgeCmd.toByteString())
+                    .build()).get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+            ResponseWriter.writeJson(exchange, 202, "ACCEPTED");
+        } catch (Exception e) {
+            log.error("Failed to delete artifact {}", id, e);
+            ResponseWriter.writeError(exchange, 500, "INTERNAL_ERROR");
+        }
+    }
 }

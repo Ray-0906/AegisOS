@@ -73,6 +73,13 @@ message PeerEntry {
   int64      version     = 6;
   NodeRole   role        = 7;
   NodeResources resources = 8;
+  TelemetrySnapshotProto telemetry = 9;
+}
+
+message TelemetrySnapshotProto {
+  int32 available_cpu_cores = 1;
+  int64 available_memory_mb = 2;
+  bool has_gpu = 3;
 }
 
 message MembershipList {
@@ -137,6 +144,26 @@ message AppendEntriesResult {
   int64 match_index    = 3; // highest index known replicated, hint for leader
 }
 
+enum PipelineStatusProto {
+  PIPELINE_PENDING = 0;
+  PIPELINE_RUNNING = 1;
+  PIPELINE_COMPLETED = 2;
+  PIPELINE_FAILED = 3;
+}
+
+message PipelineRecordProto {
+  string pipeline_id = 1;
+  repeated string process_ids = 2;
+  PipelineStatusProto status = 3;
+}
+
+message SnapshotProto {
+  int64 last_included_index = 1;
+  int64 last_included_term = 2;
+  repeated ProcessRecordProto processes = 3;
+  repeated PipelineRecordProto pipelines = 4;
+}
+
 // Application state machine commands (section 3.4)
 enum CommandType {
   CMD_UNKNOWN       = 0;
@@ -160,11 +187,23 @@ enum CommandType {
   UPDATE_PROCESS_STATE  = 18;
   CANCEL_PROCESS        = 19;
   SAVE_CHECKPOINT       = 20;
+  INSTALL_SNAPSHOT      = 21;
+  PURGE_DATA            = 22;
 }
 
 message StateCommand {
   CommandType type = 1;
   bytes payload    = 2; // type-specific serialized message below
+}
+
+enum PurgeTargetTypeProto {
+  TARGET_PROCESS = 0;
+  TARGET_ARTIFACT = 1;
+}
+
+message PurgeDataProto {
+  string target_id = 1;
+  PurgeTargetTypeProto target_type = 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +520,19 @@ message ProcessRecordProto {
   bytes submitter_node_id = 9;
   string execution_command = 10;
   string pipe_to_process_id = 11;
+  ResourceConstraintsProto resource_constraints = 12;
+  PlacementConstraintsProto placement_constraints = 13;
+}
+
+message ResourceConstraintsProto {
+  int32 required_cpu_cores = 1;
+  int64 required_memory_mb = 2;
+  bool require_gpu = 3;
+}
+
+message PlacementConstraintsProto {
+  string target_node_id = 1;
+  string anti_affinity_process_id = 2;
 }
 
 // ---------------------------------------------------------------------------

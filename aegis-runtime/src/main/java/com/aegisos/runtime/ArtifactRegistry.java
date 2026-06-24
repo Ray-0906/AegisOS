@@ -32,6 +32,11 @@ public final class ArtifactRegistry implements SnapshotParticipant {
         return Optional.ofNullable(artifacts.get(sha256));
     }
 
+    /** Remove by SHA-256 hex string. */
+    public void remove(String sha256) {
+        artifacts.remove(sha256);
+    }
+
     /** Check if artifact exists by SHA-256. */
     public boolean exists(String sha256) {
         return artifacts.containsKey(sha256);

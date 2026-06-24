@@ -42,6 +42,29 @@ Under the hood, AegisOS relies on a combination of distributed systems primitive
 * `aegis-fs`: Distributed file system for immutable artifact storage.
 * `aegis-runtime`: The physical OS process supervisor and scheduling daemon.
 
+## Project File Structure
+
+```text
+AegisOS/
+├── aegis-api/           # REST APIs and DTO contracts
+├── aegis-cli/           # Command-Line Interface and PicoCLI commands
+├── aegis-client/        # HTTP client for interacting with the AegisOS cluster
+├── aegis-consensus/     # Raft-based distributed state machine implementation
+├── aegis-core/          # Core models, configuration, and shared utilities
+├── aegis-discovery/     # Gossip protocol for peer topology and telemetry
+├── aegis-fs/            # Distributed file system for immutable artifacts
+├── aegis-network/       # Multiplexed TCP transport layer & Virtual IPC
+├── aegis-node/          # The main application entrypoint tying all modules together
+├── aegis-runtime/       # Physical OS process supervisor and scheduling daemon
+├── aegis-scheduler/     # Workload placement and hardware-aware load balancing
+├── aegis-demo-job/      # Example Java payloads for testing
+├── aegis-examples/      # Reference implementations of cluster interactions
+├── aegis-contract-test/ # Integration and contract tests across module boundaries
+├── aegis-test-cluster/  # Framework for spinning up in-memory mock clusters
+└── docs/                # Architecture Decision Records (ADRs) and documentation
+```
+
+
 ## Available Commands & Services
 
 The AegisOS CLI exposes a rich set of commands to interact with the cluster:
