@@ -35,8 +35,14 @@ public class RaftQuorumIsolationTest {
             AegisNode toKill = nodes.stream().filter(n -> n != finalLeader).findFirst().get();
             harness.stop(toKill);
 
-            // Wait for Gossip to sweep and mark it DEAD/evict it (optional, but let's wait 3s)
-            Thread.sleep(3000);
+            // Poll dynamically until Gossip sweeps and marks it DEAD/evict it
+            long deadline = System.currentTimeMillis() + 15000;
+            while (finalLeader.discovery().membership().alivePeerIds().contains(toKill.identity().nodeId())) {
+                if (System.currentTimeMillis() > deadline) {
+                    fail("Node was not marked DEAD by Gossip within 15 seconds");
+                }
+                Thread.sleep(100);
+            }
 
             // Try to write. Quorum is still majority of 3 (which is 2).
             // Since leader and 1 survivor are alive, write should succeed.

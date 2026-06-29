@@ -7,6 +7,7 @@ public interface ProcessTable {
     void register(ProcessRecord record);
     void updateState(String processId, ProcessState state, long stateTimestamp, String ownerNodeId, long executionId);
     Optional<ProcessRecord> lookup(String processId);
+    Optional<ProcessRecord> lookupService(String serviceName);
     List<ProcessRecord> list();
     void put(ProcessRecord record);
     void remove(String processId);

@@ -18,9 +18,21 @@ import java.util.concurrent.Future;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 
+import java.util.function.BooleanSupplier;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class Phase8Test {
+
+    private static void dynamicWait(BooleanSupplier condition, long maxWaitMs) throws InterruptedException {
+        long waited = 0;
+        long backoff = 100;
+        while (!condition.getAsBoolean() && waited < maxWaitMs) {
+            Thread.sleep(backoff);
+            waited += backoff;
+            backoff = Math.min(backoff * 2, 800);
+        }
+    }
 
     private static ClusterHarness cluster;
     private static String artifactId;
@@ -62,9 +74,7 @@ public class Phase8Test {
 
         // wait for all nodes to apply REGISTER_ARTIFACT
         for (com.aegisos.node.AegisNode n : cluster.nodes()) {
-            for (int j = 0; j < 50 && n.artifactRegistry().bySha256(artifactId).isEmpty(); j++) {
-                Thread.sleep(50);
-            }
+            dynamicWait(() -> n.artifactRegistry().bySha256(artifactId).isPresent(), 5000);
         }
     }
 
@@ -80,6 +90,11 @@ public class Phase8Test {
         int jobCount = 100;
         ExecutorService exec = Executors.newFixedThreadPool(10);
         List<Callable<Object>> tasks = new ArrayList<>();
+
+        // JVM and Scheduler Warmup
+        JobHandle warmupHandle = cluster.nodes().get(0).api().getProcessManager().submitArtifact(
+                artifactId, "com.example.WordCounter", List.of("warmup"), 1, 128);
+        cluster.nodes().get(0).api().getProcessManager().awaitResult(warmupHandle, 15_000);
 
         for (int i = 0; i < jobCount; i++) {
             final int index = i;

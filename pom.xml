@@ -152,6 +152,9 @@
                     <version>3.2.5</version>
                     <configuration>
                         <excludedGroups>soak,overnight</excludedGroups>
+                        <reuseForks>false</reuseForks>
+                        <forkCount>1</forkCount>
+                        <argLine>-Xmx1024m</argLine>
                     </configuration>
                 </plugin>
             </plugins>

@@ -11,5 +11,10 @@ public record ProcessRecord(
         long submitTimestamp,
         long stateTimestamp,
         String executionCommand,
-        String pipeToProcessId) {
+        String pipeToProcessId,
+        ResourceConstraints resourceConstraints,
+        PlacementConstraints placementConstraints,
+        String serviceName,
+        String pipeToService) {
+
 }

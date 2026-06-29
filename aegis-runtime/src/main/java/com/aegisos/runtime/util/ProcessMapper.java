@@ -70,7 +70,7 @@ public final class ProcessMapper {
         if (record == null) {
             return ProcessRecordProto.getDefaultInstance();
         }
-        return ProcessRecordProto.newBuilder()
+        ProcessRecordProto.Builder builder = ProcessRecordProto.newBuilder()
                 .setProcessId(record.processId() == null ? "" : record.processId())
                 .setArtifactId(record.artifactId() == null ? "" : record.artifactId())
                 .setOwnerNodeId(record.ownerNodeId() == null ? "" : record.ownerNodeId())
@@ -82,13 +82,48 @@ public final class ProcessMapper {
                 .setSubmitterNodeId(record.submitterNodeId() == null ? com.google.protobuf.ByteString.EMPTY : com.google.protobuf.ByteString.copyFrom(com.aegisos.core.identity.NodeId.fromHex(record.submitterNodeId()).toBytes()))
                 .setExecutionCommand(record.executionCommand() == null ? "" : record.executionCommand())
                 .setPipeToProcessId(record.pipeToProcessId() == null ? "" : record.pipeToProcessId())
-                .build();
+                .setServiceName(record.serviceName() == null ? "" : record.serviceName())
+                .setPipeToService(record.pipeToService() == null ? "" : record.pipeToService());
+
+        if (record.resourceConstraints() != null) {
+            builder.setResourceConstraints(com.aegisos.proto.ResourceConstraintsProto.newBuilder()
+                    .setRequiredCpuCores(record.resourceConstraints().requiredCpuCores())
+                    .setRequiredMemoryMb(record.resourceConstraints().requiredMemoryMb())
+                    .setRequireGpu(record.resourceConstraints().requireGpu())
+                    .build());
+        }
+
+        if (record.placementConstraints() != null) {
+            builder.setPlacementConstraints(com.aegisos.proto.PlacementConstraintsProto.newBuilder()
+                    .setTargetNodeId(record.placementConstraints().targetNodeId() == null ? "" : record.placementConstraints().targetNodeId())
+                    .setAntiAffinityProcessId(record.placementConstraints().antiAffinityProcessId() == null ? "" : record.placementConstraints().antiAffinityProcessId())
+                    .build());
+        }
+
+        return builder.build();
     }
 
     public static ProcessRecord fromProto(ProcessRecordProto proto) {
         if (proto == null) {
             return null;
         }
+        com.aegisos.api.runtime.ResourceConstraints resourceConstraints = null;
+        if (proto.hasResourceConstraints()) {
+            resourceConstraints = new com.aegisos.api.runtime.ResourceConstraints(
+                    proto.getResourceConstraints().getRequiredCpuCores(),
+                    proto.getResourceConstraints().getRequiredMemoryMb(),
+                    proto.getResourceConstraints().getRequireGpu()
+            );
+        }
+
+        com.aegisos.api.runtime.PlacementConstraints placementConstraints = null;
+        if (proto.hasPlacementConstraints()) {
+            placementConstraints = new com.aegisos.api.runtime.PlacementConstraints(
+                    proto.getPlacementConstraints().getTargetNodeId().isEmpty() ? null : proto.getPlacementConstraints().getTargetNodeId(),
+                    proto.getPlacementConstraints().getAntiAffinityProcessId().isEmpty() ? null : proto.getPlacementConstraints().getAntiAffinityProcessId()
+            );
+        }
+
         return new ProcessRecord(
                 proto.getProcessId().isEmpty() ? null : proto.getProcessId(),
                 proto.getArtifactId().isEmpty() ? null : proto.getArtifactId(),
@@ -99,8 +134,12 @@ public final class ProcessMapper {
                 fromProto(proto.getResources()),
                 proto.getSubmitTimestamp(),
                 proto.getStateTimestamp(),
-                proto.getExecutionCommand(),
-                proto.getPipeToProcessId().isEmpty() ? null : proto.getPipeToProcessId()
+                proto.getExecutionCommand().isEmpty() ? null : proto.getExecutionCommand(),
+                proto.getPipeToProcessId().isEmpty() ? null : proto.getPipeToProcessId(),
+                resourceConstraints,
+                placementConstraints,
+                proto.getServiceName().isEmpty() ? null : proto.getServiceName(),
+                proto.getPipeToService().isEmpty() ? null : proto.getPipeToService()
         );
     }
 }

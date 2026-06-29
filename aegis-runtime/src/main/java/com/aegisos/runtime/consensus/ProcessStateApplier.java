@@ -5,6 +5,7 @@ import com.aegisos.api.runtime.ProcessState;
 import com.aegisos.api.runtime.ProcessTable;
 import com.aegisos.proto.ProcessRecordProto;
 import com.aegisos.runtime.util.ProcessMapper;
+import java.util.Optional;
 
 public class ProcessStateApplier {
 
@@ -31,6 +32,10 @@ public class ProcessStateApplier {
             ProcessRecordProto proto = ProcessRecordProto.parseFrom(payload);
             ProcessRecord record = ProcessMapper.fromProto(proto);
             if (record != null && record.processId() != null) {
+                Optional<ProcessRecord> existing = processTable.lookup(record.processId());
+                if (existing.isPresent() && isTerminal(existing.get().state())) {
+                    return;
+                }
                 processTable.updateState(
                         record.processId(),
                         record.state(),
@@ -49,6 +54,10 @@ public class ProcessStateApplier {
             ProcessRecordProto proto = ProcessRecordProto.parseFrom(payload);
             String processId = proto.getProcessId();
             if (processId != null && !processId.isEmpty()) {
+                Optional<ProcessRecord> existing = processTable.lookup(processId);
+                if (existing.isPresent() && isTerminal(existing.get().state())) {
+                    return;
+                }
                 long now = System.currentTimeMillis();
                 String owner = proto.getOwnerNodeId().isEmpty() ? null : proto.getOwnerNodeId();
                 processTable.updateState(processId, ProcessState.CANCELLED, now, owner, proto.getExecutionId());
@@ -65,5 +74,9 @@ public class ProcessStateApplier {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private boolean isTerminal(ProcessState state) {
+        return state == ProcessState.COMPLETED || state == ProcessState.FAILED || state == ProcessState.CANCELLED;
     }
 }

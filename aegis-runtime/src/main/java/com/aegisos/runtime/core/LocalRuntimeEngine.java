@@ -134,6 +134,19 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
             Process process = pb.start();
             activeProcesses.put(record.processId(), process);
 
+            String actualPipeTargetId = record.pipeToProcessId();
+            if (record.pipeToService() != null && !record.pipeToService().isEmpty()) {
+                java.util.Optional<ProcessRecord> resolved = processTable.lookupService(record.pipeToService());
+                if (resolved.isPresent()) {
+                    actualPipeTargetId = resolved.get().processId();
+                    log.info("DNS_RESOLVED: Service '{}' -> Process '{}'", record.pipeToService(), actualPipeTargetId);
+                } else {
+                    throw new RuntimeException("DNS_RESOLUTION_FAILED: Service '" + record.pipeToService() + "' not found in cluster");
+                }
+            }
+
+            final String resolvedPipeTargetId = actualPipeTargetId;
+
             InputStream processStdout = process.getInputStream();
             CompletableFuture.runAsync(() -> {
                 try (java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile, true)) {
@@ -143,11 +156,11 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                         fos.write(buf, 0, read);
                         fos.flush();
 
-                        if (record.pipeToProcessId() != null && !record.pipeToProcessId().isEmpty()) {
-                            java.util.Optional<ProcessRecord> targetOpt = processTable.lookup(record.pipeToProcessId());
+                        if (resolvedPipeTargetId != null && !resolvedPipeTargetId.isEmpty()) {
+                            java.util.Optional<ProcessRecord> targetOpt = processTable.lookup(resolvedPipeTargetId);
                             if (targetOpt.isPresent() && targetOpt.get().ownerNodeId() != null) {
                                 byte[] data = java.util.Arrays.copyOf(buf, read);
-                                networkLayer.sendIpcData(targetOpt.get().ownerNodeId(), record.pipeToProcessId(), data);
+                                networkLayer.sendIpcData(targetOpt.get().ownerNodeId(), resolvedPipeTargetId, data);
                             }
                         }
                     }
@@ -174,7 +187,11 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                         record.submitTimestamp(),
                         System.currentTimeMillis(),
                         record.executionCommand(),
-                        record.pipeToProcessId()
+                        record.pipeToProcessId(),
+                        record.resourceConstraints(),
+                        record.placementConstraints(),
+                        record.serviceName(),
+                        record.pipeToService()
                 );
 
                 try {
@@ -204,7 +221,11 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                     record.submitTimestamp(),
                     System.currentTimeMillis(),
                     record.executionCommand(),
-                    record.pipeToProcessId()
+                    record.pipeToProcessId(),
+                    record.resourceConstraints(),
+                    record.placementConstraints(),
+                    record.serviceName(),
+                    record.pipeToService()
             );
 
             ProcessRecordProto proto = ProcessMapper.toProto(runningRecord);

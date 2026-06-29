@@ -172,7 +172,7 @@ public final class AegisNode implements AutoCloseable {
 
         com.aegisos.api.runtime.ProcessTable processTable = new com.aegisos.runtime.table.InMemoryProcessTable();
         this.pipelineTable = new com.aegisos.runtime.table.InMemoryPipelineTable();
-        com.aegisos.api.runtime.ProcessScheduler processScheduler = new com.aegisos.runtime.core.SimpleProcessScheduler(consensus, identity, discovery.membership());
+        com.aegisos.api.runtime.ProcessScheduler processScheduler = new com.aegisos.runtime.core.SimpleProcessScheduler(consensus, identity, discovery.membership(), processTable);
         com.aegisos.api.runtime.RuntimeEngine runtimeEngine = new com.aegisos.runtime.core.LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network, processTable);
         
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) processScheduler);

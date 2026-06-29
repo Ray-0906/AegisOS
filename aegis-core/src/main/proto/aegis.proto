@@ -522,6 +522,8 @@ message ProcessRecordProto {
   string pipe_to_process_id = 11;
   ResourceConstraintsProto resource_constraints = 12;
   PlacementConstraintsProto placement_constraints = 13;
+  string service_name = 14;
+  string pipe_to_service = 15;
 }
 
 message ResourceConstraintsProto {

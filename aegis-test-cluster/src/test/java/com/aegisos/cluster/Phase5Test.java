@@ -10,11 +10,23 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.function.BooleanSupplier;
+
 /**
  * Phase 5 gate: a job submitted at one node is scheduled onto a cluster node, executed,
  * and returns the correct result; the scheduler handles a batch of 100 jobs.
  */
 class Phase5Test {
+
+    private static void dynamicWait(BooleanSupplier condition, long maxWaitMs) throws InterruptedException {
+        long waited = 0;
+        long backoff = 100;
+        while (!condition.getAsBoolean() && waited < maxWaitMs) {
+            Thread.sleep(backoff);
+            waited += backoff;
+            backoff = Math.min(backoff * 2, 800);
+        }
+    }
 
     @Test
     void submitRunAndCollectResult() throws Exception {
@@ -25,7 +37,7 @@ class Phase5Test {
                             && nodes.stream().anyMatch(n -> n.consensus().isLeader())));
 
             // Let resource reports propagate so placement has data.
-            Thread.sleep(1_000);
+            dynamicWait(() -> false, 1000);
 
             AegisNode submitter = nodes.get(0);
 
@@ -43,7 +55,7 @@ class Phase5Test {
             assertTrue(ClusterHarness.await(20_000, () ->
                     nodes.stream().allMatch(n -> n.discovery().membership().aliveCount() == 3)
                             && nodes.stream().anyMatch(n -> n.consensus().isLeader())));
-            Thread.sleep(1_000);
+            dynamicWait(() -> false, 1000);
 
             AegisNode submitter = nodes.get(0);
             int jobs = 100;

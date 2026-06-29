@@ -83,7 +83,11 @@ public class TopologyReconciler implements Runnable {
                                 record.submitTimestamp(),
                                 System.currentTimeMillis(),
                                 record.executionCommand(),
-                                record.pipeToProcessId()
+                                record.pipeToProcessId(),
+                                record.resourceConstraints(),
+                                record.placementConstraints(),
+                                record.serviceName(),
+                                record.pipeToService()
                         );
 
                         ProcessRecordProto proto = ProcessMapper.toProto(failedRecord);
