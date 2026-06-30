@@ -178,6 +178,10 @@ message SnapshotProto {
   repeated PipelineRecordProto pipelines = 4;
 }
 
+message ProcessTableSnapshotProto {
+  repeated ProcessRecordProto records = 1;
+}
+
 // Application state machine commands (section 3.4)
 enum CommandType {
   CMD_UNKNOWN       = 0;
