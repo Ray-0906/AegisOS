@@ -23,8 +23,8 @@ class Phase1Test {
         IdentityService idA = IdentityService.ephemeral();
         IdentityService idB = IdentityService.ephemeral();
 
-        try (NetworkLayer netA = new NetworkLayer(idA, 0, "127.0.0.1");
-             NetworkLayer netB = new NetworkLayer(idB, 0, "127.0.0.1")) {
+        try (NetworkLayer netA = new NetworkLayer(idA, new com.aegisos.core.security.IdentityManager(java.nio.file.Files.createTempDirectory("test")), 0, "127.0.0.1");
+             NetworkLayer netB = new NetworkLayer(idB, new com.aegisos.core.security.IdentityManager(java.nio.file.Files.createTempDirectory("test")), 0, "127.0.0.1")) {
 
             netB.registerHandler(MessageType.PING, req -> {
                 // Echo the payload back as a PONG over the encrypted channel.

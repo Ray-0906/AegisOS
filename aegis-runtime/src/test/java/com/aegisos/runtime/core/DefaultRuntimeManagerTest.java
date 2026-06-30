@@ -38,7 +38,7 @@ public class DefaultRuntimeManagerTest {
     public void setup() throws Exception {
         IdentityService identity = IdentityService.ephemeral();
         localNode = identity.nodeId();
-        NetworkLayer network = new NetworkLayer(identity, 0, "127.0.0.1");
+        NetworkLayer network = new NetworkLayer(identity, new com.aegisos.core.security.IdentityManager(java.nio.file.Files.createTempDirectory("test")), 0, "127.0.0.1");
 
         Path tempDir = Files.createTempDirectory("raft-test");
 

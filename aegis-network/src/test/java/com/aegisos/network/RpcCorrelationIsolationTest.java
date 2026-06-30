@@ -23,8 +23,8 @@ public class RpcCorrelationIsolationTest {
         id1.trustStore().pin(id2.nodeId(), id2.publicKey());
         id2.trustStore().pin(id1.nodeId(), id1.publicKey());
 
-        try (NetworkLayer net1 = new NetworkLayer(id1, 0, "localhost");
-             NetworkLayer net2 = new NetworkLayer(id2, 0, "localhost")) {
+        try (NetworkLayer net1 = new NetworkLayer(id1, new com.aegisos.core.security.IdentityManager(java.nio.file.Files.createTempDirectory("test")), 0, "localhost");
+             NetworkLayer net2 = new NetworkLayer(id2, new com.aegisos.core.security.IdentityManager(java.nio.file.Files.createTempDirectory("test")), 0, "localhost")) {
 
             net1.start();
             net2.start();
@@ -70,8 +70,8 @@ public class RpcCorrelationIsolationTest {
         id1.trustStore().pin(id2.nodeId(), id2.publicKey());
         id2.trustStore().pin(id1.nodeId(), id1.publicKey());
 
-        try (NetworkLayer net1 = new NetworkLayer(id1, 0, "localhost");
-             NetworkLayer net2 = new NetworkLayer(id2, 0, "localhost")) {
+        try (NetworkLayer net1 = new NetworkLayer(id1, new com.aegisos.core.security.IdentityManager(java.nio.file.Files.createTempDirectory("test")), 0, "localhost");
+             NetworkLayer net2 = new NetworkLayer(id2, new com.aegisos.core.security.IdentityManager(java.nio.file.Files.createTempDirectory("test")), 0, "localhost")) {
 
             net1.start();
             net2.start();

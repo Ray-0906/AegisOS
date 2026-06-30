@@ -72,7 +72,7 @@ public final class AegisNode implements AutoCloseable {
         this.timelineRegistry = new com.aegisos.core.observability.TimelineRegistry(1000);
         KeyStore keyStore = new KeyStore(config.homeDir());
         this.identity = IdentityService.bootstrap(keyStore);
-        this.network = new NetworkLayer(identity, config.port(), config.advertiseHost());
+        this.network = new NetworkLayer(identity, new com.aegisos.core.security.IdentityManager(config.homeDir()), config.port(), config.advertiseHost());
     }
 
     public synchronized void start() throws IOException {

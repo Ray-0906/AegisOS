@@ -11,6 +11,11 @@ enum NodeRole {
   CLIENT         = 1;
 }
 
+message NodeCertificate {
+  bytes certificate_data = 1;
+  bytes signature = 2;
+}
+
 
 // ---------------------------------------------------------------------------
 // Wire envelope (section 2 of the design doc).
@@ -46,6 +51,7 @@ message Hello {
   bytes  ephemeral_public_key = 3; // X25519 ephemeral key for ECDH (32 bytes)
   bytes  nonce             = 4; // 32 bytes random challenge
   string address           = 5; // advertised ip:port
+  NodeCertificate certificate = 6;
 }
 
 message Verify {
@@ -74,6 +80,7 @@ message PeerEntry {
   NodeRole   role        = 7;
   NodeResources resources = 8;
   TelemetrySnapshotProto telemetry = 9;
+  NodeCertificate certificate = 10;
 }
 
 message TelemetrySnapshotProto {
