@@ -11,6 +11,17 @@ enum NodeRole {
   CLIENT         = 1;
 }
 
+message NodeCertificate {
+  bytes certificate_data = 1;
+  bytes signature = 2;
+}
+
+message TraceContextProto {
+  string trace_id = 1;
+  string span_id = 2;
+  string parent_span_id = 3;
+}
+
 
 // ---------------------------------------------------------------------------
 // Wire envelope (section 2 of the design doc).
@@ -28,6 +39,7 @@ message MessageHeader {
   uint64 correlation  = 7; // request/response correlation id (0 = none)
   bool   handshake    = 8; // true while body is still plaintext (pre-session-key)
   bool   is_response  = 9; // true if this message is a response to an earlier correlation id
+  TraceContextProto trace_context = 10;
 }
 
 message Envelope {
@@ -46,6 +58,7 @@ message Hello {
   bytes  ephemeral_public_key = 3; // X25519 ephemeral key for ECDH (32 bytes)
   bytes  nonce             = 4; // 32 bytes random challenge
   string address           = 5; // advertised ip:port
+  NodeCertificate certificate = 6;
 }
 
 message Verify {
@@ -74,6 +87,7 @@ message PeerEntry {
   NodeRole   role        = 7;
   NodeResources resources = 8;
   TelemetrySnapshotProto telemetry = 9;
+  NodeCertificate certificate = 10;
 }
 
 message TelemetrySnapshotProto {
@@ -522,6 +536,9 @@ message ProcessRecordProto {
   string pipe_to_process_id = 11;
   ResourceConstraintsProto resource_constraints = 12;
   PlacementConstraintsProto placement_constraints = 13;
+  string service_name = 14;
+  string pipe_to_service = 15;
+  string trace_id = 16;
 }
 
 message ResourceConstraintsProto {

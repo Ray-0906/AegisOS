@@ -72,7 +72,7 @@ public final class AegisNode implements AutoCloseable {
         this.timelineRegistry = new com.aegisos.core.observability.TimelineRegistry(1000);
         KeyStore keyStore = new KeyStore(config.homeDir());
         this.identity = IdentityService.bootstrap(keyStore);
-        this.network = new NetworkLayer(identity, config.port(), config.advertiseHost());
+        this.network = new NetworkLayer(identity, new com.aegisos.core.security.IdentityManager(config.homeDir()), config.port(), config.advertiseHost());
     }
 
     public synchronized void start() throws IOException {
@@ -172,7 +172,7 @@ public final class AegisNode implements AutoCloseable {
 
         com.aegisos.api.runtime.ProcessTable processTable = new com.aegisos.runtime.table.InMemoryProcessTable();
         this.pipelineTable = new com.aegisos.runtime.table.InMemoryPipelineTable();
-        com.aegisos.api.runtime.ProcessScheduler processScheduler = new com.aegisos.runtime.core.SimpleProcessScheduler(consensus, identity, discovery.membership());
+        com.aegisos.api.runtime.ProcessScheduler processScheduler = new com.aegisos.runtime.core.SimpleProcessScheduler(consensus, identity, discovery.membership(), processTable);
         com.aegisos.api.runtime.RuntimeEngine runtimeEngine = new com.aegisos.runtime.core.LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network, processTable);
         
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) processScheduler);

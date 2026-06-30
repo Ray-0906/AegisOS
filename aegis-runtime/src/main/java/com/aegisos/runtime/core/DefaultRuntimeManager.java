@@ -50,7 +50,7 @@ public class DefaultRuntimeManager implements RuntimeManager {
     }
 
     @Override
-    public String submitProcess(String artifactId, ProcessResources resources, String executionCommand, String pipeToProcessId) {
+    public String submitProcess(String artifactId, com.aegisos.api.runtime.ResourceConstraints resourceConstraints, com.aegisos.api.runtime.PlacementConstraints placementConstraints, String executionCommand, String pipeToProcessId, String serviceName, String pipeToService, String traceId) {
         String processId = UUID.randomUUID().toString();
         long now = System.currentTimeMillis();
 
@@ -61,11 +61,16 @@ public class DefaultRuntimeManager implements RuntimeManager {
                 identity.nodeId().toHex(),
                 0,
                 ProcessState.SUBMITTED,
-                resources,
+                null,
                 now,
                 now,
                 executionCommand,
-                pipeToProcessId
+                pipeToProcessId,
+                resourceConstraints,
+                placementConstraints,
+                serviceName,
+                pipeToService,
+                traceId
         );
 
         propose(CommandType.SUBMIT_PROCESS, record);
@@ -89,7 +94,12 @@ public class DefaultRuntimeManager implements RuntimeManager {
                     existing.submitTimestamp(),
                     System.currentTimeMillis(),
                     existing.executionCommand(),
-                    existing.pipeToProcessId()
+                    existing.pipeToProcessId(),
+                    existing.resourceConstraints(),
+                    existing.placementConstraints(),
+                    existing.serviceName(),
+                    existing.pipeToService(),
+                    existing.traceId()
             );
 
             propose(CommandType.CANCEL_PROCESS, cancelledRecord);

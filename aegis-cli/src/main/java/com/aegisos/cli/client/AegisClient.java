@@ -32,7 +32,7 @@ public class AegisClient implements AutoCloseable {
         this.tempDir = Files.createTempDirectory("aegis-cli-client-");
         KeyStore keyStore = new KeyStore(tempDir);
         this.identity = IdentityService.bootstrap(keyStore);
-        this.network = new NetworkLayer(identity, 0, "127.0.0.1");
+        this.network = new NetworkLayer(identity, new com.aegisos.core.security.IdentityManager(java.nio.file.Path.of(System.getProperty("user.home"), ".aegis")), 0, "127.0.0.1");
     }
 
     public void start() throws IOException {

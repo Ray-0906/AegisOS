@@ -41,6 +41,7 @@ public class ProcessEndpoint {
                 ResponseWriter.writeError(exchange, 405, "METHOD_NOT_ALLOWED");
             }
         } catch (Exception e) {
+            e.printStackTrace();
             ResponseWriter.writeError(exchange, 500, "INTERNAL_SERVER_ERROR");
         }
     }
@@ -49,16 +50,35 @@ public class ProcessEndpoint {
         try (InputStream is = exchange.getRequestBody()) {
             JsonNode payload = mapper.readTree(is);
             String artifactId = payload.get("artifactId").asText();
-            JsonNode resourcesNode = payload.get("resources");
-            ProcessResources resources = new ProcessResources(
-                    resourcesNode.get("cpuCores").asInt(),
-                    resourcesNode.get("memoryMb").asLong()
-            );
-            String executionCommand = payload.has("executionCommand") ? payload.get("executionCommand").asText() : "";
-            String pipeToProcessId = payload.has("pipeToProcessId") ? payload.get("pipeToProcessId").asText() : null;
 
-            String processId = runtimeManager.submitProcess(artifactId, resources, executionCommand, pipeToProcessId);
-            ResponseWriter.writeJson(exchange, 201, Map.of("processId", processId));
+            com.aegisos.api.runtime.ResourceConstraints resourceConstraints = null;
+            if (payload.has("resourceConstraints")) {
+                JsonNode rcNode = payload.get("resourceConstraints");
+                resourceConstraints = new com.aegisos.api.runtime.ResourceConstraints(
+                        rcNode.get("requiredCpuCores").asInt(),
+                        rcNode.get("requiredMemoryMb").asLong(),
+                        rcNode.has("requireGpu") && rcNode.get("requireGpu").asBoolean()
+                );
+            }
+
+            com.aegisos.api.runtime.PlacementConstraints placementConstraints = null;
+            if (payload.has("placementConstraints")) {
+                JsonNode pcNode = payload.get("placementConstraints");
+                placementConstraints = new com.aegisos.api.runtime.PlacementConstraints(
+                        pcNode.has("targetNodeId") && !pcNode.get("targetNodeId").isNull() ? pcNode.get("targetNodeId").asText() : null,
+                        pcNode.has("antiAffinityProcessId") && !pcNode.get("antiAffinityProcessId").isNull() ? pcNode.get("antiAffinityProcessId").asText() : null
+                );
+            }
+
+            String executionCommand = payload.has("executionCommand") ? payload.get("executionCommand").asText() : "";
+            String pipeToProcessId = payload.has("pipeToProcessId") && !payload.get("pipeToProcessId").isNull() ? payload.get("pipeToProcessId").asText() : null;
+            String serviceName = payload.has("serviceName") && !payload.get("serviceName").isNull() ? payload.get("serviceName").asText() : null;
+            String pipeToService = payload.has("pipeToService") && !payload.get("pipeToService").isNull() ? payload.get("pipeToService").asText() : null;
+
+            String traceId = java.util.UUID.randomUUID().toString();
+
+            String processId = runtimeManager.submitProcess(artifactId, resourceConstraints, placementConstraints, executionCommand, pipeToProcessId, serviceName, pipeToService, traceId);
+            ResponseWriter.writeJson(exchange, 201, Map.of("processId", processId, "traceId", traceId));
         }
     }
 

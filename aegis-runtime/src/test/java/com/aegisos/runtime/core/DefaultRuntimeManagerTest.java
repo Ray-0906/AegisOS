@@ -38,7 +38,7 @@ public class DefaultRuntimeManagerTest {
     public void setup() throws Exception {
         IdentityService identity = IdentityService.ephemeral();
         localNode = identity.nodeId();
-        NetworkLayer network = new NetworkLayer(identity, 0, "127.0.0.1");
+        NetworkLayer network = new NetworkLayer(identity, new com.aegisos.core.security.IdentityManager(java.nio.file.Files.createTempDirectory("test")), 0, "127.0.0.1");
 
         Path tempDir = Files.createTempDirectory("raft-test");
 
@@ -111,7 +111,7 @@ public class DefaultRuntimeManagerTest {
         Path localMeta = tempDir.resolve("cache").resolve("test-artifact-id.meta");
         Files.writeString(localMeta, size + "\n" + mtime + "\n");
 
-        ProcessScheduler processScheduler = new SimpleProcessScheduler(consensus, identity, membership);
+        ProcessScheduler processScheduler = new SimpleProcessScheduler(consensus, identity, membership, processTable);
         RuntimeEngine runtimeEngine = new LocalRuntimeEngine(consensus, identity, artifactRegistry, artifactCache, network, processTable);
         
         processTable.addListener((com.aegisos.api.runtime.ProcessStateListener) processScheduler);
@@ -122,8 +122,8 @@ public class DefaultRuntimeManagerTest {
 
     @Test
     public void testSubmitProcessLifecycle() {
-        ProcessResources resources = new ProcessResources(2, 1024L);
-        String processId = runtimeManager.submitProcess("test-artifact-id", resources, "", null);
+        ProcessResources resources = new ProcessResources(1, 64L);
+        String processId = runtimeManager.submitProcess("test-artifact-id", null, null, "", null, null, null, "test-trace");
 
         ProcessRecord record = null;
         for (int i = 0; i < 50; i++) {
@@ -141,12 +141,20 @@ public class DefaultRuntimeManagerTest {
 
     @Test
     public void testCancelProcess() {
-        ProcessResources resources = new ProcessResources(1, 512L);
-        String processId = runtimeManager.submitProcess("test-artifact-id", resources, "", null);
+        ProcessResources resources = new ProcessResources(1, 64L);
+        String cmd = System.getProperty("os.name").toLowerCase().contains("win") ? "ping -n 10 127.0.0.1" : "sleep 10";
+        String processId = runtimeManager.submitProcess("test-artifact-id", null, null, cmd, null, null, null, "test-trace");
 
         runtimeManager.cancelProcess(processId);
 
-        ProcessRecord record = runtimeManager.getProcessDetails(processId);
+        ProcessRecord record = null;
+        for (int i = 0; i < 50; i++) {
+            record = runtimeManager.getProcessDetails(processId);
+            if (record != null && record.state() == ProcessState.CANCELLED) {
+                break;
+            }
+            try { Thread.sleep(100); } catch (Exception e) {}
+        }
 
         assertNotNull(record);
         assertEquals(ProcessState.CANCELLED, record.state());

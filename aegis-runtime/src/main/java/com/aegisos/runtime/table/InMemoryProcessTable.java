@@ -64,7 +64,12 @@ public class InMemoryProcessTable implements ProcessTable {
                 existing.submitTimestamp(),
                 stateTimestamp,
                 existing.executionCommand(),
-                existing.pipeToProcessId()
+                existing.pipeToProcessId(),
+                existing.resourceConstraints(),
+                existing.placementConstraints(),
+                existing.serviceName(),
+                existing.pipeToService(),
+                existing.traceId()
         ));
         if (updated != null) {
             notifyListeners(updated);
@@ -74,6 +79,14 @@ public class InMemoryProcessTable implements ProcessTable {
     @Override
     public Optional<ProcessRecord> lookup(String processId) {
         return Optional.ofNullable(table.get(processId));
+    }
+
+    @Override
+    public Optional<ProcessRecord> lookupService(String serviceName) {
+        return table.values().stream()
+                .filter(r -> r.serviceName() != null && r.serviceName().equals(serviceName))
+                .filter(r -> r.state() == ProcessState.RUNNING || r.state() == ProcessState.PLACED)
+                .findFirst();
     }
 
     @Override

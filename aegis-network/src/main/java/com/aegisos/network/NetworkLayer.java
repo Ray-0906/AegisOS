@@ -5,17 +5,18 @@ import com.aegisos.core.identity.NodeId;
 import com.aegisos.core.message.AegisMessage;
 import com.aegisos.core.message.MessageType;
 import com.aegisos.core.model.Endpoint;
+import com.aegisos.core.security.IdentityManager;
 import com.aegisos.network.crypto.EstablishedSession;
 import com.aegisos.network.crypto.HandshakeHandler;
 import com.aegisos.network.tcp.TcpConnectionPool;
-import com.aegisos.network.tcp.TcpServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.EnumSet;
 import java.util.Map;
@@ -29,13 +30,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
-/**
- * Top-level secure transport. Provides authenticated, encrypted, message-oriented
- * communication between nodes, plus a request/response RPC abstraction with correlation.
- *
- * <p>Every cross-node call in AegisOS goes through this layer; no upper layer touches a
- * raw socket.
- */
 public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(NetworkLayer.class);
@@ -43,12 +37,18 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     private static final int CONNECT_TIMEOUT_MS = 5_000;
 
     private final IdentityService identity;
+    private final IdentityManager identityManager;
     private final int port;
     private final String advertiseHost;
     private volatile String advertisedAddress;
     private final HandshakeHandler handshakeHandler;
     private final TcpConnectionPool pool = new TcpConnectionPool();
     private final Map<MessageType, MessageHandler> handlers = new ConcurrentHashMap<>();
+    
+    private SSLServerSocket serverSocket;
+    private Thread acceptThread;
+    private volatile boolean running;
+
     private static class PendingRequest {
         final NodeId target;
         final CompletableFuture<AegisMessage> future;
@@ -78,19 +78,6 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         messageFilter = (from, to, type, payload) -> true;
     }
 
-    /**
-     * Message types that MUST be processed inline on the PeerConnection.receiveLoop() thread.
-     *
-     * <p>These are the latency-sensitive Raft peer messages. Their handlers hold the Raft
-     * mutex briefly (microseconds) and immediately return a reply — they never block on
-     * consensus, I/O, or any external service. Dispatching them to an executor would add
-     * scheduling overhead and, more importantly, break ordering: two concurrent AppendEntries
-     * arriving on the same connection could race through the Raft lock out of order.
-     *
-     * <p>Rule: a message type belongs here if and only if its handler is:
-     *   1. Non-blocking (no Future.get(), no I/O wait, no external RPC), AND
-     *   2. Order-sensitive (the protocol assumes messages from the same peer are serialised).
-     */
     private static final Set<MessageType> FAST_PATH_TYPES = EnumSet.of(
             MessageType.APPEND_ENTRIES,
             MessageType.APPEND_ENTRIES_RESULT,
@@ -100,22 +87,14 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
             MessageType.PONG
     );
 
-    /**
-     * Off-socket dispatcher for slow-path messages.
-     *
-     * <p>Any handler that may block (e.g. CLIENT_COMMAND → raftNode.submit().get(),
-     * STORE_CHUNK writing to disk, RUN_JOB spawning a job) is submitted here so the
-     * receiveLoop thread is never stalled. Virtual threads are ideal: they are cheap,
-     * block gracefully on I/O, and impose no artificial parallelism limit.
-     */
     private final ExecutorService handlerExecutor =
             com.aegisos.core.ExecutorRegistry.register("networkLayer", Executors.newVirtualThreadPerTaskExecutor());
 
     private volatile Function<NodeId, Optional<Endpoint>> addressResolver = id -> Optional.empty();
-    private TcpServer server;
 
-    public NetworkLayer(IdentityService identity, int port, String advertisedHost) {
+    public NetworkLayer(IdentityService identity, IdentityManager identityManager, int port, String advertisedHost) {
         this.identity = identity;
+        this.identityManager = identityManager;
         this.port = port;
         this.advertiseHost = advertisedHost;
         this.advertisedAddress = advertisedHost + ":" + port;
@@ -145,7 +124,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     }
 
     public int boundPort() {
-        return server != null ? server.boundPort() : port;
+        return serverSocket != null ? serverSocket.getLocalPort() : port;
     }
 
     public TcpConnectionPool pool() {
@@ -153,39 +132,75 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
     }
 
     public void start() throws IOException {
-        server = new TcpServer(port, this::acceptSocket);
-        server.start();
-        // Now that the ephemeral/real port is known, advertise the correct address.
-        this.advertisedAddress = advertiseHost + ":" + server.boundPort();
-        log.debug("NetworkLayer started, node {} advertising {}", localNodeId().shortId(), advertisedAddress);
+        try {
+            serverSocket = (SSLServerSocket) identityManager.getServerContext().getServerSocketFactory().createServerSocket(port);
+            serverSocket.setNeedClientAuth(true);
+            serverSocket.setReuseAddress(true);
+            
+            running = true;
+            acceptThread = Thread.ofPlatform().daemon().name("aegis-accept-" + boundPort()).start(this::acceptLoop);
+            
+            this.advertisedAddress = advertiseHost + ":" + boundPort();
+            log.debug("NetworkLayer started, node {} advertising {}", localNodeId().shortId(), advertisedAddress);
+        } catch (Exception e) {
+            throw new IOException("Failed to start secure server", e);
+        }
+    }
+    
+    private void acceptLoop() {
+        while (running) {
+            try {
+                Socket socket = serverSocket.accept();
+                socket.setTcpNoDelay(true);
+                Thread.ofPlatform().daemon().name("aegis-conn").start(() -> acceptSocket(socket));
+            } catch (IOException e) {
+                if (running) {
+                    log.warn("Accept failed: {}", e.getMessage());
+                }
+            }
+        }
     }
 
-    private void acceptSocket(Socket socket) {
+    private void acceptSocket(Socket rawSocket) {
+        SSLSocket socket = (SSLSocket) rawSocket;
         try {
             socket.setSoTimeout(CONNECT_TIMEOUT_MS);
+            socket.startHandshake();
             DataInputStream in = new DataInputStream(socket.getInputStream());
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
             EstablishedSession session = handshakeHandler.respond(in, out);
             socket.setSoTimeout(0);
             registerConnection(socket, in, out, session);
         } catch (IOException e) {
-            log.debug("Inbound handshake failed: {}", e.getMessage());
+            log.warn("Inbound handshake rejected: {}", e.getMessage());
             closeQuietly(socket);
         }
     }
 
-    /** Dials a peer by endpoint, performs the handshake, and returns its verified node id. */
     public NodeId connect(Endpoint endpoint) throws IOException {
-        Socket socket = new Socket();
-        socket.connect(new InetSocketAddress(endpoint.host(), endpoint.port()), CONNECT_TIMEOUT_MS);
-        socket.setTcpNoDelay(true);
-        socket.setSoTimeout(CONNECT_TIMEOUT_MS);
-        DataInputStream in = new DataInputStream(socket.getInputStream());
-        DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-        EstablishedSession session = handshakeHandler.initiate(in, out);
-        socket.setSoTimeout(0);
-        PeerConnection conn = registerConnection(socket, in, out, session);
-        return conn.remoteNodeId();
+        try {
+            SSLSocket socket = (SSLSocket) identityManager.getClientContext().getSocketFactory().createSocket(endpoint.host(), endpoint.port());
+            socket.setTcpNoDelay(true);
+            socket.setSoTimeout(CONNECT_TIMEOUT_MS);
+            
+            try {
+                socket.startHandshake();
+            } catch (IOException e) {
+                log.warn("Outbound handshake rejected by {}: {}", endpoint, e.getMessage());
+                closeQuietly(socket);
+                throw e;
+            }
+            
+            DataInputStream in = new DataInputStream(socket.getInputStream());
+            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+            EstablishedSession session = handshakeHandler.initiate(in, out);
+            socket.setSoTimeout(0);
+            PeerConnection conn = registerConnection(socket, in, out, session);
+            return conn.remoteNodeId();
+        } catch (Exception e) {
+            if (e instanceof IOException) throw (IOException) e;
+            throw new IOException("Failed to establish secure client connection", e);
+        }
     }
 
     private PeerConnection registerConnection(Socket socket, DataInputStream in,
@@ -223,7 +238,6 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         }
     }
 
-    /** Fire-and-forget send. Returns false if the peer is unreachable. */
     public boolean sendAsync(NodeId nodeId, MessageType type, byte[] payload) {
         if (!messageFilter.test(localNodeId(), nodeId, type, payload)) {
             return false;
@@ -255,7 +269,6 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         }
     }
 
-    /** Request/response RPC with default timeout. */
     public CompletableFuture<AegisMessage> request(NodeId nodeId, MessageType type, byte[] payload) {
         return request(nodeId, type, payload, DEFAULT_RPC_TIMEOUT_MS);
     }
@@ -330,12 +343,6 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
             log.debug("Partition dropped inbound message from {} to {}", message.sender().shortId(), localNodeId().shortId());
             return;
         }
-        // ----------------------------------------------------------------
-        // Tier 0: correlation replies (e.g. AppendEntriesResult sent back to
-        // the LogReplicator that made a request() call).
-        // Complete the waiting future immediately on the receive thread.
-        // This is always safe: future.complete() is non-blocking.
-        // ----------------------------------------------------------------
         if (correlation != 0 && isResponse) {
             PendingRequest req = pending.remove(correlation);
             if (req != null) {
@@ -351,12 +358,6 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         }
 
         if (FAST_PATH_TYPES.contains(message.type())) {
-            // ----------------------------------------------------------------
-            // Tier 1: Fast-path — execute inline on the receive thread.
-            // Handlers here are lock-only (Raft mutex), non-blocking, and
-            // order-sensitive. Keeping them on the socket thread preserves
-            // the per-connection serialisation that Raft depends on.
-            // ----------------------------------------------------------------
             try {
                 AegisMessage response = handler.handle(message);
                 if (response != null && correlation != 0) {
@@ -366,12 +367,6 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
                 log.warn("Handler for {} threw: {}", message.type(), e.toString());
             }
         } else {
-            // ----------------------------------------------------------------
-            // Tier 2: Slow-path — dispatch to virtual-thread executor.
-            // Any handler that may block (Raft propose, disk I/O, downstream
-            // RPC) must not run on the receive thread or it will deadlock
-            // Raft replication (the root cause of the 25-second stall bug).
-            // ----------------------------------------------------------------
             final long correlationId = correlation;
             handlerExecutor.submit(() -> {
                 long start = System.nanoTime();
@@ -416,6 +411,7 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
 
     @Override
     public void close() {
+        running = false;
         handlerExecutor.shutdownNow();
         try {
             boolean terminated = handlerExecutor.awaitTermination(3, TimeUnit.SECONDS);
@@ -424,8 +420,10 @@ public final class NetworkLayer implements PeerConnection.InboundHandler, AutoCl
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        if (server != null) {
-            server.close();
+        if (serverSocket != null) {
+            try {
+                serverSocket.close();
+            } catch (IOException ignored) {}
         }
         pool.closeAll();
         pending.values().forEach(req -> req.future.completeExceptionally(new IOException("network closed")));
