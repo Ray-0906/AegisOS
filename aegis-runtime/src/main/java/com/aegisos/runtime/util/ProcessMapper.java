@@ -83,7 +83,8 @@ public final class ProcessMapper {
                 .setExecutionCommand(record.executionCommand() == null ? "" : record.executionCommand())
                 .setPipeToProcessId(record.pipeToProcessId() == null ? "" : record.pipeToProcessId())
                 .setServiceName(record.serviceName() == null ? "" : record.serviceName())
-                .setPipeToService(record.pipeToService() == null ? "" : record.pipeToService());
+                .setPipeToService(record.pipeToService() == null ? "" : record.pipeToService())
+                .setTraceId(record.traceId() == null ? "" : record.traceId());
 
         if (record.resourceConstraints() != null) {
             builder.setResourceConstraints(com.aegisos.proto.ResourceConstraintsProto.newBuilder()
@@ -139,7 +140,8 @@ public final class ProcessMapper {
                 resourceConstraints,
                 placementConstraints,
                 proto.getServiceName().isEmpty() ? null : proto.getServiceName(),
-                proto.getPipeToService().isEmpty() ? null : proto.getPipeToService()
+                proto.getPipeToService().isEmpty() ? null : proto.getPipeToService(),
+                proto.getTraceId().isEmpty() ? null : proto.getTraceId()
         );
     }
 }

@@ -123,7 +123,7 @@ public class DefaultRuntimeManagerTest {
     @Test
     public void testSubmitProcessLifecycle() {
         ProcessResources resources = new ProcessResources(1, 64L);
-        String processId = runtimeManager.submitProcess("test-artifact-id", null, null, "", null, null, null);
+        String processId = runtimeManager.submitProcess("test-artifact-id", null, null, "", null, null, null, "test-trace");
 
         ProcessRecord record = null;
         for (int i = 0; i < 50; i++) {
@@ -143,7 +143,7 @@ public class DefaultRuntimeManagerTest {
     public void testCancelProcess() {
         ProcessResources resources = new ProcessResources(1, 64L);
         String cmd = System.getProperty("os.name").toLowerCase().contains("win") ? "ping -n 10 127.0.0.1" : "sleep 10";
-        String processId = runtimeManager.submitProcess("test-artifact-id", null, null, cmd, null, null, null);
+        String processId = runtimeManager.submitProcess("test-artifact-id", null, null, cmd, null, null, null, "test-trace");
 
         runtimeManager.cancelProcess(processId);
 

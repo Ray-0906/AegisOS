@@ -86,7 +86,8 @@ public class SimpleProcessScheduler implements ProcessScheduler, ProcessStateLis
                         record.resourceConstraints(),
                         record.placementConstraints(),
                         record.serviceName(),
-                        record.pipeToService()
+                        record.pipeToService(),
+                        record.traceId()
                 );
             } else {
                 String assignedNodeId = optimalNode.get();
@@ -105,7 +106,8 @@ public class SimpleProcessScheduler implements ProcessScheduler, ProcessStateLis
                         record.resourceConstraints(),
                         record.placementConstraints(),
                         record.serviceName(),
-                        record.pipeToService()
+                        record.pipeToService(),
+                        record.traceId()
                 );
             }
 

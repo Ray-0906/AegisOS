@@ -75,8 +75,10 @@ public class ProcessEndpoint {
             String serviceName = payload.has("serviceName") && !payload.get("serviceName").isNull() ? payload.get("serviceName").asText() : null;
             String pipeToService = payload.has("pipeToService") && !payload.get("pipeToService").isNull() ? payload.get("pipeToService").asText() : null;
 
-            String processId = runtimeManager.submitProcess(artifactId, resourceConstraints, placementConstraints, executionCommand, pipeToProcessId, serviceName, pipeToService);
-            ResponseWriter.writeJson(exchange, 201, Map.of("processId", processId));
+            String traceId = java.util.UUID.randomUUID().toString();
+
+            String processId = runtimeManager.submitProcess(artifactId, resourceConstraints, placementConstraints, executionCommand, pipeToProcessId, serviceName, pipeToService, traceId);
+            ResponseWriter.writeJson(exchange, 201, Map.of("processId", processId, "traceId", traceId));
         }
     }
 

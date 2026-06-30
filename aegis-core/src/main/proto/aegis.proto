@@ -16,6 +16,12 @@ message NodeCertificate {
   bytes signature = 2;
 }
 
+message TraceContextProto {
+  string trace_id = 1;
+  string span_id = 2;
+  string parent_span_id = 3;
+}
+
 
 // ---------------------------------------------------------------------------
 // Wire envelope (section 2 of the design doc).
@@ -33,6 +39,7 @@ message MessageHeader {
   uint64 correlation  = 7; // request/response correlation id (0 = none)
   bool   handshake    = 8; // true while body is still plaintext (pre-session-key)
   bool   is_response  = 9; // true if this message is a response to an earlier correlation id
+  TraceContextProto trace_context = 10;
 }
 
 message Envelope {
@@ -531,6 +538,7 @@ message ProcessRecordProto {
   PlacementConstraintsProto placement_constraints = 13;
   string service_name = 14;
   string pipe_to_service = 15;
+  string trace_id = 16;
 }
 
 message ResourceConstraintsProto {

@@ -68,7 +68,8 @@ public class InMemoryProcessTable implements ProcessTable {
                 existing.resourceConstraints(),
                 existing.placementConstraints(),
                 existing.serviceName(),
-                existing.pipeToService()
+                existing.pipeToService(),
+                existing.traceId()
         ));
         if (updated != null) {
             notifyListeners(updated);

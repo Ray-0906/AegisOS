@@ -15,6 +15,7 @@ public record ProcessRecord(
         ResourceConstraints resourceConstraints,
         PlacementConstraints placementConstraints,
         String serviceName,
-        String pipeToService) {
+        String pipeToService,
+        String traceId) {
 
 }

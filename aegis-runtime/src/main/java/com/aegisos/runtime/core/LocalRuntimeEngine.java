@@ -104,7 +104,9 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
     }
 
     private void executeProcess(ProcessRecord record) {
+        String traceTag = (record.traceId() != null && !record.traceId().isEmpty()) ? "[TRACE:" + record.traceId() + "] " : "";
         try {
+            log.info("{}Starting process {} (Artifact: {})", traceTag, record.processId(), record.artifactId());
             ArtifactRecord artifact = artifactRegistry.bySha256(record.artifactId())
                     .orElseThrow(() -> new IllegalStateException("Artifact not found in registry: " + record.artifactId()));
             
@@ -139,7 +141,7 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                 java.util.Optional<ProcessRecord> resolved = processTable.lookupService(record.pipeToService());
                 if (resolved.isPresent()) {
                     actualPipeTargetId = resolved.get().processId();
-                    log.info("DNS_RESOLVED: Service '{}' -> Process '{}'", record.pipeToService(), actualPipeTargetId);
+                    log.info("{}DNS_RESOLVED: Service '{}' -> Process '{}'", traceTag, record.pipeToService(), actualPipeTargetId);
                 } else {
                     throw new RuntimeException("DNS_RESOLUTION_FAILED: Service '" + record.pipeToService() + "' not found in cluster");
                 }
@@ -148,6 +150,7 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
             final String resolvedPipeTargetId = actualPipeTargetId;
 
             InputStream processStdout = process.getInputStream();
+            log.info("{}Established IPC data pump for process {}", traceTag, record.processId());
             CompletableFuture.runAsync(() -> {
                 try (java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile, true)) {
                     byte[] buf = new byte[8192];
@@ -174,6 +177,7 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                 if (cancelledProcesses.remove(record.processId())) {
                     return;
                 }
+                log.info("{}Process {} exited with code {}", traceTag, record.processId(), p.exitValue());
                 ProcessState exitState = p.exitValue() == 0 ? ProcessState.COMPLETED : ProcessState.FAILED;
                 
                 ProcessRecord exitRecord = new ProcessRecord(
@@ -191,7 +195,8 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                         record.resourceConstraints(),
                         record.placementConstraints(),
                         record.serviceName(),
-                        record.pipeToService()
+                        record.pipeToService(),
+                        record.traceId()
                 );
 
                 try {
@@ -225,7 +230,8 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                     record.resourceConstraints(),
                     record.placementConstraints(),
                     record.serviceName(),
-                    record.pipeToService()
+                    record.pipeToService(),
+                    record.traceId()
             );
 
             ProcessRecordProto proto = ProcessMapper.toProto(runningRecord);
@@ -239,7 +245,7 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
                 return null;
             });
         } catch (Exception e) {
-            log.error("Failed to start process {}", record.processId(), e);
+            log.error("{}Process {} failed to start", traceTag, record.processId(), e);
         }
     }
 
