@@ -40,7 +40,7 @@ public class ClusterHandler {
         for (PeerEntry p : node.discovery().membership().allPeers()) {
             String id = com.aegisos.core.util.HexUtil.encode(p.getNodeId().toByteArray());
             if (!id.equals(selfId)) {
-                int peerPort = p.getRestPort() > 0 ? p.getRestPort() : 20001;
+                int peerPort = node.discovery().membership().restPortOf(NodeId.of(p.getNodeId().toByteArray()));
                 nodes.add(new NodeResponse(id, p.getStatus().name(), peerPort));
             }
         }
@@ -59,6 +59,10 @@ public class ClusterHandler {
         // Return the leader ID and its API port
         int selfApiPort = node.apiServer() != null ? node.apiServer().boundPort() : node.config().restPort();
         int apiPort = com.aegisos.core.util.HexUtil.encode(node.identity().nodeId().toBytes()).equals(leaderId) ? selfApiPort : node.discovery().membership().restPortOf(leader);
+        if (apiPort == 0) {
+            exchange.sendResponseHeaders(503, -1); // 503 Service Unavailable (Election in progress)
+            return;
+        }
 
         LeaderResponse response = new LeaderResponse(leaderId, apiPort);
         ResponseWriter.writeJson(exchange, 200, response);

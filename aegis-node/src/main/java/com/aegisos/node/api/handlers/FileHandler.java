@@ -31,6 +31,10 @@ public class FileHandler {
                 ResponseWriter.writeError(exchange, 503, "NOT_LEADER");
             } else {
                 int apiPort = node.discovery().membership().restPortOf(leaderId);
+                if (apiPort == 0) {
+                    exchange.sendResponseHeaders(503, -1); // 503 Service Unavailable (Election in progress)
+                    return false;
+                }
                 ResponseWriter.writeError(exchange, 503, "NOT_LEADER", leaderId.shortId(), apiPort);
             }
             return false;

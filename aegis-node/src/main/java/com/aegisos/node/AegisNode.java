@@ -97,8 +97,13 @@ public final class AegisNode implements AutoCloseable {
             if (consensus == null || consensus.clusterConfiguration() == null) {
                 return java.util.List.of();
             }
+            java.util.Set<com.aegisos.core.identity.NodeId> alivePeers = discovery.membership().allPeers().stream()
+                    .filter(peer -> peer.getStatus() == com.aegisos.proto.PeerStatus.ALIVE)
+                    .map(peer -> com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray()))
+                    .collect(java.util.stream.Collectors.toSet());
             return consensus.clusterConfiguration().voters().stream()
                     .filter(peerId -> !peerId.equals(identity.nodeId()))
+                    .filter(alivePeers::contains)
                     .toList();
         };
 
@@ -114,6 +119,34 @@ public final class AegisNode implements AutoCloseable {
                 config.membershipLagThreshold(),
                 nodeId -> discovery.membership().statusOf(nodeId),
                 metricsRegistry);
+
+        // Auto-promote newly discovered peers to Raft voters.
+        // Only the leader has authority to propose state changes (INV-032).
+        // ConsensusModule.propose() validates reachability, lag, duplicates, and
+        // in-flight constraints before accepting the ADD_VOTER command.
+        discovery.membership().addPeerDiscoveryListener(peer -> {
+            if (!consensus.isLeader()) {
+                return;
+            }
+            com.aegisos.core.identity.NodeId newPeerId =
+                    com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray());
+            if (consensus.clusterConfiguration().isVoter(newPeerId)) {
+                return;
+            }
+            com.aegisos.proto.StateCommand addCmd = com.aegisos.proto.StateCommand.newBuilder()
+                    .setType(com.aegisos.proto.CommandType.ADD_VOTER)
+                    .setPayload(peer.getNodeId())
+                    .build();
+            consensus.propose(addCmd).whenComplete((idx, err) -> {
+                if (err != null) {
+                    log.debug("Auto ADD_VOTER for {} deferred: {}",
+                            newPeerId.shortId(), err.getMessage());
+                } else {
+                    log.info("Auto ADD_VOTER for {} committed at index {}",
+                            newPeerId.shortId(), idx);
+                }
+            });
+        });
 
         // 1. Construct all subsystems and wire dependencies
         artifactRegistry = new ArtifactRegistry();

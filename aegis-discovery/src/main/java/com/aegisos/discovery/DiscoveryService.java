@@ -44,7 +44,7 @@ public final class DiscoveryService implements AutoCloseable {
             }));
 
     public DiscoveryService(NetworkLayer network, IdentityService identity, String selfAddress, com.aegisos.proto.NodeRole role, com.aegisos.core.telemetry.ResourceMonitor resourceMonitor) {
-        this(network, identity, selfAddress, role, resourceMonitor, 20001);
+        this(network, identity, selfAddress, role, resourceMonitor, 0);
     }
 
     public DiscoveryService(NetworkLayer network, IdentityService identity, String selfAddress, com.aegisos.proto.NodeRole role, com.aegisos.core.telemetry.ResourceMonitor resourceMonitor, int restPort) {
