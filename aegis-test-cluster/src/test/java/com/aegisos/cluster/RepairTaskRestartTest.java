@@ -81,44 +81,10 @@ public class RepairTaskRestartTest {
             nodes.add(node);
 
             if (!isBootstrap) {
-                AegisNode leader = null;
-                for (int attempt = 0; attempt < 200; attempt++) {
-                    for (AegisNode existing : nodes) {
-                        if (existing.consensus().isLeader()) {
-                            leader = existing;
-                            break;
-                        }
-                    }
-                    if (leader != null) break;
-                    Thread.sleep(50);
-                }
-                assertNotNull(leader, "No leader found to add node as voter");
-
-                final AegisNode finalLeader = leader;
-                boolean joinedGossip = ClusterHarness.await(15_000, () -> {
-                    com.aegisos.proto.PeerStatus status =
-                            finalLeader.discovery().membership().statusOf(node.identity().nodeId());
-                    return status == com.aegisos.proto.PeerStatus.ALIVE
-                            || status == com.aegisos.proto.PeerStatus.SUSPECT;
-                });
-                assertTrue(joinedGossip, "New node did not join gossip within 15s");
-
-                boolean caughtUp = ClusterHarness.await(15_000, () -> {
-                    long leaderLast = finalLeader.consensus().raftNode().lastLogIndex();
-                    long nodeMatch = finalLeader.consensus().raftNode().matchIndex(node.identity().nodeId());
-                    return (leaderLast - nodeMatch) <= 10;
-                });
-                assertTrue(caughtUp, "New node did not catch up within 15s");
-
-                com.aegisos.proto.StateCommand addCmd = com.aegisos.proto.StateCommand.newBuilder()
-                        .setType(com.aegisos.proto.CommandType.ADD_VOTER)
-                        .setPayload(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
-                        .build();
-                finalLeader.consensus().propose(addCmd).get(15, java.util.concurrent.TimeUnit.SECONDS);
-
-                boolean appliedLocally = ClusterHarness.await(15_000,
+                // Wait for autonomous ADD_VOTER promotion via Gossip peer discovery
+                boolean appliedLocally = ClusterHarness.await(30_000,
                         () -> node.consensus().clusterConfiguration().isVoter(node.identity().nodeId()));
-                assertTrue(appliedLocally, "New node did not apply ADD_VOTER locally within 15s");
+                assertTrue(appliedLocally, "New node was not auto-promoted to voter within 30s");
             }
         }
 

@@ -25,6 +25,7 @@ public final class ClusterHarness implements AutoCloseable {
     private int snapshotEntryThreshold = 1000;
     private int workspaceCleanupDelaySeconds = 300; // default 5m
     private int repairTaskTimeoutSeconds = 300; // default 5m
+    private boolean autoPromoteVoters = true;
 
     public ClusterHarness() {
         // H6 instrumentation: set current test name for event correlation
@@ -38,6 +39,10 @@ public final class ClusterHarness implements AutoCloseable {
         com.aegisos.consensus.RaftLagMonitor.currentTestName = testName;
         StatsTracker.dump("TEST_BEGIN", java.util.Collections.emptyList());
         System.out.println("BEGIN_TIMESTAMP=" + System.currentTimeMillis());
+    }
+
+    public void setAutoPromoteVoters(boolean b) {
+        this.autoPromoteVoters = b;
     }
 
     public void setRepairTaskTimeoutSeconds(int seconds) {
@@ -116,6 +121,8 @@ public final class ClusterHarness implements AutoCloseable {
         return addNodeWithHome(home);
     }
 
+
+
     public AegisNode addNodeWithHome(Path home) throws IOException {
         NodeConfig config = new NodeConfig()
                 .homeDir(home)
@@ -129,6 +136,7 @@ public final class ClusterHarness implements AutoCloseable {
                 .snapshotEntryThreshold(snapshotEntryThreshold)
                 .jobSupervisorEnabled(jobSupervisorEnabled)
                 .repairEnabled(repairEnabled)
+                .autoPromoteVoters(autoPromoteVoters)
                 .auditIntervalSeconds(2)
                 .workspaceCleanupDelaySeconds(workspaceCleanupDelaySeconds)
                 .repairTaskTimeoutSeconds(repairTaskTimeoutSeconds);
@@ -186,17 +194,18 @@ public final class ClusterHarness implements AutoCloseable {
                     throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not catch up within 30s");
                 }
 
-                // Leader proposes ADD_VOTER
-                com.aegisos.proto.StateCommand addCmd = com.aegisos.proto.StateCommand.newBuilder()
-                        .setType(com.aegisos.proto.CommandType.ADD_VOTER)
-                        .setPayload(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
-                        .build();
-                proposeOnCurrentLeader(addCmd, node);
+                if (!autoPromoteVoters) {
+                    com.aegisos.proto.StateCommand addCmd = com.aegisos.proto.StateCommand.newBuilder()
+                            .setType(com.aegisos.proto.CommandType.ADD_VOTER)
+                            .setPayload(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
+                            .build();
+                    proposeOnCurrentLeader(addCmd, node);
+                }
 
-                // Wait for the new node to actually apply the ADD_VOTER command and become a voter locally
+                // Wait for ADD_VOTER to apply locally
                 boolean appliedLocally = await(30_000, () -> node.consensus().clusterConfiguration().isVoter(node.identity().nodeId()));
                 if (!appliedLocally) {
-                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " did not apply ADD_VOTER locally within 30s");
+                    throw new IllegalStateException("New node " + node.identity().nodeId().shortId() + " was not promoted to voter within 30s");
                 }
             } catch (Exception e) {
                 throw new IOException("Failed to add node " + node.identity().nodeId().shortId() + " to cluster", e);

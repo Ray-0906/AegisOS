@@ -178,9 +178,10 @@ public class ConsensusModule implements RaftTransport, AutoCloseable {
                 throw new IllegalArgumentException("Cannot add voter: target node is lagging too far behind (lag=" + lag + " entries, limit is " + lagThreshold + ")");
             }
 
-            // 3. Not already a voter: check ClusterConfiguration voters
+            // 3. Already a voter: idempotent — skip silently
             if (clusterConfiguration.isVoter(target)) {
-                throw new IllegalArgumentException("Cannot add voter: target node is already a voter");
+                log.debug("ADD_VOTER for {} is a no-op: already a voter", target.shortId());
+                return;
             }
 
             // 4. In-flight constraint: Only one configuration change may be in-flight at a time.

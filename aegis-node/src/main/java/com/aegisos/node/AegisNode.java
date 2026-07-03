@@ -62,6 +62,7 @@ public final class AegisNode implements AutoCloseable {
     private com.aegisos.api.runtime.PipelineTable pipelineTable;
     private volatile boolean started;
     private MetricsServer metricsServer;
+    private java.util.concurrent.ScheduledExecutorService autoPromoter;
     private com.aegisos.node.api.ApiServer apiServer;
     private final com.aegisos.core.observability.MetricsRegistry metricsRegistry;
     private final com.aegisos.core.observability.TimelineRegistry timelineRegistry;
@@ -85,6 +86,7 @@ public final class AegisNode implements AutoCloseable {
         String selfAddress = config.advertiseHost() + ":" + network.boundPort();
         com.aegisos.core.telemetry.ResourceMonitor resourceMonitor = new com.aegisos.core.telemetry.ResourceMonitor();
         discovery = new DiscoveryService(network, identity, selfAddress, config.role(), resourceMonitor, config.restPort());
+
         discovery.start(config.seeds());
 
         java.util.function.Supplier<java.util.List<com.aegisos.core.identity.NodeId>> allPeers = () ->
@@ -97,13 +99,8 @@ public final class AegisNode implements AutoCloseable {
             if (consensus == null || consensus.clusterConfiguration() == null) {
                 return java.util.List.of();
             }
-            java.util.Set<com.aegisos.core.identity.NodeId> alivePeers = discovery.membership().allPeers().stream()
-                    .filter(peer -> peer.getStatus() == com.aegisos.proto.PeerStatus.ALIVE)
-                    .map(peer -> com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray()))
-                    .collect(java.util.stream.Collectors.toSet());
             return consensus.clusterConfiguration().voters().stream()
                     .filter(peerId -> !peerId.equals(identity.nodeId()))
-                    .filter(alivePeers::contains)
                     .toList();
         };
 
@@ -120,33 +117,44 @@ public final class AegisNode implements AutoCloseable {
                 nodeId -> discovery.membership().statusOf(nodeId),
                 metricsRegistry);
 
-        // Auto-promote newly discovered peers to Raft voters.
-        // Only the leader has authority to propose state changes (INV-032).
-        // ConsensusModule.propose() validates reachability, lag, duplicates, and
-        // in-flight constraints before accepting the ADD_VOTER command.
-        discovery.membership().addPeerDiscoveryListener(peer -> {
-            if (!consensus.isLeader()) {
-                return;
-            }
-            com.aegisos.core.identity.NodeId newPeerId =
-                    com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray());
-            if (consensus.clusterConfiguration().isVoter(newPeerId)) {
-                return;
-            }
-            com.aegisos.proto.StateCommand addCmd = com.aegisos.proto.StateCommand.newBuilder()
-                    .setType(com.aegisos.proto.CommandType.ADD_VOTER)
-                    .setPayload(peer.getNodeId())
-                    .build();
-            consensus.propose(addCmd).whenComplete((idx, err) -> {
-                if (err != null) {
-                    log.debug("Auto ADD_VOTER for {} deferred: {}",
-                            newPeerId.shortId(), err.getMessage());
-                } else {
-                    log.info("Auto ADD_VOTER for {} committed at index {}",
-                            newPeerId.shortId(), idx);
-                }
+        // Auto-promote known peers to Raft voters continuously on the leader.
+        // This solves timing races where peers are discovered before this node is elected.
+        if (config.autoPromoteVoters()) {
+            autoPromoter = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "aegis-auto-promote-" + identity.nodeId().shortId());
+                t.setDaemon(true);
+                return t;
             });
-        });
+            autoPromoter.scheduleAtFixedRate(() -> {
+                try {
+                    if (!consensus.isLeader()) return;
+                    for (com.aegisos.proto.PeerEntry peer : discovery.membership().allPeers()) {
+                        com.aegisos.core.identity.NodeId peerId = com.aegisos.core.identity.NodeId.of(peer.getNodeId().toByteArray());
+                        if (consensus.clusterConfiguration().isVoter(peerId)) {
+                            continue;
+                        }
+                        if (consensus.clusterConfiguration().wasExplicitlyRemoved(peerId)) {
+                            continue;
+                        }
+                        com.aegisos.proto.StateCommand addCmd = com.aegisos.proto.StateCommand.newBuilder()
+                                .setType(com.aegisos.proto.CommandType.ADD_VOTER)
+                                .setPayload(com.google.protobuf.ByteString.copyFrom(peerId.toBytes()))
+                                .build();
+                        try {
+                            consensus.propose(addCmd).whenComplete((idx, err) -> {
+                                if (err == null) {
+                                    log.info("Auto ADD_VOTER for {} committed at index {}", peerId.shortId(), idx);
+                                }
+                            });
+                        } catch (Exception e) {
+                            // ignore in-flight or invalid proposals
+                        }
+                    }
+                } catch (Exception e) {
+                    // prevent scheduled task from dying
+                }
+            }, 1000, 1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        }
 
         // 1. Construct all subsystems and wire dependencies
         artifactRegistry = new ArtifactRegistry();
@@ -475,6 +483,9 @@ public final class AegisNode implements AutoCloseable {
             return;
         }
         log.info("Shutting down node {}", identity.nodeId().shortId());
+        if (autoPromoter != null) {
+            autoPromoter.shutdownNow();
+        }
         if (metricsServer != null) {
             metricsServer.close();
         }

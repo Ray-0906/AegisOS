@@ -67,6 +67,7 @@ public class NonVoterGrantsVoteTest {
                 .restPort(0)
                 .apiPort(0)
                 .advertiseHost("127.0.0.1")
+                .autoPromoteVoters(false)
                 .bootstrap(true);
         AegisNode nodeA = new AegisNode(configA);
         nodeA.start();
@@ -85,6 +86,7 @@ public class NonVoterGrantsVoteTest {
                 .restPort(0)
                 .apiPort(0)
                 .advertiseHost("127.0.0.1")
+                .autoPromoteVoters(false)
                 .bootstrap(false);
         configB.addSeed(new Endpoint("127.0.0.1", nodeA.network().boundPort()));
         AegisNode nodeB = new AegisNode(configB);
