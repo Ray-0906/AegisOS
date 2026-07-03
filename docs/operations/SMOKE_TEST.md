@@ -9,23 +9,23 @@ As of v1.2+, automated tests (`mvn clean verify`) are necessary but insufficient
 ### 1. Start a 3-Node Cluster
 Open three separate terminals and start three nodes:
 ```bash
-java -jar aegis-cli/target/aegis.jar start --port 9001 --home /tmp/aegis-node1 --bootstrap
-java -jar aegis-cli/target/aegis.jar start --port 9002 --home /tmp/aegis-node2 --seed 127.0.0.1:9001
-java -jar aegis-cli/target/aegis.jar start --port 9003 --home /tmp/aegis-node3 --seed 127.0.0.1:9001
+aegis start --port 9001 --home /tmp/aegis-node1 --bootstrap
+aegis start --port 9002 --home /tmp/aegis-node2 --seed 127.0.0.1:9001
+aegis start --port 9003 --home /tmp/aegis-node3 --seed 127.0.0.1:9001
 ```
 
 ### 2. Verify Gossip Membership & Get Node IDs
 First, check the cluster membership to find the 12-character hex `NODE` IDs of your nodes:
 ```bash
-java -jar aegis-cli/target/aegis.jar nodes --seed 127.0.0.1:9001
+aegis nodes --seed 127.0.0.1:9001
 ```
 *Expected: All 3 nodes are listed as `ALIVE`. Note their hex IDs.*
 
 ### 3. Promote Nodes 2 and 3 to Voters
 By default, nodes join as non-voting replicas to avoid disrupting elections. Promote them using the hex IDs from the previous step so they can participate in leader failover:
 ```bash
-java -jar aegis-cli/target/aegis.jar raft add-voter <node2-hex-id> --seed 127.0.0.1:9001
-java -jar aegis-cli/target/aegis.jar raft add-voter <node3-hex-id> --seed 127.0.0.1:9001
+aegis raft add-voter <node2-hex-id> --seed 127.0.0.1:9001
+aegis raft add-voter <node3-hex-id> --seed 127.0.0.1:9001
 ```
 
 ### 3. Verify Cluster Health & Leader Election
@@ -81,7 +81,7 @@ aegis cluster-health --seed 127.0.0.1:9002
 ### 11. Restart the Killed Node
 Start the killed node again:
 ```bash
-java -jar aegis-cli/target/aegis.jar start --port <port> --home /tmp/aegis-<node> --seed 127.0.0.1:<alive_port>
+aegis start --port <port> --home /tmp/aegis-<node> --seed 127.0.0.1:<alive_port>
 ```
 *Expected: Node rejoins the cluster successfully as a FOLLOWER and syncs state.*
 

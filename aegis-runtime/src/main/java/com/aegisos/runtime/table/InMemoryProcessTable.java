@@ -4,6 +4,8 @@ import com.aegisos.api.runtime.ProcessRecord;
 import com.aegisos.api.runtime.ProcessState;
 import com.aegisos.api.runtime.ProcessStateListener;
 import com.aegisos.api.runtime.ProcessTable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -12,13 +14,34 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
-public class InMemoryProcessTable implements ProcessTable {
+public class InMemoryProcessTable implements ProcessTable, AutoCloseable {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryProcessTable.class);
+    private static final long RETENTION_MS = TimeUnit.HOURS.toMillis(24);
 
     private final ConcurrentHashMap<String, ProcessRecord> table = new ConcurrentHashMap<>();
     private final java.util.Map<String, byte[]> checkpoints = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<ProcessStateListener> listeners = new CopyOnWriteArrayList<>();
     private final ExecutorService eventExecutor = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService scavenger = Executors.newSingleThreadScheduledExecutor();
+
+    public InMemoryProcessTable() {
+        scavenger.scheduleAtFixedRate(this::evictExpiredProcesses, 1, 1, TimeUnit.HOURS);
+    }
+
+    private void evictExpiredProcesses() {
+        long now = System.currentTimeMillis();
+        for (ProcessRecord record : table.values()) {
+            if ((record.state() == ProcessState.COMPLETED || record.state() == ProcessState.FAILED) &&
+                (now - record.stateTimestamp() > RETENTION_MS)) {
+                table.remove(record.processId());
+                log.info("Evicted expired process {} from memory (State: {})", record.processId(), record.state());
+            }
+        }
+    }
 
     @Override
     public void addListener(ProcessStateListener listener) {
@@ -31,7 +54,7 @@ public class InMemoryProcessTable implements ProcessTable {
                 try {
                     listener.onProcessStateChanged(record);
                 } catch (Exception e) {
-                    // Ignore listener errors to prevent blocking the event loop
+                    
                 }
             }
         });
@@ -107,5 +130,32 @@ public class InMemoryProcessTable implements ProcessTable {
     @Override
     public byte[] getLatestCheckpoint(String processId) {
         return checkpoints.get(processId);
+    }
+
+    public byte[] takeSnapshot() {
+        com.aegisos.proto.ProcessTableSnapshotProto.Builder builder = com.aegisos.proto.ProcessTableSnapshotProto.newBuilder();
+        for (ProcessRecord record : table.values()) {
+            builder.addRecords(com.aegisos.runtime.util.ProcessMapper.toProto(record));
+        }
+        return builder.build().toByteArray();
+    }
+
+    public void installSnapshot(byte[] data) {
+        try {
+            com.aegisos.proto.ProcessTableSnapshotProto snapshot = com.aegisos.proto.ProcessTableSnapshotProto.parseFrom(data);
+            table.clear();
+            for (com.aegisos.proto.ProcessRecordProto proto : snapshot.getRecordsList()) {
+                ProcessRecord record = com.aegisos.runtime.util.ProcessMapper.fromProto(proto);
+                table.put(record.processId(), record);
+            }
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            throw new RuntimeException("Failed to parse snapshot data", e);
+        }
+    }
+
+    @Override
+    public void close() {
+        scavenger.shutdownNow();
+        eventExecutor.shutdownNow();
     }
 }

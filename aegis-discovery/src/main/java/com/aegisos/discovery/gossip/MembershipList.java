@@ -12,7 +12,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Eventually-consistent cluster membership view (design section 3.3).
@@ -50,10 +52,21 @@ public final class MembershipList {
     private final com.aegisos.core.telemetry.ResourceMonitor resourceMonitor;
     private final com.aegisos.core.telemetry.HardwareMonitor hardwareMonitor;
 
+    private final int selfRestPort;
+    private final List<Consumer<PeerEntry>> peerDiscoveryListeners = new CopyOnWriteArrayList<>();
+
     public MembershipList(NodeId selfId, byte[] selfPublicKey, String selfAddress,
                           com.aegisos.proto.NodeRole selfRole, long gossipIntervalMs,
                           com.aegisos.core.telemetry.ResourceMonitor resourceMonitor,
                           com.aegisos.core.telemetry.HardwareMonitor hardwareMonitor) {
+        this(selfId, selfPublicKey, selfAddress, selfRole, gossipIntervalMs, resourceMonitor, hardwareMonitor, 0);
+    }
+
+    public MembershipList(NodeId selfId, byte[] selfPublicKey, String selfAddress,
+                          com.aegisos.proto.NodeRole selfRole, long gossipIntervalMs,
+                          com.aegisos.core.telemetry.ResourceMonitor resourceMonitor,
+                          com.aegisos.core.telemetry.HardwareMonitor hardwareMonitor,
+                          int selfRestPort) {
         this.selfId = selfId;
         this.selfPublicKey = selfPublicKey.clone();
         this.selfAddress = selfAddress;
@@ -63,6 +76,7 @@ public final class MembershipList {
         this.evictTimeoutMs = 30 * gossipIntervalMs;
         this.resourceMonitor = resourceMonitor;
         this.hardwareMonitor = hardwareMonitor;
+        this.selfRestPort = selfRestPort;
         peers.put(selfId, selfEntry());
     }
 
@@ -75,6 +89,7 @@ public final class MembershipList {
                 .setStatus(PeerStatus.ALIVE)
                 .setVersion(selfVersion.get())
                 .setRole(selfRole)
+                .setRestPort(selfRestPort)
                 .setResources(resourceMonitor != null ? resourceMonitor.gather(selfId.toBytes()) : com.aegisos.proto.NodeResources.getDefaultInstance());
                 
         if (hardwareMonitor != null) {
@@ -98,6 +113,7 @@ public final class MembershipList {
                 .setStatus(PeerStatus.ALIVE)
                 .setVersion(selfVersion.incrementAndGet())
                 .setRole(selfRole)
+                .setRestPort(selfRestPort)
                 .setResources(resourceMonitor != null ? resourceMonitor.gather(selfId.toBytes()) : com.aegisos.proto.NodeResources.getDefaultInstance());
 
         if (hardwareMonitor != null) {
@@ -111,23 +127,54 @@ public final class MembershipList {
         peers.put(selfId, builder.build());
     }
 
+    /** Registers a listener that is notified when a peer is observed for the first time. */
+    public void addPeerDiscoveryListener(Consumer<PeerEntry> listener) {
+        peerDiscoveryListeners.add(listener);
+    }
+
+    private void firePeerDiscovered(PeerEntry entry) {
+        for (Consumer<PeerEntry> listener : peerDiscoveryListeners) {
+            try {
+                listener.accept(entry);
+            } catch (Exception e) {
+                log.warn("Peer discovery listener failed for {}: {}",
+                        NodeId.of(entry.getNodeId().toByteArray()).shortId(), e.getMessage());
+            }
+        }
+    }
+
     /** Records a directly-observed peer (e.g. right after a handshake). */
     public void observe(NodeId id, byte[] publicKey, Endpoint endpoint) {
         if (id.equals(selfId)) {
             return;
         }
+        boolean[] isNew = {false};
+        PeerEntry[] result = {null};
         peers.compute(id, (k, existing) -> {
-            long version = existing == null ? 1 : existing.getVersion() + 1;
-            return PeerEntry.newBuilder()
+            if (existing != null) {
+                return existing.toBuilder()
+                        .setAddress(endpoint.toString())
+                        .setLastSeen(System.currentTimeMillis())
+                        .setStatus(PeerStatus.ALIVE)
+                        .build();
+            }
+            PeerEntry newEntry = PeerEntry.newBuilder()
                     .setNodeId(ByteString.copyFrom(id.toBytes()))
                     .setPublicKey(ByteString.copyFrom(publicKey))
                     .setAddress(endpoint.toString())
                     .setLastSeen(System.currentTimeMillis())
                     .setStatus(PeerStatus.ALIVE)
-                    .setVersion(version)
-                    .setRole(existing != null ? existing.getRole() : com.aegisos.proto.NodeRole.CLUSTER_MEMBER)
+                    .setVersion(1)
+                    .setRole(com.aegisos.proto.NodeRole.CLUSTER_MEMBER)
+                    .setRestPort(0)
                     .build();
+            isNew[0] = true;
+            result[0] = newEntry;
+            return newEntry;
         });
+        if (isNew[0] && result[0] != null) {
+            firePeerDiscovered(result[0]);
+        }
     }
 
     /** Merges an incoming list, taking the fresher entry per node. */
@@ -144,12 +191,16 @@ public final class MembershipList {
                 continue; // prevent resurrection of evicted peers via cache
             }
 
+            boolean wasAbsent = !peers.containsKey(id);
             peers.merge(id, in, (existing, candidate) -> {
                 if (existing == null || candidate.getVersion() > existing.getVersion()) {
                     return candidate.toBuilder().setLastSeen(now).build(); // apply local clock
                 }
                 return existing;
             });
+            if (wasAbsent && peers.containsKey(id)) {
+                firePeerDiscovered(peers.get(id));
+            }
         }
     }
 
@@ -250,5 +301,13 @@ public final class MembershipList {
             }
         }
         return count;
+    }
+
+    public int restPortOf(NodeId id) {
+        if (id != null && id.equals(selfId)) {
+            return selfRestPort;
+        }
+        PeerEntry p = peers.get(id);
+        return p != null ? p.getRestPort() : 0;
     }
 }

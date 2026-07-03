@@ -24,17 +24,17 @@ In the first three terminals, start the AegisOS nodes. They will automatically d
 
 **Terminal 1 (Node 1):**
 ```bash
-java -jar target/aegis.jar start --home ./data/node1 --port 7001
+aegis start --home ./data/node1 --port 7001
 ```
 
 **Terminal 2 (Node 2):**
 ```bash
-java -jar target/aegis.jar start --home ./data/node2 --port 7002 --seed localhost:7001
+aegis start --home ./data/node2 --port 7002 --seed localhost:7001
 ```
 
 **Terminal 3 (Node 3):**
 ```bash
-java -jar target/aegis.jar start --home ./data/node3 --port 7003 --seed localhost:7001
+aegis start --home ./data/node3 --port 7003 --seed localhost:7001
 ```
 
 Wait a few seconds for the nodes to complete leader election. You should see logs indicating a new `LEADER`.
@@ -47,7 +47,7 @@ In the **fourth** terminal, use the CLI to upload the compiled Demo Job JAR into
 
 **Terminal 4 (CLI):**
 ```bash
-java -jar target/aegis.jar artifact upload --seed localhost:7001 ../aegis-demo-job/target/aegis-demo-job-1.0.jar
+aegis artifact upload --seed localhost:7001 ../aegis-demo-job/target/aegis-demo-job-1.0.jar
 ```
 
 *Note the `SHA-256` output. You will need it for the next step.*
@@ -60,7 +60,7 @@ Submit the job to the cluster. The scheduler will assign the job to the node wit
 
 **Terminal 4 (CLI):**
 ```bash
-java -jar target/aegis.jar run --seed localhost:7001 --artifact <YOUR_SHA256_HASH_HERE> com.example.WordCounter
+aegis run --seed localhost:7001 --artifact <YOUR_SHA256_HASH_HERE> com.example.WordCounter
 ```
 
 Watch the terminal of the node that was assigned the job. You will see logs indicating cache misses/hits, ClassLoader creation, and execution output.
@@ -73,7 +73,7 @@ To verify the resilience of the artifact runtime:
 
 1. **Submit a long-running job:**
    ```bash
-   java -jar target/aegis.jar run --seed localhost:7001 --artifact <YOUR_SHA256_HASH_HERE> com.example.LongRunningJob
+   aegis run --seed localhost:7001 --artifact <YOUR_SHA256_HASH_HERE> com.example.LongRunningJob
    ```
 2. **Kill the Worker:** While the job is running (watch the progress in the worker's terminal), press `Ctrl+C` in that terminal to kill the worker node.
 3. **Observe Migration:** Watch the other terminals. The migration coordinator will detect the failure via gossip, fail the job, and re-schedule it on an alive node.

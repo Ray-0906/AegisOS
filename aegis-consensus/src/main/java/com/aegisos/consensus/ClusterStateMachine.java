@@ -225,4 +225,22 @@ public final class ClusterStateMachine implements RaftStateMachine {
     public Optional<byte[]> kvGet(String key) {
         return Optional.ofNullable(kv.get(key));
     }
+
+    @Override
+    public byte[] takeSnapshot() {
+        try {
+            return takeSnapshot(0, 0);
+        } catch (SnapshotException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public void installSnapshot(byte[] data) {
+        try {
+            loadSnapshot(data);
+        } catch (SnapshotException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

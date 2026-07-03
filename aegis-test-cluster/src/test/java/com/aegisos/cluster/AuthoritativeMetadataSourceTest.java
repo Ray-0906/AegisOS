@@ -65,23 +65,8 @@ public class AuthoritativeMetadataSourceTest {
             nodes.add(node);
             
             if (!isBootstrap) {
-                // Wait for Gossip and replicator catch up, then add voter.
-                AegisNode leader = nodes.get(0);
-                ClusterHarness.await(10000, () -> leader.consensus().isLeader());
-                ClusterHarness.await(10000, () -> {
-                    com.aegisos.proto.PeerStatus status = leader.discovery().membership().statusOf(node.identity().nodeId());
-                    return status == com.aegisos.proto.PeerStatus.ALIVE || status == com.aegisos.proto.PeerStatus.SUSPECT;
-                });
-                ClusterHarness.await(10000, () -> {
-                    long leaderLast = leader.consensus().raftNode().lastLogIndex();
-                    long match = leader.consensus().raftNode().matchIndex(node.identity().nodeId());
-                    return (leaderLast - match) <= 10;
-                });
-                com.aegisos.proto.StateCommand addCmd = com.aegisos.proto.StateCommand.newBuilder()
-                        .setType(com.aegisos.proto.CommandType.ADD_VOTER)
-                        .setPayload(com.google.protobuf.ByteString.copyFrom(node.identity().nodeId().toBytes()))
-                        .build();
-                leader.consensus().propose(addCmd).get(10, java.util.concurrent.TimeUnit.SECONDS);
+                // Wait for autonomous ADD_VOTER promotion via Gossip peer discovery
+                ClusterHarness.await(30_000, () -> node.consensus().clusterConfiguration().isVoter(node.identity().nodeId()));
             }
         }
 

@@ -22,6 +22,7 @@ public class RecoveryDoesNotReplayUncommittedEntriesTest {
         harness = new ClusterHarness();
         // Disable automatic removal of stopped nodes to avoid confounding membership changes
         harness.setAutoRemoveVoters(false);
+        harness.setAutoPromoteVoters(false);
     }
 
     @AfterEach

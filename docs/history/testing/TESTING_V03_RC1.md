@@ -19,17 +19,17 @@ You will need 4 separate terminal windows.
 
 **Terminal 1 (Node 1 - Genesis):**
 ```bash
-java -jar aegis-cli/target/aegis.jar start --node-id node1 --port 9001 --data-dir ./data/node1
+aegis start --node-id node1 --port 9001 --data-dir ./data/node1
 ```
 
 **Terminal 2 (Node 2):**
 ```bash
-java -jar aegis-cli/target/aegis.jar start --node-id node2 --port 9002 --data-dir ./data/node2 --seed localhost:9001
+aegis start --node-id node2 --port 9002 --data-dir ./data/node2 --seed localhost:9001
 ```
 
 **Terminal 3 (Node 3):**
 ```bash
-java -jar aegis-cli/target/aegis.jar start --node-id node3 --port 9003 --data-dir ./data/node3 --seed localhost:9001
+aegis start --node-id node3 --port 9003 --data-dir ./data/node3 --seed localhost:9001
 ```
 
 *Wait 5 seconds for gossip to merge and the Raft leader to be elected.*
@@ -41,7 +41,7 @@ java -jar aegis-cli/target/aegis.jar start --node-id node3 --port 9003 --data-di
 In **Terminal 4 (Client)**, upload an executable JAR. This demonstrates the `ArtifactRegistry` and `AegisFS`.
 
 ```bash
-java -jar aegis-cli/target/aegis.jar artifact upload ./example-job.jar --seed localhost:9001
+aegis artifact upload ./example-job.jar --seed localhost:9001
 ```
 
 *Note the `SHA-256` output. Let's assume it is `abc123xyz`.*
@@ -53,7 +53,7 @@ java -jar aegis-cli/target/aegis.jar artifact upload ./example-job.jar --seed lo
 Submit a job targeting the artifact you just uploaded. The Scheduler on the Leader will assign this job to a worker.
 
 ```bash
-java -jar aegis-cli/target/aegis.jar run --artifact abc123xyz --class com.example.MyJob --seed localhost:9001
+aegis run --artifact abc123xyz --class com.example.MyJob --seed localhost:9001
 ```
 
 *Observe the output in the worker terminal (e.g., Terminal 2). You will see it fetching chunks, caching the JAR, spinning up an isolated `ArtifactClassLoader`, and executing.*
@@ -82,7 +82,7 @@ Next, prove the control plane is fault-tolerant:
 4. **Verify:** Submit another job from the Client to prove the state machine and scheduler are still fully operational.
 
 ```bash
-java -jar aegis-cli/target/aegis.jar run --artifact abc123xyz --class com.example.MyJob --seed localhost:9002
+aegis run --artifact abc123xyz --class com.example.MyJob --seed localhost:9002
 ```
 
 ---
@@ -92,7 +92,7 @@ java -jar aegis-cli/target/aegis.jar run --artifact abc123xyz --class com.exampl
 Finally, run the `status` command to show that despite two catastrophic node failures (including the leader), the system state is perfectly consistent and jobs completed successfully.
 
 ```bash
-java -jar aegis-cli/target/aegis.jar status --seed localhost:9002
+aegis status --seed localhost:9002
 ```
 
 *Demo Complete.*

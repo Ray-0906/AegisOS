@@ -123,7 +123,14 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
 
             ProcessBuilder pb;
             if (record.executionCommand() == null || record.executionCommand().trim().isEmpty()) {
-                pb = new ProcessBuilder("java", "-jar", localPath.toString());
+                String fsPath = artifact.getFsPath();
+                if (fsPath != null && fsPath.endsWith(".js")) {
+                    pb = new ProcessBuilder("node", localPath.toString());
+                } else if (fsPath != null && (fsPath.endsWith(".zip") || fsPath.endsWith(".tar.gz"))) {
+                    throw new UnsupportedOperationException("Archive extraction not yet supported");
+                } else {
+                    pb = new ProcessBuilder("java", "-jar", localPath.toString());
+                }
             } else {
                 String cmdStr = record.executionCommand().replace("{artifact}", localPath.toString());
                 pb = new ProcessBuilder(cmdStr.split(" "));
@@ -132,6 +139,8 @@ public class LocalRuntimeEngine implements RuntimeEngine, ProcessStateListener {
             if (checkpoint != null) {
                 pb.environment().put("AEGIS_CHECKPOINT_DIR", logDir.toString());
             }
+            pb.environment().put("PORT", String.valueOf(networkLayer.boundPort() + 1000 + (int) (Math.random() * 1000)));
+            pb.environment().put("AEGIS_NODE_ID", identityService.nodeId().toHex());
             pb.redirectErrorStream(true);
             Process process = pb.start();
             activeProcesses.put(record.processId(), process);

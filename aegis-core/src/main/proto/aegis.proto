@@ -88,6 +88,7 @@ message PeerEntry {
   NodeResources resources = 8;
   TelemetrySnapshotProto telemetry = 9;
   NodeCertificate certificate = 10;
+  int32      rest_port  = 11;
 }
 
 message TelemetrySnapshotProto {
@@ -176,6 +177,10 @@ message SnapshotProto {
   int64 last_included_term = 2;
   repeated ProcessRecordProto processes = 3;
   repeated PipelineRecordProto pipelines = 4;
+}
+
+message ProcessTableSnapshotProto {
+  repeated ProcessRecordProto records = 1;
 }
 
 // Application state machine commands (section 3.4)

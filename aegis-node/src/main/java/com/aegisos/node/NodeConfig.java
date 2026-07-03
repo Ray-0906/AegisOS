@@ -29,6 +29,7 @@ public final class NodeConfig {
     // v0.1: a shared cluster secret wraps per-chunk keys. Override in production.
     private String clusterSecret = "aegis-dev-cluster-secret";
     private boolean bootstrap = false;
+    private boolean autoPromoteVoters = true;
     private int membershipLagThreshold = 10;
     private int repairRecommendationMaxAgeSeconds = 180;
     private int repairTaskTimeoutSeconds = 300;
@@ -52,6 +53,15 @@ public final class NodeConfig {
 
     public NodeConfig bootstrap(boolean b) {
         this.bootstrap = b;
+        return this;
+    }
+
+    public boolean autoPromoteVoters() {
+        return autoPromoteVoters;
+    }
+
+    public NodeConfig autoPromoteVoters(boolean b) {
+        this.autoPromoteVoters = b;
         return this;
     }
 

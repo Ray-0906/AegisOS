@@ -22,6 +22,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
     private volatile long version;
     private final Set<NodeId> voters = ConcurrentHashMap.newKeySet();
     private final Set<NodeId> observers = ConcurrentHashMap.newKeySet();
+    private final Set<NodeId> explicitlyRemoved = ConcurrentHashMap.newKeySet();
 
     public ClusterConfiguration() {
         this.version = 0;
@@ -35,6 +36,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
         this.version = 0;
         this.voters.clear();
         this.observers.clear();
+        this.explicitlyRemoved.clear();
         log.debug("Initialized join ClusterConfiguration with empty voters (version 0)");
     }
 
@@ -58,6 +60,10 @@ public final class ClusterConfiguration implements SnapshotParticipant {
         return observers.contains(node);
     }
 
+    public boolean wasExplicitlyRemoved(NodeId node) {
+        return explicitlyRemoved.contains(node);
+    }
+
     public synchronized void applyAddVoter(long index, StateCommand cmd) {
         try {
             NodeId nodeId = NodeId.of(cmd.getPayload().toByteArray());
@@ -67,6 +73,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
             }
             voters.add(nodeId);
             observers.remove(nodeId);
+            explicitlyRemoved.remove(nodeId);
             version++;
             log.debug("ADD_VOTER at index {} applied: {} is now a voter (version {})", index, nodeId.shortId(), version);
         } catch (Exception e) {
@@ -82,6 +89,7 @@ public final class ClusterConfiguration implements SnapshotParticipant {
                 return; // idempotent
             }
             voters.remove(nodeId);
+            explicitlyRemoved.add(nodeId);
             version++;
             log.debug("REMOVE_VOTER at index {} applied: {} removed from voters (version {})", index, nodeId.shortId(), version);
         } catch (Exception e) {
@@ -106,6 +114,10 @@ public final class ClusterConfiguration implements SnapshotParticipant {
             out.writeInt(observers.size());
             for (NodeId o : observers) {
                 out.write(o.toBytes());
+            }
+            out.writeInt(explicitlyRemoved.size());
+            for (NodeId r : explicitlyRemoved) {
+                out.write(r.toBytes());
             }
             out.flush();
             return baos.toByteArray();
@@ -132,6 +144,15 @@ public final class ClusterConfiguration implements SnapshotParticipant {
                 byte[] id = new byte[32];
                 in.readFully(id);
                 observers.add(NodeId.of(id));
+            }
+            explicitlyRemoved.clear();
+            if (in.available() > 0) {
+                int rc = in.readInt();
+                for (int i = 0; i < rc; i++) {
+                    byte[] id = new byte[32];
+                    in.readFully(id);
+                    explicitlyRemoved.add(NodeId.of(id));
+                }
             }
             log.debug("Restored ClusterConfiguration: {} voters, {} observers, version {}",
                     voters.size(), observers.size(), version);
