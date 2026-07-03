@@ -30,6 +30,12 @@ The two main executable JARs you will use are:
 
 For new users, prefer the CLI JAR and the [README quick start](../README.md).
 
+### Installation (Recommended)
+- **Windows:** Run `.\install.ps1`
+- **Linux/macOS:** Run `./install.sh`
+
+*Important: Restart your terminal after installation to use the global command.*
+
 ---
 
 ## 3. Starting a Local Cluster
@@ -87,19 +93,19 @@ The `aegis-cli` tool is used to interact with the cluster. By default, it connec
 **View Cluster Info:**
 Shows the currently connected seed node, cluster size, and consensus leader.
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar info
+aegis info
 ```
 
 **List Nodes:**
 Lists all nodes in the Kademlia routing table.
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar nodes
+aegis nodes
 ```
 
 **Raft Consensus Info:**
 Shows the current term, the leader ID, and cluster configuration.
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar raft
+aegis raft
 ```
 
 ### Distributed File System (AegisFS)
@@ -108,18 +114,18 @@ AegisFS is a content-addressed storage system. Files are split into 1MB chunks, 
 
 **Upload a File:**
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar put /local/path/to/file.txt
+aegis put /local/path/to/file.txt
 ```
 *Returns an Artifact ID (e.g., `aegis://artifact/123456...`).*
 
 **List Uploaded Files:**
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar ls
+aegis ls
 ```
 
 **Download a File:**
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar get <Artifact_ID> /local/path/downloaded.txt
+aegis get <Artifact_ID> /local/path/downloaded.txt
 ```
 
 ### Distributed Job Execution
@@ -128,18 +134,18 @@ AegisOS can run sandboxed Java jobs across the cluster. The scheduler uses local
 
 **Submit a Job:**
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar run <Artifact_ID>
+aegis run <Artifact_ID>
 ```
 *Returns a Job ID.*
 
 **Check Job Status:**
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar status <Job_ID>
+aegis status <Job_ID>
 ```
 
 **List All Jobs:**
 ```bash
-java -jar aegis-cli/target/aegis-cli-0.1.0-SNAPSHOT-shaded.jar jobs
+aegis jobs
 ```
 
 ---

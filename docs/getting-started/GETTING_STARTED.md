@@ -25,6 +25,12 @@ mvn clean package -DskipTests
 
 The primary executable we care about is the CLI, which is built into the `aegis-cli` module.
 
+### Installation (Recommended)
+- **Windows:** Run `.\install.ps1`
+- **Linux/macOS:** Run `./install.sh`
+
+*Important: Restart your terminal after installation to use the global command.*
+
 ---
 
 ## 3. Starting a Local Cluster
@@ -36,19 +42,19 @@ Let's start a 3-node cluster locally. Open three separate terminal windows.
 **Terminal 1 (Node 1 - Bootstrap Node):**
 ```bash
 # We use --bootstrap on the first node to initialize a new Raft cluster
-java -jar aegis-cli/target/aegis-cli-1.0-SNAPSHOT-jar-with-dependencies.jar start --port 9000 --home ./node1 --bootstrap
+aegis start --port 9000 --home ./node1 --bootstrap
 ```
 
 **Terminal 2 (Node 2):**
 ```bash
 # Connect to Node 1 via --seed
-java -jar aegis-cli/target/aegis-cli-1.0-SNAPSHOT-jar-with-dependencies.jar start --port 9001 --home ./node2 --seed 127.0.0.1:9000
+aegis start --port 9001 --home ./node2 --seed 127.0.0.1:9000
 ```
 
 **Terminal 3 (Node 3):**
 ```bash
 # Connect to Node 1 via --seed
-java -jar aegis-cli/target/aegis-cli-1.0-SNAPSHOT-jar-with-dependencies.jar start --port 9002 --home ./node3 --seed 127.0.0.1:9000
+aegis start --port 9002 --home ./node3 --seed 127.0.0.1:9000
 ```
 
 *Wait a few seconds. You will see the nodes perform a Raft election and one node will emerge as the `<LEADER>`. The cluster is now active.*
@@ -62,7 +68,7 @@ Open a **fourth terminal** to act as your client workstation. The Aegis CLI inte
 ### Check Cluster Health
 ```bash
 # List all alive nodes in the cluster
-java -jar aegis-cli/target/aegis-cli-1.0-SNAPSHOT-jar-with-dependencies.jar nodes --seed 127.0.0.1:9000
+aegis nodes --seed 127.0.0.1:9000
 ```
 
 ### Upload an Artifact
@@ -71,7 +77,7 @@ AegisOS executes code from **Artifacts**. An artifact is a JAR file containing y
 We have a pre-built demo job located at `aegis-demo-job/target/aegis-demo-job-1.0-SNAPSHOT.jar`.
 
 ```bash
-java -jar aegis-cli/target/aegis-cli-1.0-SNAPSHOT-jar-with-dependencies.jar artifact upload aegis-demo-job/target/aegis-demo-job-1.0-SNAPSHOT.jar --seed 127.0.0.1:9000
+aegis artifact upload aegis-demo-job/target/aegis-demo-job-1.0-SNAPSHOT.jar --seed 127.0.0.1:9000
 ```
 **Save the SHA-256 ID** returned by this command. You will need it to run the job!
 
@@ -80,13 +86,13 @@ Let's run `CheckpointableSum`, a demo application that counts from 1 to 100, sav
 
 Replace `<ARTIFACT_ID>` with the SHA-256 you just generated.
 ```bash
-java -jar aegis-cli/target/aegis-cli-1.0-SNAPSHOT-jar-with-dependencies.jar run com.aegisos.demo.CheckpointableSum --artifact <ARTIFACT_ID> --seed 127.0.0.1:9000
+aegis run com.aegisos.demo.CheckpointableSum --artifact <ARTIFACT_ID> --seed 127.0.0.1:9000
 ```
 This command returns a `Job ID` (e.g. `123e4567-e89b-12d3...`).
 
 ### Check Job Status
 ```bash
-java -jar aegis-cli/target/aegis-cli-1.0-SNAPSHOT-jar-with-dependencies.jar status <JOB_ID> --seed 127.0.0.1:9000
+aegis status <JOB_ID> --seed 127.0.0.1:9000
 ```
 This will tell you what node the job is running on, its state (`RUNNING`, `COMPLETED`), and how many checkpoints it has written.
 

@@ -11,7 +11,8 @@ AegisOS v2.0.0 introduces true polyglot capabilities, distributed Virtual IPC st
 * **Fortress (mTLS & Cryptographic Secrecy):** Zero-config auto-generation of 2048-bit RSA X.509 self-signed certificates via BouncyCastle. Gossip, Raft, and IPC traffic are now fully cloaked in AES-256 TLS 1.3 encryption, validated via the Ed25519 node identity handshake.
 * **The Vault (Distributed File System):** Replaced CLI file capabilities with formal REST endpoints. `AegisFS` provides fault-tolerant chunking, background scrubbing, and anti-entropy to guarantee artifact persistence across the cluster, surviving immediate ingestion-node destruction.
 * **The Panopticon (Distributed Observability):** Trace IDs are now minted at the REST ingestion edge and propagated via `TraceContextProto` into the Raft state machine. Trace identity (`[TRACE: <id>]`) is natively injected into all critical Java compute engine telemetry, illuminating the entire job lifecycle.
-
+* **Consensus Compaction (Snapshotting):** Raft logs are now continuously compacted to prevent infinite disk and heap memory growth. The State Machine saves exact state binary snapshots and truncates obsolete log entries, while the `InstallSnapshot` RPC allows new followers to quickly synchronize with the leader without replaying historical logs.
+* **Process Lifecycle Engine:** Hardened the `InMemoryProcessTable` with strict TTL eviction policies for `COMPLETED` and `FAILED` workloads, providing autonomous memory management and preventing JVM Out-Of-Memory errors over prolonged uptimes.
 ## Upgrading
 All state from `v1.x` should be purged due to new schema requirements in `ProcessRecordProto` (`executionCommand`, `pipeToProcessId`). Start fresh clusters using `--bootstrap`.
 

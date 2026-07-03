@@ -65,6 +65,19 @@ AegisOS/
 ```
 
 
+## Installation (Recommended)
+
+To build the project and install the global CLI:
+
+```bash
+mvn clean package -DskipTests
+```
+
+- **Windows:** Run `.\install.ps1`
+- **Linux/macOS:** Run `./install.sh`
+
+*Important: Restart your terminal after installation to use the global command.*
+
 ## Available Commands & Services
 
 The AegisOS CLI exposes a rich set of commands to interact with the cluster:

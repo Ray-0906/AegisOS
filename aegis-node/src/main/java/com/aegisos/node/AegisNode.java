@@ -84,7 +84,7 @@ public final class AegisNode implements AutoCloseable {
 
         String selfAddress = config.advertiseHost() + ":" + network.boundPort();
         com.aegisos.core.telemetry.ResourceMonitor resourceMonitor = new com.aegisos.core.telemetry.ResourceMonitor();
-        discovery = new DiscoveryService(network, identity, selfAddress, config.role(), resourceMonitor);
+        discovery = new DiscoveryService(network, identity, selfAddress, config.role(), resourceMonitor, config.restPort());
         discovery.start(config.seeds());
 
         java.util.function.Supplier<java.util.List<com.aegisos.core.identity.NodeId>> allPeers = () ->
