@@ -54,35 +54,17 @@ public class JobHandler {
 
         try {
             JobRequest req = mapper.readValue(exchange.getRequestBody(), JobRequest.class);
-            com.aegisos.api.JobHandle handle;
-            
-            if (req.artifact() != null && !req.artifact().isEmpty()) {
-                handle = node.api().getProcessManager().submitArtifact(
-                        req.artifact(),
-                        req.entrypoint(),
-                        req.args(),
-                        req.resources() != null ? req.resources().cpu() : 1,
-                        req.resources() != null ? req.resources().memoryMb() : 1024
-                );
-            } else {
-                // Instantiate the job on the server side
-                Class<?> clazz = Class.forName(req.entrypoint());
-                Object instance;
-                try {
-                    instance = clazz.getConstructor(String[].class)
-                            .newInstance((Object) req.args().toArray(new String[0]));
-                } catch (NoSuchMethodException e) {
-                    instance = clazz.getDeclaredConstructor().newInstance();
-                }
-                if (!(instance instanceof com.aegisos.runtime.AegisJob<?> job)) {
-                    throw new IllegalArgumentException(req.entrypoint() + " is not an AegisJob");
-                }
-                handle = node.api().getProcessManager().submit(
-                        job,
-                        req.resources() != null ? req.resources().cpu() : 1,
-                        req.resources() != null ? req.resources().memoryMb() : 1024
-                );
+            String targetArtifact = req.artifact();
+            if (targetArtifact == null || targetArtifact.trim().isEmpty()) {
+                targetArtifact = req.entrypoint();
             }
+            com.aegisos.api.JobHandle handle = node.api().getProcessManager().submitArtifact(
+                    targetArtifact,
+                    req.entrypoint(),
+                    req.args(),
+                    req.resources() != null ? req.resources().cpu() : 1,
+                    req.resources() != null ? req.resources().memoryMb() : 1024
+            );
 
             // Return just the job ID
             ResponseWriter.writeJson(exchange, 202, handle.jobId());
