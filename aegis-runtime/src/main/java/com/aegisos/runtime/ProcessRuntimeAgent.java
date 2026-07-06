@@ -317,8 +317,123 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
         if (runtime == com.aegisos.proto.RuntimeType.RUNTIME_CONTAINER) {
             executeContainerJob(record);
         } else {
+            String artifactId = record.getSpec().getCodeFileId();
+            if (artifactId != null && !artifactId.isEmpty()) {
+                java.util.Optional<com.aegisos.proto.ArtifactRecord> opt = artifactRegistry.bySha256(artifactId);
+                if (opt.isPresent() && opt.get().getFileName().endsWith(".js")) {
+                    executeNodeJob(record, opt.get());
+                    return;
+                }
+            }
             executeJvmJob(record);
         }
+    }
+
+    private void executeNodeJob(JobRecord record, com.aegisos.proto.ArtifactRecord artifact) {
+        String jobId = record.getSpec().getJobId();
+        long executionId = record.getExecutionId();
+        if (shuttingDown) {
+            log.debug("Skipping node job {} execution {} because runtime is shutting down", jobId, executionId);
+            return;
+        }
+        running.incrementAndGet();
+
+        java.util.concurrent.ScheduledFuture<?> heartbeatTask;
+        try {
+            heartbeatTask = heartbeatScheduler.scheduleAtFixedRate(() -> {
+                try {
+                    com.aegisos.core.identity.NodeId leader = consensus.leaderId();
+                    if (leader != null) {
+                        com.aegisos.proto.JobHeartbeat hb = com.aegisos.proto.JobHeartbeat.newBuilder()
+                                .setJobId(jobId)
+                                .setExecutionId(executionId)
+                                .build();
+                        network.sendAsync(leader, com.aegisos.core.message.MessageType.JOB_HEARTBEAT, hb.toByteArray());
+                    }
+                } catch (Exception e) {}
+            }, com.aegisos.core.SchedulerJitter.jitter(0, 5), 5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            running.decrementAndGet();
+            return;
+        }
+
+        Thread runner = new Thread(() -> {
+            try {
+                artifactClassLoader.getCache().pin(artifact.getArtifactId());
+                java.nio.file.Path localPath = artifactClassLoader.getCache().resolve(artifact.getArtifactId(), artifact.getFsPath());
+                
+                String[] args = Serialization.deserialize(record.getSpec().getArgs().toByteArray());
+                java.util.List<String> command = new java.util.ArrayList<>();
+                command.add("node");
+                command.add(localPath.toAbsolutePath().toString());
+                if (args != null) {
+                    for (String arg : args) {
+                        command.add(arg);
+                    }
+                }
+                
+                ProcessBuilder pb = new ProcessBuilder(command);
+                pb.environment().put("PORT", String.valueOf(8080));
+                pb.environment().put("AEGIS_NODE_ID", self.toHex());
+                
+                java.nio.file.Path jobLogDir = workspaceRoot.resolve("jobs").resolve(jobId).resolve(String.valueOf(executionId));
+                java.nio.file.Files.createDirectories(jobLogDir);
+                java.nio.file.Path stdoutFile = jobLogDir.resolve("stdout");
+                java.nio.file.Path stderrFile = jobLogDir.resolve("stderr");
+                pb.redirectOutput(stdoutFile.toFile());
+                pb.redirectError(stderrFile.toFile());
+
+                Process process = pb.start();
+
+                // 1. Workload Reality Context
+                activeLocalWorkloads.put(jobId, new LocalExecution(executionId, ExecutionKind.JVM, java.time.Instant.now(), false));
+                jobsStarted.incrementAndGet();
+
+                // 2. Metadata Publication — transition QUEUED -> RUNNING
+                PublicationResult pub = publishState(jobId, executionId, JobState.RUNNING, null, null);
+                if (pub == PublicationResult.ACKNOWLEDGED) {
+                    activeLocalWorkloads.computeIfPresent(jobId, (k, v) ->
+                            new LocalExecution(v.executionId(), v.kind(), v.startedAt(), true));
+                    if (metricsRegistry != null) metricsRegistry.counter("aegis_running_acknowledged").increment();
+                } else {
+                    if (metricsRegistry != null) metricsRegistry.counter("aegis_running_unknown").increment();
+                }
+
+                int exitCode = process.waitFor();
+                
+                if (isSuperseded(jobId, executionId)) {
+                    fencingDrops.incrementAndGet();
+                    jobsSuperseded.incrementAndGet();
+                    return;
+                }
+                
+                if (exitCode == 0) {
+                    terminalScheduler.enqueue(jobId, executionId, com.aegisos.proto.JobState.COMPLETED, null, null);
+                    jobsCompleted.incrementAndGet();
+                    log.info("Node Job {} COMPLETED", jobId);
+                } else {
+                    terminalScheduler.enqueue(jobId, executionId, com.aegisos.proto.JobState.FAILED, null, "Exit code " + exitCode);
+                    jobsFailed.incrementAndGet();
+                    log.error("Node Job {} FAILED with exit code {}", jobId, exitCode);
+                }
+                uploadJobLogsBestEffort(jobId, executionId);
+            } catch (Exception e) {
+                if (!isSuperseded(jobId, executionId)) {
+                    terminalScheduler.enqueue(jobId, executionId, com.aegisos.proto.JobState.FAILED, null, e.getMessage());
+                    jobsFailed.incrementAndGet();
+                    log.error("Node Job {} FAILED", jobId, e);
+                    uploadJobLogsBestEffort(jobId, executionId);
+                }
+            } finally {
+                heartbeatTask.cancel(true);
+                running.decrementAndGet();
+                activeLocalWorkloads.remove(jobId);
+                artifactClassLoader.getCache().unpin(artifact.getArtifactId());
+            }
+        }, "aegis-node-job-" + jobId);
+        
+        runner.setDaemon(true);
+        runner.start();
     }
 
     private void executeContainerJob(JobRecord record) {

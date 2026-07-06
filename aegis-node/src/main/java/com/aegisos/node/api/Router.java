@@ -21,14 +21,16 @@ public class Router implements HttpHandler {
     private final com.aegisos.node.api.handlers.JobHandler jobHandler;
     private final com.aegisos.node.api.handlers.ArtifactHandler artifactHandler;
     private final com.aegisos.node.api.handlers.ProcessEndpoint processEndpoint;
+    private final com.aegisos.node.api.handlers.LogEndpoint logEndpoint;
 
-    public Router(AegisNode node) {
+    public Router(AegisNode node, com.aegisos.node.api.handlers.LogEndpoint logEndpoint) {
         this.clusterHandler = new ClusterHandler(node);
         this.adminHandler = new AdminHandler(node);
         this.fileHandler = new FileHandler(node);
         this.jobHandler = new com.aegisos.node.api.handlers.JobHandler(node);
         this.artifactHandler = new com.aegisos.node.api.handlers.ArtifactHandler(node);
         this.processEndpoint = new com.aegisos.node.api.handlers.ProcessEndpoint(node.runtimeManager());
+        this.logEndpoint = logEndpoint;
     }
 
     @Override
@@ -44,7 +46,8 @@ public class Router implements HttpHandler {
                     path.equals("/v1/artifacts") ||
                     path.equals("/v1/jobs") || path.startsWith("/v1/jobs/") ||
                     path.equals("/v1/processes") || path.startsWith("/v1/processes/") ||
-                    path.equals("/v1/admin/membership") || path.startsWith("/v1/admin/membership/");
+                    path.equals("/v1/admin/membership") || path.startsWith("/v1/admin/membership/") ||
+                    path.matches(".*/logs.*");
 
             if (!isKnownPath) {
                 ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
@@ -52,7 +55,15 @@ public class Router implements HttpHandler {
             }
 
             if (path.startsWith("/v1/processes")) {
-                processEndpoint.handle(exchange);
+                if (path.endsWith("/logs")) {
+                    if (logEndpoint != null) {
+                        logEndpoint.handle(exchange);
+                    } else {
+                        ResponseWriter.writeError(exchange, 404, "LOG_ENDPOINT_NOT_CONFIGURED");
+                    }
+                } else {
+                    processEndpoint.handle(exchange);
+                }
                 return;
             }
 

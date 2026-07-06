@@ -92,7 +92,7 @@ public final class DefaultProcessManager implements ProcessManager {
 
         JobSpec spec = JobSpec.newBuilder()
                 .setJobId(jobId)
-                .setClassName(className)
+                .setClassName(className != null ? className : "")
                 .setArgs(ByteString.copyFrom(argsBytes))
                 .setCodeFileId(artifactId)
                 .setOwnerNodeId(ByteString.copyFrom(self.toBytes()))

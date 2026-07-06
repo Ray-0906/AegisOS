@@ -326,19 +326,11 @@ public final class AegisNode implements AutoCloseable {
         }
 
         if (config.restPort() >= 0 && !isClient) {
-            apiServer = new com.aegisos.node.api.ApiServer(this, config.restPort());
-            apiServer.start();
-            
             com.aegisos.node.api.handlers.LogEndpoint logEndpoint = new com.aegisos.node.api.handlers.LogEndpoint(
                 processTable, identity, new ClusterInfo(discovery), config.chunkDir().resolve("logs"));
-            
-            apiServer.server().createContext("/v1/processes/", exchange -> {
-                if (exchange.getRequestURI().getPath().endsWith("/logs")) {
-                    logEndpoint.handle(exchange);
-                } else {
-                    new com.aegisos.node.api.Router(AegisNode.this).handle(exchange);
-                }
-            });
+
+            apiServer = new com.aegisos.node.api.ApiServer(this, config.restPort(), logEndpoint);
+            apiServer.start();
         }
 
         started = true;
