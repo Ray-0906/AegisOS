@@ -56,14 +56,30 @@ public class Router implements HttpHandler {
 
             if (path.startsWith("/v1/processes")) {
                 if (path.endsWith("/logs")) {
-                    if (logEndpoint != null) {
-                        logEndpoint.handle(exchange);
-                    } else {
-                        ResponseWriter.writeError(exchange, 404, "LOG_ENDPOINT_NOT_CONFIGURED");
+                    String subPath = path.substring("/v1/processes/".length());
+                    int slashIdx = subPath.indexOf('/');
+                    if (slashIdx != -1) {
+                        String jobId = subPath.substring(0, slashIdx);
+                        String query = exchange.getRequestURI().getQuery();
+                        String stream = "stdout";
+                        Long execId = 1L;
+                        if (query != null) {
+                            for (String param : query.split("&")) {
+                                String[] kv = param.split("=");
+                                if (kv.length == 2) {
+                                    if (kv[0].equals("stream")) stream = kv[1];
+                                    if (kv[0].equals("executionId")) execId = Long.parseLong(kv[1]);
+                                }
+                            }
+                        }
+                        if (!stream.equals("stdout") && !stream.equals("stderr")) {
+                            stream = "stdout";
+                        }
+                        jobHandler.getJobLogs(exchange, jobId, stream, execId);
+                        return;
                     }
-                } else {
-                    processEndpoint.handle(exchange);
                 }
+                processEndpoint.handle(exchange);
                 return;
             }
 

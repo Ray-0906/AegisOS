@@ -351,7 +351,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                         network.sendAsync(leader, com.aegisos.core.message.MessageType.JOB_HEARTBEAT, hb.toByteArray());
                     }
                 } catch (Exception e) {}
-            }, com.aegisos.core.SchedulerJitter.jitter(0, 5), 5, java.util.concurrent.TimeUnit.SECONDS);
+            }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
         } catch (java.util.concurrent.RejectedExecutionException e) {
             running.decrementAndGet();
             return;
@@ -376,12 +376,11 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 pb.environment().put("PORT", String.valueOf(8080));
                 pb.environment().put("AEGIS_NODE_ID", self.toHex());
                 
-                java.nio.file.Path jobLogDir = workspaceRoot.resolve("jobs").resolve(jobId).resolve(String.valueOf(executionId));
-                java.nio.file.Files.createDirectories(jobLogDir);
-                java.nio.file.Path stdoutFile = jobLogDir.resolve("stdout");
-                java.nio.file.Path stderrFile = jobLogDir.resolve("stderr");
-                pb.redirectOutput(stdoutFile.toFile());
-                pb.redirectError(stderrFile.toFile());
+                java.nio.file.Path execRoot = workspaceRoot.resolve(jobId).resolve("exec-" + executionId);
+                WorkspaceInfo workspace = new WorkspaceInfo(execRoot);
+                workspace.provision();
+                pb.redirectOutput(workspace.stdoutLog().toFile());
+                pb.redirectError(workspace.stderrLog().toFile());
 
                 Process process = pb.start();
 

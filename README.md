@@ -35,6 +35,15 @@ Under the hood, AegisOS relies on a combination of distributed systems primitive
 3. **Kademlia-inspired Routing:** Leverages cryptographic node identities (`NodeId`) for stable and deterministic network addressing.
 4. **Reactive Event Loop:** Separates the fast, synchronous consensus log from the slow, physical realities of process execution using asynchronous Pub/Sub buses.
 
+### Architecture: Jobs vs. Processes
+
+To understand how AegisOS executes workloads, it is critical to distinguish between **Jobs** and **Processes**:
+
+* **Jobs (Distributed Workloads):** Jobs are the standard, cloud-native way to run applications in AegisOS. They are managed globally by the Raft consensus (`JobRegistry`), intelligently scheduled across the cluster based on hardware telemetry, and fault-tolerant. If a node fails, the job is tracked and can be recovered. Jobs are ideal for 99% of user workloads (like Node.js web servers, data processing, etc.). Use the `aegis run` and `aegis jobs` commands to interact with high-availability jobs.
+* **Processes (Local Executions):** Processes are tactical, low-level executions bound to a single specific node. They bypass the global Raft cluster entirely and are managed strictly by a node's local `ProcessTable`. They are meant for system administrators performing local diagnostics, hardware-specific targeting, or maintenance tasks directly on a machine. 
+
+**Quick Summary:** Use `aegis run` for high-availability applications. Use `aegis process` for local node administration.
+
 ## Architecture Modules
 * `aegis-consensus`: Raft-based distributed state machine.
 * `aegis-discovery`: Gossip protocol for eventually-consistent peer topology and hardware telemetry.

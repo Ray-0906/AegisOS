@@ -17,6 +17,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -137,16 +139,68 @@ public class JobHandler {
                 return;
             }
 
-            long execId = executionId != null ? executionId : optRecord.get().getExecutionId();
+            JobRecord record = optRecord.get();
+            long execId = executionId != null ? executionId : record.getExecutionId();
+
+            // --- Reverse proxy: forward to the assigned node if it's not us ---
+            if (!record.getAssignedNodeId().isEmpty()) {
+                NodeId assignedNode = NodeId.of(record.getAssignedNodeId().toByteArray());
+                NodeId self = node.identity().nodeId();
+                if (!assignedNode.equals(self)) {
+                    int remoteApiPort = node.discovery().membership().restPortOf(assignedNode);
+                    Optional<com.aegisos.core.model.Endpoint> endpointOpt = node.discovery().membership().endpointOf(assignedNode);
+                    if (remoteApiPort > 0 && endpointOpt.isPresent()) {
+                        String remoteHost = endpointOpt.get().host();
+                        String queryString = "stream=" + streamType + "&executionId=" + execId;
+                        String url = "http://" + remoteHost + ":" + remoteApiPort
+                                + "/v1/processes/" + jobId + "/logs?" + queryString;
+                        try {
+                            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                                    .build();
+                            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                                    .uri(java.net.URI.create(url))
+                                    .timeout(java.time.Duration.ofSeconds(10))
+                                    .GET()
+                                    .build();
+                            java.net.http.HttpResponse<byte[]> resp = client.send(req,
+                                    java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+                            exchange.getResponseHeaders().set("Content-Type",
+                                    resp.headers().firstValue("Content-Type").orElse("text/plain"));
+                            exchange.sendResponseHeaders(resp.statusCode(), resp.body().length);
+                            try (OutputStream os = exchange.getResponseBody()) {
+                                os.write(resp.body());
+                            }
+                            return;
+                        } catch (Exception proxyEx) {
+                            log.warn("Failed to proxy log request for job {} to {}: {}",
+                                    jobId, assignedNode.shortId(), proxyEx.getMessage());
+                            // Fall through to local read as a best-effort fallback
+                        }
+                    }
+                }
+            }
+
+            // --- Local read: AegisFS first, then local workspace fallback ---
             String path = "/jobs/" + jobId + "/" + execId + "/" + streamType;
 
             byte[] data;
             try {
                 data = node.fileSystem().read(path);
             } catch (Exception e) {
-                // File does not exist or cannot be read yet
-                ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
-                return;
+                // File does not exist or cannot be read yet (might still be running locally)
+                try {
+                    Path localLogPath = node.config().workspaceDir().resolve(jobId).resolve("exec-" + execId).resolve(streamType + ".log");
+                    if (Files.exists(localLogPath)) {
+                        data = Files.readAllBytes(localLogPath);
+                    } else {
+                        ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
+                        return;
+                    }
+                } catch (Exception ex) {
+                    ResponseWriter.writeError(exchange, 404, "RESOURCE_NOT_FOUND");
+                    return;
+                }
             }
 
             exchange.getResponseHeaders().set("Content-Type", "text/plain");

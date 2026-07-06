@@ -232,6 +232,9 @@ public final class JobSupervisor implements AutoCloseable {
 
     private void emitLostState(String jobId, JobRecord record) {
         try {
+            com.aegisos.core.identity.NodeId assigned = com.aegisos.core.identity.NodeId.of(record.getAssignedNodeId().toByteArray());
+            network.sendAsync(assigned, com.aegisos.core.message.MessageType.CANCEL_JOB, jobId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
             terminalScheduler.enqueue(jobId, record.getExecutionId(), JobState.LOST, null, null);
             jobsLost.incrementAndGet();
 
