@@ -18,15 +18,17 @@ public class ApiServer {
     private final int port;
     private HttpServer server;
     private ExecutorService executor;
+    private final com.aegisos.node.api.handlers.LogEndpoint logEndpoint;
 
-    public ApiServer(AegisNode node, int port) {
+    public ApiServer(AegisNode node, int port, com.aegisos.node.api.handlers.LogEndpoint logEndpoint) {
         this.node = node;
         this.port = port;
+        this.logEndpoint = logEndpoint;
     }
 
     public void start() throws IOException {
         server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 10);
-        server.createContext("/v1/", new Router(node));
+        server.createContext("/v1/", new Router(node, logEndpoint));
         
         executor = Executors.newFixedThreadPool(10, r -> {
             Thread t = new Thread(r, "aegis-api-" + node.identity().nodeId().shortId());

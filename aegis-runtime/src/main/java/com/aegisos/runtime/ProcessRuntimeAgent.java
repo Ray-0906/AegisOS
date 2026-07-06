@@ -384,6 +384,21 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
                 pb.redirectError(stderrFile.toFile());
 
                 Process process = pb.start();
+
+                // 1. Workload Reality Context
+                activeLocalWorkloads.put(jobId, new LocalExecution(executionId, ExecutionKind.JVM, java.time.Instant.now(), false));
+                jobsStarted.incrementAndGet();
+
+                // 2. Metadata Publication — transition QUEUED -> RUNNING
+                PublicationResult pub = publishState(jobId, executionId, JobState.RUNNING, null, null);
+                if (pub == PublicationResult.ACKNOWLEDGED) {
+                    activeLocalWorkloads.computeIfPresent(jobId, (k, v) ->
+                            new LocalExecution(v.executionId(), v.kind(), v.startedAt(), true));
+                    if (metricsRegistry != null) metricsRegistry.counter("aegis_running_acknowledged").increment();
+                } else {
+                    if (metricsRegistry != null) metricsRegistry.counter("aegis_running_unknown").increment();
+                }
+
                 int exitCode = process.waitFor();
                 
                 if (isSuperseded(jobId, executionId)) {
@@ -412,6 +427,7 @@ public final class ProcessRuntimeAgent implements com.aegisos.scheduler.Locality
             } finally {
                 heartbeatTask.cancel(true);
                 running.decrementAndGet();
+                activeLocalWorkloads.remove(jobId);
                 artifactClassLoader.getCache().unpin(artifact.getArtifactId());
             }
         }, "aegis-node-job-" + jobId);
