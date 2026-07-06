@@ -81,55 +81,61 @@ To remove an artifact from the cluster:
 aegis rm <ARTIFACT_ID> --seed 127.0.0.1:18000
 ```
 
-## 5. Submitting a Process
+## 5. Submitting a Job
 
-Submit your workload to the cluster, requesting specific hardware resources:
+To understand how AegisOS executes workloads, you must distinguish between **Jobs** and **Processes**:
+* **Jobs (Distributed Workloads):** The standard, cloud-native way to run applications. Managed globally by the Raft consensus, intelligently scheduled across the cluster, fault-tolerant, and ideal for 99% of user workloads (like Node.js web servers).
+* **Processes (Local Executions):** Tactical, low-level executions bound to a single specific node. They bypass the Raft cluster entirely. Meant for system administrators doing local diagnostics or hardware-specific targeting.
+
+**Quick Summary:** Use `aegis run` (jobs) for high-availability applications. Use `aegis process` for local node administration.
+
+Submit your distributed job to the cluster, requesting specific hardware resources:
 
 ```bash
-aegis process submit --artifact <ARTIFACT_ID> --cpu 1 --memory 256 --seed 127.0.0.1:18000
+aegis run --artifact <ARTIFACT_ID> --cpu 1 --memory 256 --seed 127.0.0.1:18000
 ```
 
-**Example (Submitting a Java Process):**
+**Example (Submitting a Java Job):**
 ```bash
-PS C:\> aegis process submit --artifact 9e5cb04c2ce8b949cee7e44af4b121badd9a46f868aa91ac067b2f0fb4dac76d --cpu 1 --memory 256 --seed 127.0.0.1:18000
+PS C:\> aegis run --artifact 9e5cb04c2ce8b949cee7e44af4b121badd9a46f868aa91ac067b2f0fb4dac76d --cpu 1 --memory 256 --seed 127.0.0.1:18000
 19:25:38.405 INFO  [main] c.a.c.LeaderResolver - Discovered leader: 6928e01... at http://127.0.0.1:18000
 b9afc5fd-d51b-4566-80af-df48e0bd36a5
 ```
 
-By default, the process runs via the JVM (`java -jar {artifact}`). However, AegisOS v2.0.0 is a Polyglot Engine. You can execute Python, Node.js, bash scripts, or native binaries by supplying a custom command:
+By default, the job runs via the JVM (`java -jar {artifact}`). However, AegisOS v2.0.0 is a Polyglot Engine. You can execute Python, Node.js, bash scripts, or native binaries by supplying a custom command:
 
 ```bash
-aegis process submit --artifact <ARTIFACT_ID> --command "python {artifact}" --cpu 1 --memory 256 --seed 127.0.0.1:18000
+aegis run --artifact <ARTIFACT_ID> --command "python {artifact}" --cpu 1 --memory 256 --seed 127.0.0.1:18000
 ```
 
-**Example (Submitting a Python Process):**
+**Example (Submitting a Python Job):**
 ```bash
-PS C:\> aegis process submit --artifact 55450d21017499c1960ef071303de3c592347aeac44bdd65ec0eb4958b150908 --command "python {artifact}" --cpu 1 --memory 256 --seed 127.0.0.1:18000
+PS C:\> aegis run --artifact 55450d21017499c1960ef071303de3c592347aeac44bdd65ec0eb4958b150908 --command "python {artifact}" --cpu 1 --memory 256 --seed 127.0.0.1:18000
 19:27:26.139 INFO  [main] c.a.c.LeaderResolver - Discovered leader: 6928e01... at http://127.0.0.1:18000
 1c9f7d0d-5ea4-4fed-9eb8-b7a3996a0444
 ```
 
-To pipe the output of this process to another process running on the cluster (Virtual IPC Overlay), provide the target `--pipe-to` Process ID:
+To pipe the output of this job to another job running on the cluster (Virtual IPC Overlay), provide the target `--pipe-to` Job ID:
 
 ```bash
-aegis process submit --artifact <ARTIFACT_ID> --command "python {artifact}" --pipe-to <RECEIVER_PROCESS_ID> --cpu 1 --memory 256 --seed 127.0.0.1:18000
+aegis run --artifact <ARTIFACT_ID> --command "python {artifact}" --pipe-to <RECEIVER_JOB_ID> --cpu 1 --memory 256 --seed 127.0.0.1:18000
 ```
 
-The scheduler will evaluate the Gossip topology, find a node with 256MB of free RAM, and assign the process.
+The scheduler will evaluate the Gossip topology, find a node with 256MB of free RAM, and assign the job.
 
 ## 6. Monitoring, Logs, and Control
 
-Check the status of your distributed process (`PLACED`, `RUNNING`, `COMPLETED`, etc.):
+Check the status of your distributed job (`PLACED`, `RUNNING`, `COMPLETED`, etc.):
 
 ```bash
-aegis process status <PROCESS_ID> --seed 127.0.0.1:18000
+aegis status <JOB_ID> --seed 127.0.0.1:18000
 ```
 
 **Example:**
 ```bash
-PS C:\> aegis process status 1c9f7d0d-5ea4-4fed-9eb8-b7a3996a0444 --seed 127.0.0.1:18000
+PS C:\> aegis status 1c9f7d0d-5ea4-4fed-9eb8-b7a3996a0444 --seed 127.0.0.1:18000
 19:27:35.229 INFO  [main] c.a.c.LeaderResolver - Discovered leader: 6928e01... at http://127.0.0.1:18000
-Process ID: 1c9f7d0d-5ea4-4fed-9eb8-b7a3996a0444
+Job ID: 1c9f7d0d-5ea4-4fed-9eb8-b7a3996a0444
 Artifact ID: 55450d21017499c1960ef071303de3c592347aeac44bdd65ec0eb4958b150908
 State: RUNNING
 Node: 72dc83ec91a487b911f9ae851c06db9280f769497f5044395d7b3ee78ac5ff5f
@@ -138,26 +144,26 @@ Resources: 1 cores, 256 MB
 
 To list all historical and running jobs:
 ```bash
-aegis process list --seed 127.0.0.1:18000
+aegis jobs --seed 127.0.0.1:18000
 ```
 
 
-To forcefully terminate the process:
+To forcefully terminate the job:
 
 ```bash
-aegis process cancel <PROCESS_ID> --seed 127.0.0.1:18000
+aegis jobs cancel <JOB_ID> --seed 127.0.0.1:18000
 ```
 
-To view or stream the logs of a process:
+To view or stream the logs of a job:
 
 ```bash
-aegis logs <PROCESS_ID> --seed 127.0.0.1:18000
+aegis logs <JOB_ID> --seed 127.0.0.1:18000
 ```
 
 To follow the logs (similar to `tail -f`):
 
 ```bash
-aegis logs -f <PROCESS_ID> --seed 127.0.0.1:18000
+aegis logs -f <JOB_ID> --seed 127.0.0.1:18000
 ```
 
 ## Full CLI Command Reference
